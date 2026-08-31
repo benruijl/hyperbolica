@@ -2,6 +2,7 @@
 
 use std::cell::Cell;
 use std::collections::HashMap;
+use std::hash::{DefaultHasher, Hash, Hasher};
 use std::sync::{Mutex, MutexGuard, OnceLock};
 
 use crate::core::{Poly, Rat};
@@ -12,7 +13,7 @@ use super::AlgebraicLetterEntry;
 #[derive(Default)]
 struct TableState {
     entries: Vec<AlgebraicLetterEntry>,
-    content_index: HashMap<String, usize>,
+    content_index: HashMap<(usize, u64), Vec<usize>>,
 }
 
 static TABLE: OnceLock<Mutex<TableState>> = OnceLock::new();
@@ -34,6 +35,12 @@ fn lock_table() -> Result<MutexGuard<'static, TableState>> {
 
 fn session_mutex() -> &'static Mutex<()> {
     SESSION.get_or_init(|| Mutex::new(()))
+}
+
+fn polynomial_digest(polynomial: &Poly) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    polynomial.hash(&mut hasher);
+    hasher.finish()
 }
 
 /// A re-entrant guard that prevents algebraic-letter state from interleaving
@@ -161,6 +168,14 @@ pub fn algebraic_letters_size() -> Result<usize> {
 
 /// Allocate (or content-deduplicate) one quadratic root pair.
 pub fn algebraic_letters_allocate(polynomial: &Poly, var_idx: usize) -> Result<usize> {
+    algebraic_letters_allocate_with_digest(polynomial, var_idx, polynomial_digest(polynomial))
+}
+
+fn algebraic_letters_allocate_with_digest(
+    polynomial: &Poly,
+    var_idx: usize,
+    digest: u64,
+) -> Result<usize> {
     let _session = join_algebraic_letter_session()?;
     let degree = polynomial.degree(var_idx)?;
     if degree != 2 {
@@ -170,9 +185,14 @@ pub fn algebraic_letters_allocate(polynomial: &Poly, var_idx: usize) -> Result<u
         )));
     }
 
-    let dedup_key = format!("{var_idx}|{polynomial}");
+    let bucket_key = (var_idx, digest);
     let mut state = lock_table()?;
-    if let Some(&idx) = state.content_index.get(&dedup_key) {
+    if let Some(idx) = state.content_index.get(&bucket_key).and_then(|candidates| {
+        candidates.iter().copied().find(|&idx| {
+            state.entries[idx - 1].var_idx == var_idx
+                && state.entries[idx - 1].polynomial == *polynomial
+        })
+    }) {
         return Ok(idx);
     }
 
@@ -197,6 +217,90 @@ pub fn algebraic_letters_allocate(polynomial: &Poly, var_idx: usize) -> Result<u
         product_value,
         discriminant,
     });
-    state.content_index.insert(dedup_key, idx);
+    state.content_index.entry(bucket_key).or_default().push(idx);
     Ok(idx)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use symbolica::prelude::Symbol;
+
+    use super::*;
+    use crate::core::PolyCtx;
+
+    fn namespaced_context(namespace: &'static str) -> Arc<PolyCtx> {
+        let symbol = Symbol::parse("x", namespace).unwrap();
+        PolyCtx::from_indeterminates([symbol.to_atom()]).unwrap()
+    }
+
+    fn square_plus(ctx: &Arc<PolyCtx>, variable: usize, constant: i64) -> Poly {
+        let generator = Poly::generator(ctx.clone(), variable).unwrap();
+        generator
+            .try_mul(&generator)
+            .unwrap()
+            .try_add(&Poly::from_int(ctx.clone(), constant))
+            .unwrap()
+    }
+
+    #[test]
+    fn structurally_namespaced_polynomials_do_not_share_an_id() {
+        let _session = begin_algebraic_letter_session().unwrap();
+        let left = square_plus(&namespaced_context("letter_registry_left"), 0, -2);
+        let right = square_plus(&namespaced_context("letter_registry_right"), 0, -2);
+
+        assert_eq!(left.to_string(), right.to_string());
+        assert_ne!(left, right);
+        assert_eq!(algebraic_letters_allocate(&left, 0).unwrap(), 1);
+        assert_eq!(algebraic_letters_allocate(&right, 0).unwrap(), 2);
+        assert_eq!(algebraic_letters_allocate(&left, 0).unwrap(), 1);
+    }
+
+    #[test]
+    fn forced_digest_collisions_preserve_full_pair_identity_and_order() {
+        let _session = begin_algebraic_letter_session().unwrap();
+        let ctx = PolyCtx::new(["x", "y"]).unwrap();
+        let x_square = square_plus(&ctx, 0, 0);
+        let y_square = square_plus(&ctx, 1, 0);
+        let first = x_square
+            .try_add(&y_square)
+            .unwrap()
+            .try_add(&Poly::from_int(ctx.clone(), -2))
+            .unwrap();
+        let second = x_square
+            .try_add(&y_square)
+            .unwrap()
+            .try_add(&Poly::from_int(ctx, -3))
+            .unwrap();
+
+        assert_eq!(
+            algebraic_letters_allocate_with_digest(&first, 1, 0).unwrap(),
+            1
+        );
+        assert_eq!(
+            algebraic_letters_allocate_with_digest(&second, 1, 0).unwrap(),
+            2
+        );
+        assert_eq!(
+            algebraic_letters_allocate_with_digest(&first, 0, 0).unwrap(),
+            3
+        );
+        assert_eq!(
+            algebraic_letters_allocate_with_digest(&first, 1, 0).unwrap(),
+            1
+        );
+
+        let state = lock_table().unwrap();
+        assert_eq!(
+            state
+                .entries
+                .iter()
+                .map(|entry| entry.idx)
+                .collect::<Vec<_>>(),
+            [1, 2, 3]
+        );
+        assert_eq!(state.content_index.get(&(1, 0)).unwrap(), &[1, 2]);
+        assert_eq!(state.content_index.get(&(0, 0)).unwrap(), &[3]);
+    }
 }

@@ -52,6 +52,7 @@ cargo test --all-targets --no-run
 cargo check --features python
 cargo check --features python-extension
 scripts/check-pure-symbolica.sh
+scripts/check-module-size.sh
 ```
 
 On a machine where the Symbolica runtime is available, run the serialized test

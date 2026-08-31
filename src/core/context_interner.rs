@@ -1,6 +1,7 @@
-//! Reuse polynomial contexts by their ordered variable lists.
+//! Reuse polynomial contexts by their full ordered structural identities.
 
 use std::collections::HashMap;
+use std::hash::{DefaultHasher, Hash, Hasher};
 use std::sync::{Arc, Mutex, OnceLock, Weak};
 
 use super::PolyCtx;
@@ -13,7 +14,18 @@ use crate::error::{Error, Result};
 /// the same [`Arc`], allowing downstream caches to use pointer identity.
 #[derive(Debug, Default)]
 pub struct ContextInterner {
-    contexts: Mutex<HashMap<Vec<String>, Weak<PolyCtx>>>,
+    contexts: Mutex<HashMap<u64, Vec<Weak<PolyCtx>>>>,
+}
+
+fn context_digest(context: &PolyCtx) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    context.vars().hash(&mut hasher);
+    context.variable_map().hash(&mut hasher);
+    hasher.finish()
+}
+
+fn same_context(left: &PolyCtx, right: &PolyCtx) -> bool {
+    left.vars() == right.vars() && left.variable_map() == right.variable_map()
 }
 
 impl ContextInterner {
@@ -27,15 +39,38 @@ impl ContextInterner {
         S: Into<String>,
     {
         let names = variables.into_iter().map(Into::into).collect::<Vec<_>>();
+        self.intern_context(PolyCtx::new(names)?)
+    }
+
+    /// Intern an already constructed, potentially Atom-native context.
+    ///
+    /// Both diagnostic names and structural Symbolica variables participate
+    /// in identity, so equal-looking symbols from different namespaces and
+    /// distinct function/power indeterminates cannot alias.
+    pub fn intern_context(&self, context: Arc<PolyCtx>) -> Result<Arc<PolyCtx>> {
+        self.intern_context_with_digest(context_digest(&context), context)
+    }
+
+    fn intern_context_with_digest(
+        &self,
+        digest: u64,
+        context: Arc<PolyCtx>,
+    ) -> Result<Arc<PolyCtx>> {
         let mut contexts = self
             .contexts
             .lock()
             .map_err(|_| Error::InvalidInput("polynomial context interner is poisoned".into()))?;
-        if let Some(existing) = contexts.get(&names).and_then(Weak::upgrade) {
+
+        let bucket = contexts.entry(digest).or_default();
+        bucket.retain(|candidate| candidate.strong_count() != 0);
+        if let Some(existing) = bucket
+            .iter()
+            .filter_map(Weak::upgrade)
+            .find(|candidate| same_context(candidate, &context))
+        {
             return Ok(existing);
         }
-        let context = PolyCtx::new(names.clone())?;
-        contexts.insert(names, Arc::downgrade(&context));
+        bucket.push(Arc::downgrade(&context));
         Ok(context)
     }
 
@@ -47,6 +82,7 @@ impl ContextInterner {
             .map_err(|_| Error::InvalidInput("polynomial context interner is poisoned".into()))?;
         Ok(contexts
             .values()
+            .flatten()
             .filter(|value| value.strong_count() != 0)
             .count())
     }
@@ -61,7 +97,10 @@ impl ContextInterner {
             .contexts
             .lock()
             .map_err(|_| Error::InvalidInput("polynomial context interner is poisoned".into()))?;
-        contexts.retain(|_, value| value.strong_count() != 0);
+        contexts.retain(|_, bucket| {
+            bucket.retain(|value| value.strong_count() != 0);
+            !bucket.is_empty()
+        });
         Ok(())
     }
 }
@@ -82,7 +121,15 @@ where
 
 #[cfg(test)]
 mod tests {
+    use symbolica::prelude::Symbol;
+
     use super::*;
+
+    fn namespaced_context(namespace: &'static str) -> Arc<PolyCtx> {
+        let symbol = Symbol::parse("x", namespace).unwrap();
+        let function = Symbol::parse("f", namespace).unwrap();
+        PolyCtx::from_indeterminates([symbol.to_atom(), function.call(1)]).unwrap()
+    }
 
     #[test]
     fn identical_live_contexts_share_the_same_allocation() {
@@ -102,5 +149,39 @@ mod tests {
         drop(context);
         interner.prune().unwrap();
         assert!(interner.is_empty().unwrap());
+    }
+
+    #[test]
+    fn atom_native_contexts_distinguish_symbol_namespaces() {
+        let interner = ContextInterner::new();
+        let left = namespaced_context("context_interner_left");
+        let left_again = namespaced_context("context_interner_left");
+        let right = namespaced_context("context_interner_right");
+
+        assert_eq!(left.vars(), right.vars());
+        assert_ne!(left.variable_map(), right.variable_map());
+
+        let first = interner.intern_context(left).unwrap();
+        let repeated = interner.intern_context(left_again).unwrap();
+        let namespaced = interner.intern_context(right).unwrap();
+        assert!(Arc::ptr_eq(&first, &repeated));
+        assert!(!Arc::ptr_eq(&first, &namespaced));
+        assert_eq!(interner.live_len().unwrap(), 2);
+    }
+
+    #[test]
+    fn forced_digest_collisions_still_compare_complete_contexts() {
+        let interner = ContextInterner::new();
+        let left = namespaced_context("context_collision_left");
+        let left_again = namespaced_context("context_collision_left");
+        let right = namespaced_context("context_collision_right");
+
+        let first = interner.intern_context_with_digest(0, left).unwrap();
+        let namespaced = interner.intern_context_with_digest(0, right).unwrap();
+        let repeated = interner.intern_context_with_digest(0, left_again).unwrap();
+
+        assert!(!Arc::ptr_eq(&first, &namespaced));
+        assert!(Arc::ptr_eq(&first, &repeated));
+        assert_eq!(interner.live_len().unwrap(), 2);
     }
 }

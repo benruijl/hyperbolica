@@ -11,7 +11,7 @@ use std::collections::{HashMap, HashSet};
 use crate::core::Poly;
 use crate::error::{Error, Result};
 
-use super::lr_search::{ReductionEngine, intersect_proportional};
+use super::lr_reduction::{ReductionEngine, intersect_proportional};
 
 /// Result of certifying one prescribed integration order.
 #[derive(Clone, Debug, PartialEq, Eq)]

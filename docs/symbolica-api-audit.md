@@ -236,6 +236,31 @@ compatibility/ordering spelling for transform, period, and wire-adjacent
 callers scheduled for a later scoped migration. It is no longer used by the
 primitive cache and must not be introduced into new semantic lookup paths.
 
+Context and algebraic-letter interning now follow the same rule. The context
+interner hashes both diagnostic names and the ordered structural
+`PolyVariable` list, retains weak contexts in digest buckets, and confirms both
+fields before reusing an allocation. Its Atom-native `intern_context` entry
+point therefore distinguishes equal-looking symbols and function/power atoms
+from different namespaces. The algebraic-letter registry hashes the complete
+context-sensitive `Poly` value together with `var_idx`, retains only entry IDs
+in each bucket, and confirms `(var_idx, Poly::Eq)` before deduplication. Neither
+path uses a digest as identity, and first-seen context allocations and
+one-based algebraic-letter IDs remain stable. Namespace-alias and injected
+digest-collision regressions cover both paths
+(`src/core/context_interner.rs`,
+`src/algebra/algebraic_letters/registry.rs`).
+
+This design deliberately wraps Symbolica's public contracts instead of
+inventing a parallel key representation: owned `Atom` delegates `Eq + Hash`
+to canonical `AtomView` data (`atom.rs:2408-2435,2655-2672,3213-3225`),
+`PolyVariable` derives structural `Eq + Hash` including owned function/power
+Atoms (`poly.rs:745-760`), and `MultivariatePolynomial` compares and hashes
+canonical coefficient/exponent arrays plus nonconstant variable maps
+(`poly/polynomial.rs:1647-1687`). Because native constant-polynomial equality
+intentionally omits its variable map, Hyperbolica's `Poly::Eq + Hash` prefixes
+the complete context; that wrapper, rather than the native polynomial alone,
+is the algebraic-letter identity.
+
 ## Polynomial and rational-function APIs
 
 ### Atom conversion
@@ -490,7 +515,7 @@ This table is deliberately exhaustive at module granularity. “Native primitive
 
 | Current module(s) | Operation | Native primitive / confirmed gap | Verdict |
 |---|---|---|---|
-| `algebra/algebraic_letters.rs` | Wm/Wp table, Vieta reduction, back-substitution | fixed function `PolyVariable`s; `Root<Q(parameters)>`; `AlgebraicQuotient` | **WRAP/ORACLE** quotient reduction; retain upstream table/branch contract; replace dynamic symbols. |
+| `algebra/algebraic_letters.rs` | Wm/Wp table, Vieta reduction, back-substitution | fixed function `PolyVariable`s; `Root<Q(parameters)>`; `AlgebraicQuotient` | **WRAP/ORACLE** quotient reduction; retain upstream table/branch contract; structural `(var_idx, Poly)` dedup is implemented. |
 | `algebra/convert.rs` | Möbius changes of hyperlog words | typed RP substitution/arithmetic; no hyperlog transform | **RETAIN**, replace string substitutions with typed RP operations. |
 | `algebra/diff.rs` | Hlog/MPL structured derivatives | custom derivative hooks exist; no native Hlog/MPL rule | **RETAIN**, with typed rules registered as head callbacks. |
 | `algebra/linear_factors.rs` | factor by target variable and extract poles | native `Factorize`, polynomial degree/coefficient; exact roots for parameter-free Q | **WRAP** native factors; retain HyperFLINT result shape/nonlinear remainder. |
@@ -505,7 +530,7 @@ This table is deliberately exhaustive at module granularity. “Native primitive
 | `core/rat.rs` | canonical rational arithmetic | native `RationalPolynomial<Z,u16>` | **REPLACE, P1 complete** storage/arithmetic/substitution/evaluation; retain checked signed `pow` and lazy compatibility projections. |
 | `core/factored_rat.rs` | factor-preserving arithmetic/derivative/peeling | incomplete native factorized RP | selective **ORACLE/WRAP**; retain robust specialized behavior. |
 | `core/canonical_signature.rs` | bucket acceleration | native Atom/poly/RP `Hash` | **WRAP, corrected**: only the crate-private `poly_bucket_digest` remains; digest-only `RatAddKey`/`ReduceKey` and all public digest exports were removed. Every consumer retains full values in collision buckets. |
-| `core/context_interner.rs` | weak context interning | Symbolica globally interns variable lists internally (`state.rs:266-273`), but exposes no public weak context-interner contract | **RETAIN** Hyperbolica ownership/interner; key it by `Vec<PolyVariable>`, not strings. |
+| `core/context_interner.rs` | weak context interning | Symbolica globally interns variable lists internally (`state.rs:266-273`), but exposes no public weak context-interner contract | **RETAIN, corrected**: full names + ordered `PolyVariable` identity is confirmed inside collision buckets; Atom-native contexts cannot alias by display spelling. |
 | `core/period_table.rs`, `core/zw_table.rs` | domain-specific handle interning | native structural `Eq + Hash`; no matching handle table | **RETAIN**, change canonical strings to typed keys where possible. |
 | `core/rat_split.rs`, `core/sym_coef_split.rs` | split wide/narrow coefficient contexts and ZW handles | polynomial rearrange/map, native RP arithmetic; no equivalent split | **RETAIN**, move storage to native RP and typed context maps. |
 | `core/symcoef.rs` | sparse products of pi/i/log/delta/period/MZV factors | Atom can represent all factors; no MPL/MZV canonicalizer | **RETAIN hot representation**, use fixed heads and Atom conversion; benchmark against `Atom::add_many/mul_many` before any replacement. |

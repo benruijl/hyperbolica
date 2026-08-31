@@ -175,3 +175,8 @@ When a semantic module grows, split implementation concerns into private
 submodules and re-export the stable public surface from `mod.rs`. Tests should
 live beside the behavior they specify or in a focused integration-test file;
 large catch-all test modules are avoided.
+
+`scripts/check-module-size.sh` enforces a 600-line ceiling for every Rust
+source file. The ceiling is a ratchet, not a target: new modules should be
+smaller, and a file approaching the limit should be split by responsibility
+before more behavior is added.

@@ -8,6 +8,8 @@ pub mod lr_verify;
 mod differentiate;
 mod hyper_int;
 mod integration_step;
+mod lr_find_roots;
+mod lr_reduction;
 mod primitive;
 mod regularize;
 mod structural_keys;
