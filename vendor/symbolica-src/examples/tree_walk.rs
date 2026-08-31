@@ -1,0 +1,16 @@
+use symbolica::prelude::*;
+
+fn main() {
+    let expr: Atom = parse!("f(z)*f(f(x),z)*f(y)");
+
+    println!("> Tree walk of {expr}:");
+
+    for (loc, view) in AtomTreeIterator::new(
+        expr.as_view(),
+        MatchSettings::new()
+            .level_range((1, Some(2)))
+            .level_is_tree_depth(false),
+    ) {
+        println!("\tAtom at location {loc:?}: {view}");
+    }
+}

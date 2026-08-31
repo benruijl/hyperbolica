@@ -1,0 +1,10 @@
+/target/
+/vendor/symbolica/
+/vendor/symbolica-src/target/
+.venv/
+dist/
+*.egg-info/
+**/__pycache__/
+.pytest_cache/
+*.profraw
+*.profdata
