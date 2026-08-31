@@ -1,4 +1,5 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, hash_map::RandomState};
+use std::hash::BuildHasher;
 use std::sync::Arc;
 
 use crate::algebra::partial_fractions::{PartialFractionOptions, partial_fractions_with_options};
@@ -22,22 +23,65 @@ struct AccumulatorCell {
     coefficient: FactoredRat,
 }
 
-fn bump(
+/// A collision-safe index into [`AccumulatorCell`] rows.
+///
+/// `Word` contains `Rat`, whose compatibility views are initialized lazily.
+/// Keeping `Word` itself in a `HashMap` would therefore make the map key carry
+/// interior mutability. Instead, this index maps a structural hash to every
+/// candidate row and resolves collisions with the full `Word` equality check.
+/// The rows remain the source of truth; the digest is never treated as
+/// identity.
+struct WordIndex<S = RandomState> {
+    buckets: HashMap<u64, Vec<usize>>,
+    hash_builder: S,
+}
+
+impl Default for WordIndex<RandomState> {
+    fn default() -> Self {
+        Self::with_hasher(RandomState::new())
+    }
+}
+
+impl<S: BuildHasher> WordIndex<S> {
+    fn with_hasher(hash_builder: S) -> Self {
+        Self {
+            buckets: HashMap::new(),
+            hash_builder,
+        }
+    }
+
+    fn find(&self, rows: &[AccumulatorCell], word: &Word) -> (u64, Option<usize>) {
+        let digest = self.hash_builder.hash_one(word);
+        let row = self.buckets.get(&digest).and_then(|candidates| {
+            candidates
+                .iter()
+                .copied()
+                .find(|&index| rows[index].word == *word)
+        });
+        (digest, row)
+    }
+
+    fn insert(&mut self, digest: u64, row: usize) {
+        self.buckets.entry(digest).or_default().push(row);
+    }
+}
+
+fn bump<S: BuildHasher>(
     rows: &mut Vec<AccumulatorCell>,
-    indices: &mut HashMap<String, usize>,
+    indices: &mut WordIndex<S>,
     word: Word,
     coefficient: Rat,
 ) -> Result<()> {
     if coefficient.is_zero() {
         return Ok(());
     }
-    let key = word.content_key();
-    if let Some(&index) = indices.get(&key) {
+    let (digest, existing) = indices.find(rows, &word);
+    if let Some(index) = existing {
         rows[index].coefficient = rows[index]
             .coefficient
             .try_add(&FactoredRat::from_rat(&coefficient))?;
     } else {
-        indices.insert(key, rows.len());
+        indices.insert(digest, rows.len());
         rows.push(AccumulatorCell {
             word,
             coefficient: FactoredRat::from_rat(&coefficient),
@@ -89,7 +133,7 @@ pub fn integrate_ii_with_options(
     let mut queue = wordlist.terms.clone();
     let mut queue_index = 0_usize;
     let mut rows = Vec::<AccumulatorCell>::new();
-    let mut indices = HashMap::<String, usize>::new();
+    let mut indices = WordIndex::default();
 
     while queue_index < queue.len() {
         let term = queue[queue_index].clone();
@@ -174,6 +218,8 @@ pub fn integrate_ii_with_options(
 
 #[cfg(test)]
 mod tests {
+    use std::hash::{BuildHasherDefault, Hasher};
+
     use super::*;
     use symbolica::prelude::{AtomCore, Symbol};
 
@@ -193,6 +239,82 @@ mod tests {
             DEFAULT_ALGEBRAIC_LETTER_POOL_SIZE,
         ))
         .unwrap()
+    }
+
+    #[derive(Default)]
+    struct ConstantHasher;
+
+    impl Hasher for ConstantHasher {
+        fn finish(&self) -> u64 {
+            0
+        }
+
+        fn write(&mut self, _bytes: &[u8]) {}
+    }
+
+    #[test]
+    fn accumulator_uses_full_words_under_forced_collisions_and_keeps_order() {
+        type ConstantState = BuildHasherDefault<ConstantHasher>;
+
+        let ctx = PolyCtx::new(["x", "y"]).unwrap();
+        let x_word = Word::new(vec![Rat::parse(ctx.clone(), "x").unwrap()]);
+        let y_word = Word::new(vec![Rat::parse(ctx.clone(), "y").unwrap()]);
+        let mut rows = Vec::new();
+        let mut indices = WordIndex::with_hasher(ConstantState::default());
+
+        bump(
+            &mut rows,
+            &mut indices,
+            x_word.clone(),
+            Rat::from_int(ctx.clone(), 2),
+        )
+        .unwrap();
+        bump(
+            &mut rows,
+            &mut indices,
+            y_word.clone(),
+            Rat::from_int(ctx.clone(), 5),
+        )
+        .unwrap();
+        bump(
+            &mut rows,
+            &mut indices,
+            x_word.clone(),
+            Rat::from_int(ctx.clone(), 3),
+        )
+        .unwrap();
+
+        assert_eq!(rows.len(), 2);
+        assert_eq!(indices.buckets.len(), 1);
+        assert_eq!(indices.buckets.values().next().unwrap().len(), 2);
+        assert_eq!(rows[0].word, x_word);
+        assert_eq!(rows[1].word, y_word);
+        assert_eq!(
+            rows[0].coefficient.materialize().unwrap(),
+            Rat::from_int(ctx.clone(), 5)
+        );
+        assert_eq!(
+            rows[1].coefficient.materialize().unwrap(),
+            Rat::from_int(ctx, 5)
+        );
+    }
+
+    #[test]
+    fn accumulator_does_not_alias_identically_formatted_cross_context_words() {
+        type ConstantState = BuildHasherDefault<ConstantHasher>;
+
+        let x_ctx = PolyCtx::new(["x"]).unwrap();
+        let y_ctx = PolyCtx::new(["y"]).unwrap();
+        let x_word = Word::new(vec![Rat::one(x_ctx.clone())]);
+        let y_word = Word::new(vec![Rat::one(y_ctx.clone())]);
+        assert_eq!(x_word.content_key(), y_word.content_key());
+
+        let mut rows = Vec::new();
+        let mut indices = WordIndex::with_hasher(ConstantState::default());
+        bump(&mut rows, &mut indices, x_word, Rat::one(x_ctx)).unwrap();
+        bump(&mut rows, &mut indices, y_word, Rat::one(y_ctx)).unwrap();
+        assert_eq!(rows.len(), 2);
+        assert_eq!(indices.buckets.len(), 1);
     }
 
     #[test]

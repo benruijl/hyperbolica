@@ -1,6 +1,7 @@
 //! Formatting, equality, and operator traits.
 
 use std::fmt::{Display, Formatter};
+use std::hash::{Hash, Hasher};
 use std::ops::{Add, Div, Mul, Neg, Sub};
 
 use super::Rat;
@@ -62,6 +63,19 @@ impl PartialEq for Rat {
 }
 
 impl Eq for Rat {}
+
+impl Hash for Rat {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        // Native `RationalPolynomial` equality and hashing are structural,
+        // but constant polynomials intentionally ignore their variable maps.
+        // `Rat::Eq` is stricter: it also requires the complete Hyperbolica
+        // context (diagnostic names and structural PolyVariables). Prefix the
+        // exact fields used by `same_context` so Hash and Eq stay consistent.
+        self.ctx.vars().hash(state);
+        self.ctx.variable_map().hash(state);
+        self.native.as_ref().hash(state);
+    }
+}
 
 impl Add<&Rat> for &Rat {
     type Output = Rat;

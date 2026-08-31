@@ -211,6 +211,31 @@ consumed only by structures that compare complete `Poly` values inside every
 matching bucket. Namespaced-context and forced-collision regressions cover
 this invariant.
 
+The word/primitive key path has now received the same structural treatment.
+The complete relevant public surface was checked again: `PolyVariable`
+derives structural `Hash + PartialEq + Eq` across symbol, function-Atom,
+power-Atom, and temporary variants (`poly.rs:745-760`), and canonical
+`RationalPolynomial` derives `PartialEq + Eq + Hash` over its native numerator
+and denominator (`domains/rational_polynomial.rs:91-96`). Those polynomials in
+turn use the coefficient/exponent arrays plus the structural variable map for
+nonconstants (`poly/polynomial.rs:1647-1687`); constants intentionally compare
+without a variable map. Hyperbolica's `Rat::Eq` is stricter because it also
+requires context names and `PolyVariable`s, so `Rat::Hash` prefixes those exact
+context fields before hashing the native rational polynomial
+(`src/core/rat/traits.rs`). `Word` consequently derives full ordered
+structural `Eq + Hash` (`src/symbols/word.rs`). Because `Rat` also owns lazy
+compatibility views, the primitive accumulator does not place `Word` directly
+in a hash-map key: it maps each structural digest to candidate row indices and
+then resolves every match with full `Word` equality against the complete
+source value stored in that row (`src/integrator/primitive.rs`). Hash digests are
+therefore never treated as equality. Forced-collision, canonical-value,
+cross-context, and first-encounter-order regressions cover the contract.
+
+`Word::content_key` remains temporarily as an explicitly legacy formatted
+compatibility/ordering spelling for transform, period, and wire-adjacent
+callers scheduled for a later scoped migration. It is no longer used by the
+primitive cache and must not be introduced into new semantic lookup paths.
+
 ## Polynomial and rational-function APIs
 
 ### Atom conversion
