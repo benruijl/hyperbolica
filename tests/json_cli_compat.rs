@@ -1,0 +1,326 @@
+//! End-to-end checks for the public JSON transport.
+//!
+//! This is deliberately one test: restricted Symbolica builds bind execution
+//! to one instance, so representative requests are run serially.
+
+use std::collections::BTreeSet;
+use std::io::Write;
+use std::process::{Command, Stdio};
+
+use serde_json::{Value, json};
+
+fn eval(request: &Value) -> Value {
+    let mut child = Command::new(env!("CARGO_BIN_EXE_hyperflint"))
+        .arg("eval-json")
+        .env("SYMBOLICA_HIDE_BANNER", "1")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn hyperflint eval-json");
+
+    serde_json::to_writer(
+        child.stdin.as_mut().expect("piped stdin is available"),
+        request,
+    )
+    .expect("serialize JSON request");
+    child
+        .stdin
+        .as_mut()
+        .expect("piped stdin is available")
+        .write_all(b"\n")
+        .expect("terminate JSON request");
+    drop(child.stdin.take());
+
+    let output = child.wait_with_output().expect("wait for hyperflint");
+    assert!(
+        output.status.success(),
+        "request failed\nrequest: {request}\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+    let response: Value = serde_json::from_slice(&output.stdout).unwrap_or_else(|error| {
+        panic!(
+            "response is not JSON: {error}\nstdout: {}\nstderr: {}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        )
+    });
+    assert_eq!(response["op"], request["op"]);
+    assert!(response.get("error").is_none(), "{response}");
+    response
+}
+
+fn assert_rat_equivalent(actual: &str, expected: &str, variables: &[&str]) {
+    let response = eval(&json!({
+        "op": "rat_sub",
+        "a": actual,
+        "b": expected,
+        "vars": variables,
+    }));
+    assert_eq!(response["result"], "0", "{actual} != {expected}");
+}
+
+fn string_array(value: &Value) -> Vec<String> {
+    value
+        .as_array()
+        .expect("expected JSON array")
+        .iter()
+        .map(|entry| entry.as_str().expect("expected JSON string").to_owned())
+        .collect()
+}
+
+#[test]
+fn representative_json_cli_schemas_are_stable() {
+    // Polynomial/rational algebra: compare values algebraically so harmless
+    // printer changes do not turn the integration test into a snapshot test.
+    let product = eval(&json!({
+        "op": "mul",
+        "a": "x+y",
+        "b": "x-y",
+        "vars": ["x", "y"],
+        "schema_version_min": 2,
+    }));
+    assert_eq!(product["vars"], json!(["x", "y"]));
+    assert_rat_equivalent(
+        product["result"].as_str().expect("polynomial result"),
+        "x^2-y^2",
+        &["x", "y"],
+    );
+
+    let fractions = eval(&json!({
+        "op": "partial_fractions",
+        "f": "2*x/(x^2-1)",
+        "var": "x",
+        "vars": ["x"],
+    }));
+    assert_eq!(fractions["var"], "x");
+    assert_eq!(fractions["polynomial_part"], "0");
+    let poles = fractions["poles"]
+        .as_array()
+        .expect("partial-fraction pole array");
+    assert_eq!(poles.len(), 2);
+    let pole_names = poles
+        .iter()
+        .map(|pole| pole["pole"].as_str().expect("pole string"))
+        .collect::<BTreeSet<_>>();
+    assert_eq!(pole_names, BTreeSet::from(["-1", "1"]));
+    assert!(poles.iter().all(|pole| pole["multiplicity"] == 1));
+    assert!(fractions.get("algebraic_letters").is_none());
+
+    // The opt-in schema adds an allocation table and exposes only the
+    // legacy wire spellings of the structural Wm/Wp function atoms.
+    let algebraic_fractions = eval(&json!({
+        "op": "partial_fractions",
+        "f": "1/(x^2+1)",
+        "var": "x",
+        "vars": ["x"],
+        "introduce_algebraic_letters": true,
+    }));
+    let algebraic_poles = algebraic_fractions["poles"]
+        .as_array()
+        .expect("algebraic partial-fraction pole array");
+    assert_eq!(algebraic_poles.len(), 2);
+    assert_eq!(
+        algebraic_poles
+            .iter()
+            .map(|pole| pole["pole"].as_str().expect("algebraic pole"))
+            .collect::<BTreeSet<_>>(),
+        BTreeSet::from(["Wm_1", "Wp_1"]),
+    );
+    let allocations = algebraic_fractions["algebraic_letters"]
+        .as_array()
+        .expect("algebraic-letter allocation table");
+    assert_eq!(allocations.len(), 1);
+    assert_eq!(allocations[0]["idx"], 1);
+    assert_eq!(allocations[0]["wm"], "Wm_1");
+    assert_eq!(allocations[0]["wp"], "Wp_1");
+
+    // Word algebra and expression conversion.
+    let shuffled = eval(&json!({
+        "op": "shuffle_words",
+        "v": ["0"],
+        "w": ["1"],
+        "vars": ["x"],
+    }));
+    let terms = shuffled["result"].as_array().expect("word-list result");
+    assert_eq!(terms.len(), 2);
+    let words = terms
+        .iter()
+        .map(|term| string_array(&term["word"]))
+        .collect::<BTreeSet<_>>();
+    assert_eq!(
+        words,
+        BTreeSet::from([vec!["0".into(), "1".into()], vec!["1".into(), "0".into()]])
+    );
+    assert!(terms.iter().all(|term| term["coef"] == "1"));
+
+    let converted = eval(&json!({
+        "op": "convert_zero_one",
+        "wl": [{"coef": "1", "word": ["0", "1"]}],
+        "vars": ["x"],
+    }));
+    let converted_terms = converted["result"]
+        .as_array()
+        .expect("converted word list")
+        .iter()
+        .map(|term| {
+            (
+                term["coef"].as_str().expect("coefficient").to_owned(),
+                string_array(&term["word"]),
+            )
+        })
+        .collect::<BTreeSet<_>>();
+    assert_eq!(
+        converted_terms,
+        BTreeSet::from([
+            ("1".into(), vec!["0".into(), "0".into()]),
+            ("-1".into(), vec!["0".into(), "1".into()]),
+            ("-1".into(), vec!["1/2".into(), "0".into()]),
+            ("1".into(), vec!["1/2".into(), "1".into()]),
+        ])
+    );
+
+    let parsed = eval(&json!({
+        "op": "parse_expr",
+        "expr": "Hlog[x,[0,1]]",
+        "vars": ["x"],
+    }));
+    assert_eq!(parsed["canonical"], "Hlog[x,[0,1]]");
+
+    let identity = eval(&json!({
+        "op": "convert_to_hlog_reg_inf",
+        "expr": "Hlog[x,[]]",
+        "vars": ["x"],
+    }));
+    assert_ne!(identity["failed"], true);
+    assert_eq!(identity["result"], json!([{"coef": "1", "key": []}]));
+
+    // Linear reducibility and reduction. Dynamic timings are checked by type,
+    // while a tied order is accepted as long as it is a full permutation.
+    let lr = eval(&json!({
+        "op": "find_lr_orders",
+        "xvars": ["x", "y"],
+        "groups": [["x+y", "1-x", "1-y"]],
+    }));
+    assert_eq!(lr["schema_version"], 2);
+    assert_eq!(lr["nolr"], false);
+    assert_eq!(lr["nXVars"], 2);
+    assert_eq!(lr["nGroups"], 1);
+    assert_eq!(lr["nPolys"], json!([3]));
+    assert!(lr["timing_compute_s"].as_f64().is_some());
+    let mut order = string_array(&lr["best_order"]);
+    order.sort_unstable();
+    assert_eq!(order, ["x", "y"]);
+
+    // Specific-order LR certification is search-free on the common linear
+    // path and retains HyperFLINT's inert search envelope.
+    let verified = eval(&json!({
+        "op": "find_lr_orders",
+        "xvars": ["x", "y"],
+        "coeff_vars": [],
+        "groups": [["x", "1+x", "y"], ["y", "1+y", "x"]],
+        "verify_order": ["x", "y"],
+    }));
+    assert_eq!(verified["order_is_lr"], true);
+    assert_eq!(verified["verify_malformed"], false);
+    assert_eq!(verified["verify_blocking_step"], -1);
+    assert_eq!(verified["verify_blocking_degree"], 0);
+    assert_eq!(verified["verify_forbidden_dep"], false);
+    assert_eq!(verified["verify_blocking_letter"], "");
+    assert_eq!(verified["best_order"], json!([]));
+    assert_eq!(verified["score"], Value::Null);
+    assert_eq!(verified["nolr"], false);
+    assert_eq!(verified["strategy"], "LR_NoOpt");
+
+    // Verification deliberately does not execute carry-discharge: a
+    // quadratic involving a later pivot remains a loud, diagnosed rejection.
+    let forbidden = eval(&json!({
+        "op": "find_lr_orders",
+        "xvars": ["x", "y"],
+        "coeff_vars": [],
+        "groups": [["x^2*y+x+1", "x", "y"]],
+        "verify_order": ["x", "y"],
+        "algebraic_letters": true,
+        "carry_discharge": true,
+    }));
+    assert_eq!(forbidden["order_is_lr"], false);
+    assert_eq!(forbidden["verify_blocking_step"], 0);
+    assert_eq!(forbidden["verify_blocking_degree"], 2);
+    assert_eq!(forbidden["verify_forbidden_dep"], true);
+    assert_eq!(forbidden["verify_blocking_letter"], "x^2*y + x + 1");
+    assert_eq!(forbidden["strategy"], "LR_OptOrdered");
+    assert_eq!(forbidden["carried_sqrts"], 0);
+    assert_eq!(forbidden["carried_polys"], json!([]));
+
+    let malformed = eval(&json!({
+        "op": "find_lr_orders",
+        "xvars": ["x", "y"],
+        "groups": [["x+y"]],
+        "verify_order": ["x", "x"],
+    }));
+    assert_eq!(malformed["order_is_lr"], false);
+    assert_eq!(malformed["verify_malformed"], true);
+    assert_eq!(malformed["verify_blocking_step"], -1);
+
+    let reduced = eval(&json!({
+        "op": "apply_mzv_reductions",
+        "f": "mzv_m2",
+        "vars": ["mzv_m2", "mzv_2"],
+    }));
+    assert!(
+        string_array(&reduced["vars"])
+            .iter()
+            .any(|variable| variable == "mzv_2")
+    );
+    assert_rat_equivalent(
+        reduced["result"].as_str().expect("reduced expression"),
+        "-1/2*mzv_2",
+        &["mzv_2"],
+    );
+
+    // Primitive construction, one integration step, and the multi-variable
+    // driver cover the three public integration response shapes.
+    let primitive = eval(&json!({
+        "op": "integrate_ii",
+        "var": "x",
+        "vars": ["x"],
+        "wl": [{"coef": "1/(1-x)", "word": []}],
+    }));
+    assert_ne!(primitive["failed"], true);
+    let primitive_terms = primitive["result"].as_array().expect("primitive terms");
+    assert_eq!(primitive_terms.len(), 1);
+    assert_eq!(primitive_terms[0]["word"], json!(["1"]));
+    assert_rat_equivalent(
+        primitive_terms[0]["coef"]
+            .as_str()
+            .expect("primitive coefficient"),
+        "-1",
+        &["x"],
+    );
+
+    let step = eval(&json!({
+        "op": "integration_step",
+        "var": "x",
+        "vars": ["x"],
+        "parallel": false,
+        "check_divergences": true,
+        "wordlist": [{"coef": "1/(x+1)^2", "shuffle": []}],
+    }));
+    assert_ne!(step["failed"], true);
+    assert_ne!(step["divergent"], true);
+    assert_eq!(step["result"], json!([{"coef": "1", "key": []}]));
+
+    let integrated = eval(&json!({
+        "op": "hyperflint",
+        "vars": ["x", "y"],
+        "vars_int": ["x", "y"],
+        "f": "1/((1+x)^2*(1+y)^2)",
+        "parallel": false,
+        "check_divergences": true,
+    }));
+    assert_ne!(integrated["failed"], true);
+    assert_ne!(integrated["divergent"], true);
+    assert_eq!(integrated["result"], json!([{"coef": "1", "key": []}]));
+    assert!(integrated["timing_compute_s"].as_f64().is_some());
+}

@@ -1,0 +1,332 @@
+//! Interned wide-context polynomial side table used by split scalars.
+
+use std::collections::HashMap;
+use std::sync::Arc;
+
+use symbolica::domains::InternalOrdering;
+
+use super::canonical_signature::poly_bucket_digest;
+use super::{Poly, PolyCtx};
+use crate::error::{Error, Result};
+
+pub type ZwHandle = u32;
+#[allow(clippy::upper_case_acronyms)]
+pub type ZWHandle = ZwHandle;
+pub const ZW_ONE: ZwHandle = 0;
+pub const ZW_ZERO: ZwHandle = u32::MAX;
+const ZW_OPAQUE_BIT: ZwHandle = 0x8000_0000;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ZwIntent {
+    Numerator,
+    Denominator,
+}
+
+/// Observable counters for sizing the interner and its operation caches.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ZwStats {
+    pub intern_calls: u64,
+    pub intern_hits: u64,
+    pub multiply_calls: u64,
+    pub multiply_hits: u64,
+    pub add_calls: u64,
+    pub add_hits: u64,
+    pub negate_calls: u64,
+    pub negate_hits: u64,
+}
+
+/// Collision-safe polynomial interner with memoized commutative arithmetic.
+///
+/// A handle is scoped to one table.  The table is intentionally owned by an
+/// integration context: persisting it across a regulator chain is what turns
+/// repeated wide polynomial products into cheap integer lookups.
+#[derive(Debug)]
+pub struct ZwTable {
+    ctx: Arc<PolyCtx>,
+    zero: Poly,
+    entries: Vec<Poly>,
+    by_digest_bucket: HashMap<u64, Vec<ZwHandle>>,
+    multiply_cache: HashMap<(ZwHandle, ZwHandle), ZwHandle>,
+    add_cache: HashMap<(ZwHandle, ZwHandle), ZwHandle>,
+    negate_cache: HashMap<ZwHandle, ZwHandle>,
+    stats: ZwStats,
+}
+
+#[allow(clippy::upper_case_acronyms)]
+pub type ZWTable = ZwTable;
+
+impl ZwTable {
+    pub fn new(ctx: Arc<PolyCtx>) -> Self {
+        let zero = Poly::zero(ctx.clone());
+        let one = Poly::one(ctx.clone());
+        let one_digest = poly_bucket_digest(&one);
+        let mut by_digest_bucket = HashMap::with_capacity(64);
+        by_digest_bucket.insert(one_digest, vec![ZW_ONE]);
+        Self {
+            ctx,
+            zero,
+            entries: vec![one],
+            by_digest_bucket,
+            multiply_cache: HashMap::with_capacity(64),
+            add_cache: HashMap::with_capacity(64),
+            negate_cache: HashMap::with_capacity(32),
+            stats: ZwStats::default(),
+        }
+    }
+
+    pub fn ctx(&self) -> &Arc<PolyCtx> {
+        &self.ctx
+    }
+
+    pub fn size(&self) -> usize {
+        self.entries.len()
+    }
+
+    pub fn stats(&self) -> ZwStats {
+        self.stats
+    }
+
+    pub fn total_terms(&self) -> usize {
+        self.entries.iter().map(Poly::n_terms).sum()
+    }
+
+    pub fn intern(&mut self, polynomial: Poly, _intent: ZwIntent) -> Result<ZwHandle> {
+        self.stats.intern_calls += 1;
+        self.require_context(&polynomial)?;
+        if polynomial.is_zero() {
+            self.stats.intern_hits += 1;
+            return Ok(ZW_ZERO);
+        }
+        if polynomial.is_one() {
+            self.stats.intern_hits += 1;
+            return Ok(ZW_ONE);
+        }
+
+        let digest = poly_bucket_digest(&polynomial);
+        self.intern_nontrivial_in_digest_bucket(polynomial, digest)
+    }
+
+    /// Finish interning a validated, nonzero, nonunit polynomial in one
+    /// digest bucket. The complete polynomial comparison below is the
+    /// equality proof; `digest` only selects candidates to inspect.
+    fn intern_nontrivial_in_digest_bucket(
+        &mut self,
+        polynomial: Poly,
+        digest: u64,
+    ) -> Result<ZwHandle> {
+        if let Some(handles) = self.by_digest_bucket.get(&digest) {
+            for &handle in handles {
+                if self.entries[handle as usize].equal(&polynomial) {
+                    self.stats.intern_hits += 1;
+                    return Ok(handle);
+                }
+            }
+        }
+
+        if self.entries.len() >= ZW_OPAQUE_BIT as usize {
+            return Err(Error::InvalidInput(
+                "wide polynomial handle space exhausted".into(),
+            ));
+        }
+        let handle = self.entries.len() as ZwHandle;
+        self.entries.push(polynomial);
+        self.by_digest_bucket
+            .entry(digest)
+            .or_default()
+            .push(handle);
+        Ok(handle)
+    }
+
+    #[cfg(test)]
+    fn intern_with_forced_digest(
+        &mut self,
+        polynomial: Poly,
+        intent: ZwIntent,
+        digest: u64,
+    ) -> Result<ZwHandle> {
+        self.stats.intern_calls += 1;
+        self.require_context(&polynomial)?;
+        if polynomial.is_zero() || polynomial.is_one() {
+            return self.intern(polynomial, intent);
+        }
+        self.intern_nontrivial_in_digest_bucket(polynomial, digest)
+    }
+
+    pub fn get(&self, handle: ZwHandle) -> Result<&Poly> {
+        if handle == ZW_ZERO {
+            return Ok(&self.zero);
+        }
+        if handle & ZW_OPAQUE_BIT != 0 {
+            return Err(Error::InvalidInput(format!(
+                "opaque wide polynomial handle {handle:#x} is unsupported"
+            )));
+        }
+        self.entries
+            .get(handle as usize)
+            .ok_or_else(|| Error::InvalidInput(format!("unknown wide polynomial handle {handle}")))
+    }
+
+    pub fn multiply(&mut self, left: ZwHandle, right: ZwHandle) -> Result<ZwHandle> {
+        self.stats.multiply_calls += 1;
+        if left == ZW_ZERO || right == ZW_ZERO {
+            return Ok(ZW_ZERO);
+        }
+        if left == ZW_ONE {
+            return Ok(right);
+        }
+        if right == ZW_ONE {
+            return Ok(left);
+        }
+        let key = sorted_pair(left, right);
+        if let Some(&handle) = self.multiply_cache.get(&key) {
+            self.stats.multiply_hits += 1;
+            return Ok(handle);
+        }
+        let product = self.get(left)?.try_mul(self.get(right)?)?;
+        let handle = self.intern(product, ZwIntent::Numerator)?;
+        self.multiply_cache.insert(key, handle);
+        Ok(handle)
+    }
+
+    pub fn add(&mut self, left: ZwHandle, right: ZwHandle) -> Result<ZwHandle> {
+        self.stats.add_calls += 1;
+        if left == ZW_ZERO {
+            return Ok(right);
+        }
+        if right == ZW_ZERO {
+            return Ok(left);
+        }
+        let key = sorted_pair(left, right);
+        if let Some(&handle) = self.add_cache.get(&key) {
+            self.stats.add_hits += 1;
+            return Ok(handle);
+        }
+        let sum = self.get(left)?.try_add(self.get(right)?)?;
+        let handle = self.intern(sum, ZwIntent::Numerator)?;
+        self.add_cache.insert(key, handle);
+        Ok(handle)
+    }
+
+    pub fn negate(&mut self, handle: ZwHandle) -> Result<ZwHandle> {
+        self.stats.negate_calls += 1;
+        if handle == ZW_ZERO {
+            return Ok(ZW_ZERO);
+        }
+        if let Some(&negated) = self.negate_cache.get(&handle) {
+            self.stats.negate_hits += 1;
+            return Ok(negated);
+        }
+        let negated_polynomial = -self.get(handle)?;
+        let negated = self.intern(negated_polynomial, ZwIntent::Numerator)?;
+        self.negate_cache.insert(handle, negated);
+        self.negate_cache.insert(negated, handle);
+        Ok(negated)
+    }
+
+    /// Deterministically import another table and return its handle remap.
+    pub fn merge_from(&mut self, secondary: &Self) -> Result<HashMap<ZwHandle, ZwHandle>> {
+        if self.ctx.vars() != secondary.ctx.vars() {
+            return Err(Error::ContextMismatch);
+        }
+        let mut order = (1..secondary.entries.len())
+            .map(|index| (poly_bucket_digest(&secondary.entries[index]), index))
+            .collect::<Vec<_>>();
+        order.sort_unstable_by(|left, right| {
+            left.0.cmp(&right.0).then_with(|| {
+                secondary.entries[left.1]
+                    .inner()
+                    .internal_cmp(secondary.entries[right.1].inner())
+            })
+        });
+
+        let mut remap = HashMap::with_capacity(secondary.entries.len());
+        remap.insert(ZW_ONE, ZW_ONE);
+        for (_, index) in order {
+            let destination = self.intern(secondary.entries[index].clone(), ZwIntent::Numerator)?;
+            remap.insert(index as ZwHandle, destination);
+        }
+        Ok(remap)
+    }
+
+    fn require_context(&self, polynomial: &Poly) -> Result<()> {
+        if self.ctx.vars() == polynomial.ctx().vars() {
+            Ok(())
+        } else {
+            Err(Error::ContextMismatch)
+        }
+    }
+}
+
+fn sorted_pair(left: ZwHandle, right: ZwHandle) -> (ZwHandle, ZwHandle) {
+    if left <= right {
+        (left, right)
+    } else {
+        (right, left)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn context() -> Arc<PolyCtx> {
+        PolyCtx::new(["x", "s"]).unwrap()
+    }
+
+    #[test]
+    fn interning_deduplicates_and_arithmetic_is_memoized() {
+        let ctx = context();
+        let mut table = ZwTable::new(ctx.clone());
+        let x = Poly::parse(ctx.clone(), "x").unwrap();
+        let s = Poly::parse(ctx.clone(), "s").unwrap();
+        let hx = table.intern(x.clone(), ZwIntent::Numerator).unwrap();
+        assert_eq!(table.intern(x, ZwIntent::Numerator).unwrap(), hx);
+        let hs = table.intern(s, ZwIntent::Numerator).unwrap();
+        let product = table.multiply(hx, hs).unwrap();
+        assert_eq!(table.multiply(hs, hx).unwrap(), product);
+        assert_eq!(
+            table.get(product).unwrap(),
+            &Poly::parse(ctx, "x*s").unwrap()
+        );
+        assert_eq!(table.stats().multiply_hits, 1);
+        assert!(table.stats().intern_hits >= 1);
+    }
+
+    #[test]
+    fn zero_and_one_use_sentinels() {
+        let ctx = context();
+        let mut table = ZwTable::new(ctx.clone());
+        assert_eq!(
+            table
+                .intern(Poly::zero(ctx.clone()), ZwIntent::Numerator)
+                .unwrap(),
+            ZW_ZERO
+        );
+        assert_eq!(table.multiply(ZW_ONE, ZW_ZERO).unwrap(), ZW_ZERO);
+        assert!(table.get(ZW_ZERO).unwrap().is_zero());
+    }
+
+    #[test]
+    fn adversarial_digest_collision_still_compares_full_polynomials() {
+        let ctx = context();
+        let mut table = ZwTable::new(ctx.clone());
+        let x = Poly::parse(ctx.clone(), "x").unwrap();
+        let s = Poly::parse(ctx, "s").unwrap();
+        let forced_digest = 0_u64;
+
+        let x_handle = table
+            .intern_with_forced_digest(x.clone(), ZwIntent::Numerator, forced_digest)
+            .unwrap();
+        let s_handle = table
+            .intern_with_forced_digest(s.clone(), ZwIntent::Numerator, forced_digest)
+            .unwrap();
+        let repeated_x = table
+            .intern_with_forced_digest(x.clone(), ZwIntent::Numerator, forced_digest)
+            .unwrap();
+
+        assert_ne!(x_handle, s_handle);
+        assert_eq!(repeated_x, x_handle);
+        assert_eq!(table.get(x_handle).unwrap(), &x);
+        assert_eq!(table.get(s_handle).unwrap(), &s);
+    }
+}

@@ -1,0 +1,60 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://hyperbolica.invalid/schemas/differential-fixture.json",
+  "title": "Hyperbolica differential fixture",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["name", "compare", "request"],
+  "properties": {
+    "name": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]*$"
+    },
+    "compare": {
+      "enum": ["byte", "normalized"]
+    },
+    "request": {
+      "type": "object",
+      "required": ["op"],
+      "properties": {
+        "op": {"type": "string", "minLength": 1},
+        "schema_version_min": {"type": "integer", "minimum": 1, "maximum": 2}
+      }
+    },
+    "ignore": {
+      "type": "array",
+      "items": {"type": "string", "minLength": 1},
+      "minItems": 1,
+      "uniqueItems": true
+    },
+    "reason": {"type": "string", "minLength": 1},
+    "permutation_field": {"type": "string", "minLength": 1},
+    "permutation_values": {
+      "type": "array",
+      "items": {"type": "string", "minLength": 1},
+      "minItems": 1,
+      "uniqueItems": true
+    }
+  },
+  "dependentRequired": {
+    "permutation_field": ["permutation_values"],
+    "permutation_values": ["permutation_field"]
+  },
+  "oneOf": [
+    {
+      "properties": {"compare": {"const": "byte"}},
+      "not": {
+        "anyOf": [
+          {"required": ["ignore"]},
+          {"required": ["reason"]},
+          {"required": ["permutation_field"]},
+          {"required": ["permutation_values"]}
+        ]
+      }
+    },
+    {
+      "required": ["ignore", "reason"],
+      "properties": {"compare": {"const": "normalized"}}
+    }
+  ]
+}

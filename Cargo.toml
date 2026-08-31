@@ -1,0 +1,60 @@
+[package]
+name = "hyperbolica"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.89"
+license = "MIT"
+description = "A Rust port of HyperFLINT backed by Symbolica"
+repository = "https://github.com/SubTropica/SubTropica"
+
+[lib]
+name = "hyperbolica"
+path = "src/lib.rs"
+crate-type = ["rlib", "cdylib"]
+
+[features]
+default = []
+python = ["dep:pyo3", "symbolica/python_export"]
+# Use this feature for maturin/wheel builds. Keeping `extension-module` out of
+# `python` lets Rust test binaries and Symbolica community aggregators link an
+# embedded interpreter normally.
+python-extension = ["python", "pyo3/extension-module"]
+
+[[bin]]
+name = "hyperflint"
+path = "src/bin/hyperflint.rs"
+
+[dependencies]
+rayon = "1.11"
+pyo3 = { version = "0.28", optional = true }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = { version = "1.0", features = ["preserve_order"] }
+symbolica = { path = "vendor/symbolica-src", default-features = false, features = ["faster_alloc", "integer-gmp", "float-mpfr"] }
+thiserror = "2.0"
+
+[patch.crates-io]
+numerica = { path = "vendor/symbolica-src/lib/numerica" }
+graphica = { path = "vendor/symbolica-src/lib/graphica" }
+
+[dev-dependencies]
+criterion = "0.7"
+
+[[bench]]
+name = "core_algebra"
+harness = false
+
+[[bench]]
+name = "euler"
+harness = false
+
+[[bench]]
+name = "lr_structural_keys"
+harness = false
+
+[profile.release]
+codegen-units = 1
+lto = true
+
+[profile.bench]
+codegen-units = 1
+lto = true

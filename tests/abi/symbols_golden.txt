@@ -1,0 +1,8 @@
+hf_factor_table
+hf_find_lr_orders
+hf_find_lr_orders_scan
+hf_free_string
+hf_hyperflint_sym
+hf_linear_factors
+hf_partial_fractions
+hf_version_string

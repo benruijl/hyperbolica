@@ -1,0 +1,182 @@
+# Hyperbolica
+
+Hyperbolica is a Rust port of
+[SubTropica/HyperFLINT](https://github.com/SubTropica/SubTropica/tree/main/HyperFLINT)
+for exact hyperlogarithmic integration and linear-reducibility analysis. Its
+production API accepts Symbolica `Atom` values directly, and its only computer
+algebra backend is the pinned Symbolica source snapshot in
+`vendor/symbolica-src`.
+
+The port is under active development. The Rust core, typed Atom API, JSON
+compatibility adapter, C ABI, and optional PyO3 layer are present. Differential
+fixtures and benchmark gates are checked against an external C++ HyperFLINT
+executable; the C++ program is an oracle only and is never linked into or
+invoked by the library.
+
+## Pure-Symbolica contract
+
+- Production code has no FLINT, Singular, msolve, or other CAS dependency.
+- Polynomial, rational-function, resultant, factorization, and Gröbner-basis
+  work stays inside Symbolica.
+- Every special head owned by Hyperbolica is declared by one `initialize!`
+  block in `src/symbols.rs`. Indexed objects such as MZVs and algebraic
+  letters are function atoms of those registered heads, not dynamically named
+  symbols.
+- String and JSON parsing exists only at compatibility boundaries. New Rust and
+  Python callers should pass native Symbolica expressions.
+
+Run the dependency and source audit with:
+
+```sh
+scripts/check-pure-symbolica.sh
+```
+
+The exact vendored revision and any local Symbolica patch are recorded in
+[`vendor/SYMBOLICA_SNAPSHOT.md`](vendor/SYMBOLICA_SNAPSHOT.md). The original
+local Symbolica checkout is left untouched and is not part of this repository.
+
+## Build and test
+
+Rust 1.89 or newer is required.
+
+```sh
+cargo build --release
+cargo test --all-targets
+cargo clippy --all-targets -- -D warnings
+```
+
+Symbolica's unlicensed mode permits one process and one core. On an unlicensed
+machine, use the serialized harness instead of Cargo's parallel test runner:
+
+```sh
+scripts/test-unlicensed.sh
+```
+
+If another Symbolica process already owns the machine-wide community-license
+port, compilation and `--no-run` checks still work, but executing Symbolica
+code must wait for that process to release the port.
+
+## Atom-native Rust API
+
+Callers introduce their ordinary symbols with Symbolica and pass the
+integration variables explicitly. Hyperbolica discovers any additional
+function indeterminates structurally.
+
+```rust
+use hyperbolica::prelude::*;
+
+fn example() -> AtomIntegrationResult<Atom> {
+    let (x, y) = symbol!("example_x", "example_y");
+    let integrand = Atom::one() / ((x + 1).pow(2) * (y + 1).pow(2));
+
+    let prepared = prepare_atom(&integrand, &[x, y])?;
+    let result = integrate_prepared_atom(
+        &prepared,
+        &AtomIntegrationOptions {
+            check_divergences: true,
+            parallel: false,
+            ..AtomIntegrationOptions::default()
+        },
+    )?;
+
+    result.to_atom()
+}
+```
+
+`PreparedAtomInput` is reusable when the same expression is integrated with
+different options. `AtomIntegrationOutput` retains structured terms and can be
+materialized as one normalized `Atom`. See
+[`examples/atom_integration.rs`](examples/atom_integration.rs) and
+[`examples/atom_hlog.rs`](examples/atom_hlog.rs).
+
+## Python API
+
+The standalone extension embeds the vendored Symbolica Python API and
+Hyperbolica in one shared kernel. Construct expressions with the `S`, `E`, and
+`Expression` objects shipped at the `hyperbolica` top level; those are the
+exact PyO3 types accepted by `prepare` and `integrate`, with no formatting or
+reparsing across the boundary.
+
+```sh
+python -m pip install maturin
+maturin develop --release
+python tests/python_smoke.py
+```
+
+```python
+import hyperbolica as hb
+
+x = hb.S("x")
+integrand = 1 / (x + 1) ** 2
+options = hb.IntegrationOptions(parallel=False)
+prepared = hb.prepare(integrand, [x], options)
+result = prepared.integrate(options)
+```
+
+The root `pyproject.toml` selects the `python-extension` feature for maturin
+wheel builds. The lower-level `python` feature is suitable for embedded Rust
+tests and combined distributions. Such a distribution can register
+`hyperbolica::python::CommunityModule` into its already compiled Symbolica
+module; that path deliberately registers only Hyperbolica and reuses the
+host's expression class. Do not pass objects from a separately compiled
+`symbolica` wheel into the standalone `hyperbolica` extension, because PyO3
+class identity is specific to the compiled module.
+
+## Compatibility CLI
+
+The binary retains the upstream name for migration and differential testing:
+
+```sh
+cargo run --release --bin hyperflint -- factor 'x^4-y^4'
+
+printf '%s\n' \
+  '{"op":"resultant","a":"x^2+y*x+1","b":"x-y","var":"x","vars":["x","y"]}' \
+  | cargo run --release --bin hyperflint -- eval-json
+```
+
+The accepted JSON operations and oracle workflow are documented in
+[`tests/COMPATIBILITY.md`](tests/COMPATIBILITY.md). This adapter deliberately
+does not define the production Rust API.
+
+## Performance verification
+
+Microbenchmarks cover hot exact-algebra kernels:
+
+```sh
+cargo bench --bench core_algebra
+```
+
+End-to-end comparisons consume identical JSONL fixtures and compare the Rust
+binary with a separately built C++ HyperFLINT executable:
+
+```sh
+HYPERFLINT_CPP=/absolute/path/to/hyperflint scripts/differential.sh
+HYPERFLINT_CPP=/absolute/path/to/hyperflint scripts/benchmark-compare.sh
+```
+
+The benchmark gate rejects a median slowdown over 20%, except for sub-2 ms
+noise. No parity claim should be made from compilation alone: release results,
+hardware details, thread count, and both executable revisions must accompany a
+performance claim.
+
+## Design
+
+- `api` — typed Atom preparation, options, integration, and structured output
+- `symbols` — the central registered-head set plus typed words, Hlogs, and MPLs
+- `core` — Symbolica-backed polynomial/rational data and exact coefficients
+- `algebra` — shuffle algebra, factors, partial fractions, and Euler tests
+- `integrator` — transformation, primitives, regularization, and LR search
+- `series` — exact Hlog/MPL/Laurent expansions
+- `reduce` — periods, contours, MZVs, and fibration
+- `python` and `c_abi` — thin foreign-language boundaries over the typed core
+- `bridge` — legacy string/JSON transport isolated from production APIs
+
+The detailed dependency and representation rules are in
+[`docs/architecture.md`](docs/architecture.md). The complete Symbolica API
+review and retain/wrap/replace decisions are in
+[`docs/symbolica-api-audit.md`](docs/symbolica-api-audit.md).
+
+## License
+
+Hyperbolica is MIT licensed. Symbolica is vendored under its own license; see
+[`vendor/symbolica-src/License.md`](vendor/symbolica-src/License.md).
