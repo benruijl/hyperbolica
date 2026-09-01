@@ -360,7 +360,7 @@ def _validate_correctness(
         if (
             not isinstance(name, str)
             or not name
-            or compare not in {"byte", "normalized"}
+            or compare not in {"byte", "normalized", "semantic"}
             or not isinstance(response_sha256, str)
             or not SHA256_PATTERN.fullmatch(response_sha256)
         ):
@@ -368,6 +368,30 @@ def _validate_correctness(
                 deviations,
                 "correctness_workload_schema",
                 f"correctness.workloads[{index}] is malformed",
+            )
+            return
+        semantic_fields = item.get("semantic_fields")
+        if compare == "semantic":
+            if (
+                not isinstance(semantic_fields, list)
+                or not semantic_fields
+                or any(
+                    not isinstance(field, str) or not field
+                    for field in semantic_fields
+                )
+                or len(semantic_fields) != len(set(semantic_fields))
+            ):
+                _deviation(
+                    deviations,
+                    "correctness_workload_schema",
+                    f"correctness.workloads[{index}] has invalid semantic fields",
+                )
+                return
+        elif semantic_fields is not None:
+            _deviation(
+                deviations,
+                "correctness_workload_schema",
+                f"correctness.workloads[{index}] unexpectedly declares semantic fields",
             )
             return
         names.append(name)

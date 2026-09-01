@@ -473,7 +473,7 @@ pub fn parse_expression(
         .iter()
         .map(|name| legacy::atom_from_name(name))
         .collect::<Result<Vec<_>>>()?;
-    let ctx = PolyCtx::from_indeterminates(indeterminates)?;
+    let ctx = PolyCtx::from_named_indeterminates(augmented_vars.clone(), indeterminates)?;
     let expr = Parser::new(&tokens, ctx.clone(), lazy_top_sum).parse()?;
     Ok(ParseResult {
         expr,

@@ -5,7 +5,7 @@ fn factor_wire_array_matches_flint_structural_order() {
     let linear =
         evaluate_supported(&json!({"expr": "(x+2)*(x+10)", "vars": ["x"]}), "factor").unwrap();
     assert_eq!(linear["constant"], "1");
-    assert_eq!(linear["factors"], json!([["10+x", 1], ["2+x", 1]]));
+    assert_eq!(linear["factors"], json!([["x + 10", 1], ["x + 2", 1]]));
 
     let ctx = PolyCtx::new(["x"]).unwrap();
     let two = wire_poly(&Poly::parse(ctx.clone(), "x-2").unwrap());
@@ -19,7 +19,10 @@ fn factor_wire_array_matches_flint_structural_order() {
         "factor",
     )
     .unwrap();
-    assert_eq!(nonlinear["factors"], json!([["2+x^2", 1], ["10+x^2", 1]]));
+    assert_eq!(
+        nonlinear["factors"],
+        json!([["x^2 + 2", 1], ["x^2 + 10", 1]])
+    );
 }
 
 #[test]
@@ -32,7 +35,7 @@ fn factor_wire_array_orders_multiplicity_before_native_base() {
         "factor",
     )
     .unwrap();
-    assert_eq!(output["factors"], json!([["10+x", 2], ["2+x", 10]]));
+    assert_eq!(output["factors"], json!([["x + 10", 2], ["x + 2", 10]]));
 
     let swapped = evaluate_supported(
         &json!({
@@ -42,7 +45,7 @@ fn factor_wire_array_orders_multiplicity_before_native_base() {
         "factor",
     )
     .unwrap();
-    assert_eq!(swapped["factors"], json!([["2+x", 2], ["10+x", 10]]));
+    assert_eq!(swapped["factors"], json!([["x + 2", 2], ["x + 10", 10]]));
 
     let degree = evaluate_supported(
         &json!({
@@ -52,7 +55,7 @@ fn factor_wire_array_orders_multiplicity_before_native_base() {
         "factor",
     )
     .unwrap();
-    assert_eq!(degree["factors"], json!([["10+x^2", 2], ["2+x", 10]]));
+    assert_eq!(degree["factors"], json!([["x^2 + 10", 2], ["x + 2", 10]]));
 }
 
 #[test]
@@ -97,6 +100,35 @@ fn factor_wire_array_uses_native_order_across_mixed_shapes() {
     assert_eq!(
         univariate_linear["factors"],
         json!([[rendered("x+2"), 1], [rendered("x^2+y+1"), 1]])
+    );
+}
+
+#[test]
+fn factor_wire_array_matches_flint_content_support_order() {
+    let independent_content = evaluate_supported(
+        &json!({
+            "expr": "(x+2)*(y+3)",
+            "vars": ["x", "y", "z"]
+        }),
+        "factor",
+    )
+    .unwrap();
+    assert_eq!(
+        independent_content["factors"],
+        json!([["y + 3", 1], ["x + 2", 1]])
+    );
+
+    let shared_main_variable = evaluate_supported(
+        &json!({
+            "expr": "(x+2)*(x+y+3)",
+            "vars": ["x", "y", "z"]
+        }),
+        "factor",
+    )
+    .unwrap();
+    assert_eq!(
+        shared_main_variable["factors"],
+        json!([["x + 2", 1], ["x + y + 3", 1]])
     );
 }
 
@@ -293,7 +325,7 @@ fn nonlinear_factor_wire_order_uses_multiplicity_then_native_polynomial() {
     .unwrap();
     assert_eq!(
         plus["nonlinear"],
-        json!([[1, "2+x^2", 2], [1, "10+x^2", 2]])
+        json!([[1, "x^2 + 2", 2], [1, "x^2 + 10", 2]])
     );
 
     let minus = evaluate_supported(
@@ -307,7 +339,7 @@ fn nonlinear_factor_wire_order_uses_multiplicity_then_native_polynomial() {
     .unwrap();
     assert_eq!(
         minus["nonlinear"],
-        json!([[1, "-10+x^2", 2], [1, "-2+x^2", 2]])
+        json!([[1, "x^2 - 10", 2], [1, "x^2 - 2", 2]])
     );
 
     let multiplicity = evaluate_supported(
@@ -321,7 +353,7 @@ fn nonlinear_factor_wire_order_uses_multiplicity_then_native_polynomial() {
     .unwrap();
     assert_eq!(
         multiplicity["nonlinear"],
-        json!([[2, "10+x^2", 2], [10, "2+x^2", 2]])
+        json!([[2, "x^2 + 10", 2], [10, "x^2 + 2", 2]])
     );
 
     let swapped = evaluate_supported(
@@ -335,7 +367,7 @@ fn nonlinear_factor_wire_order_uses_multiplicity_then_native_polynomial() {
     .unwrap();
     assert_eq!(
         swapped["nonlinear"],
-        json!([[2, "2+x^2", 2], [10, "10+x^2", 2]])
+        json!([[2, "x^2 + 2", 2], [10, "x^2 + 10", 2]])
     );
 
     let ctx = PolyCtx::new(["x", "y"]).unwrap();

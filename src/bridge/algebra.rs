@@ -19,6 +19,7 @@ use crate::algebra::linear_factors::{LinearFactorOptions, linear_factors_with_op
 use crate::algebra::partial_fractions::{PartialFractionOptions, partial_fractions_with_options};
 use crate::core::{Poly, PolyCtx, Rat};
 use crate::error::{Error, Result};
+use crate::symbols::legacy;
 
 pub(super) fn evaluate(request: &Value, op: &str) -> Option<Result<Value>> {
     matches!(
@@ -159,7 +160,9 @@ fn evaluate_supported(request: &Value, op: &str) -> Result<Value> {
         }
         "pow" => {
             let expression = string_field(request, "a")?;
-            let exponent = super::wire::integer_field(request, "n")?;
+            // The upstream flat-JSON integer reader returns zero when `n` is
+            // absent or not an integer.
+            let exponent = request.get("n").and_then(Value::as_i64).unwrap_or(0);
             if exponent < 0 {
                 return Err(Error::InvalidExponent(exponent));
             }
@@ -289,8 +292,8 @@ fn evaluate_supported(request: &Value, op: &str) -> Result<Value> {
                 .iter()
                 .map(|factor| {
                     (
-                        wire_poly(factor.pole.numerator()),
-                        wire_poly(factor.pole.denominator()),
+                        legacy::format_expression(factor.pole.native().numerator.to_expression()),
+                        legacy::format_expression(factor.pole.native().denominator.to_expression()),
                         factor,
                     )
                 })
@@ -424,16 +427,14 @@ fn first_active_linear_pole(factor: &Poly) -> Option<Rat> {
 
 fn factor_wire_cmp(left: &FactorWireEntry, right: &FactorWireEntry) -> std::cmp::Ordering {
     left.exponent.cmp(&right.exponent).then_with(|| {
-        let native_order = left.factor.structural_cmp(&right.factor);
+        let native_order = flint_factor_shape_cmp(&left.factor, &right.factor);
         let same_native_shape = left.factor.ctx().is_compatible_with(right.factor.ctx())
             && left.factor.inner().exponents == right.factor.inner().exponents;
 
-        // Symbolica's native polynomial order compares the canonical
-        // exponent array before coefficients. Equal exponent arrays are
-        // therefore one convex equivalence class. Only inside that fixed
-        // affine shape may the FLINT-compatible pole order replace the
-        // coefficient comparison without breaking transitivity. Across
-        // all different shapes, retain the complete native Poly order.
+        // Equal exponent arrays are one convex equivalence class in the
+        // compatibility order below. Only inside that fixed affine shape may
+        // the pole order replace the coefficient comparison without breaking
+        // transitivity.
         if same_native_shape
             && let (Some(left_pole), Some(right_pole)) =
                 (&left.first_linear_pole, &right.first_linear_pole)
@@ -443,6 +444,50 @@ fn factor_wire_cmp(left: &FactorWireEntry, right: &FactorWireEntry) -> std::cmp:
             native_order
         }
     })
+}
+
+/// Reproduce the stable part of FLINT's native factor order without carrying
+/// FLINT into the Rust port.
+///
+/// FLINT recursively removes content in the context-variable order, so a
+/// factor independent of an earlier variable precedes one that depends on it.
+/// For factors with the same support and term count, its bivariate lifting
+/// order compares the lower monomials first and the leading monomial last in
+/// descending lexicographic order. The final structural comparison handles
+/// coefficients and makes the order total.
+fn flint_factor_shape_cmp(left: &Poly, right: &Poly) -> std::cmp::Ordering {
+    if !left.ctx().is_compatible_with(right.ctx()) {
+        return left.structural_cmp(right);
+    }
+
+    let left_used = left.used_variable_indices();
+    let right_used = right.used_variable_indices();
+    for variable in 0..left.ctx().len() {
+        let ordering = left_used
+            .contains(&variable)
+            .cmp(&right_used.contains(&variable));
+        if !ordering.is_eq() {
+            return ordering;
+        }
+    }
+
+    let left_inner = left.inner();
+    let right_inner = right.inner();
+    let term_order = left_inner.nterms().cmp(&right_inner.nterms());
+    if !term_order.is_eq() {
+        return term_order;
+    }
+    if left_inner.nterms() == 0 {
+        return left.structural_cmp(right);
+    }
+
+    let leading_offset = (left_inner.nterms() - 1) * left_inner.nvars();
+    left_inner.exponents[..leading_offset]
+        .cmp(&right_inner.exponents[..leading_offset])
+        .then_with(|| {
+            right_inner.exponents[leading_offset..].cmp(&left_inner.exponents[leading_offset..])
+        })
+        .then_with(|| left.structural_cmp(right))
 }
 
 fn factor_context(

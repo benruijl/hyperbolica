@@ -1,8 +1,23 @@
 use std::io::Read;
 
-fn fail(message: impl std::fmt::Display) -> ! {
+const BUILD_VARIANT: &str = "rust-symbolica";
+
+fn exit_with(message: impl std::fmt::Display, status: i32) -> ! {
     eprintln!("hyperflint: {message}");
-    std::process::exit(2);
+    std::process::exit(status);
+}
+
+fn usage() {
+    eprintln!(
+        "HyperFLINT CLI (Rust/Symbolica)\n\
+         \n\
+           hyperflint eval-json < request.json\n\
+           hyperflint factor <expression> [--vars x,y,...]\n\
+           hyperflint --version\n\
+         \n\
+         Supported core ops include factor, add/sub/mul, neg, pow,\n\
+         partial_fractions, linear_factors, LR search, and integration."
+    );
 }
 
 fn main() {
@@ -14,36 +29,65 @@ fn main() {
     }
     let mut arguments = std::env::args().skip(1);
     match arguments.next().as_deref() {
-        Some("--version" | "-V") => {
-            println!("hyperflint {} (Rust/Symbolica)", env!("CARGO_PKG_VERSION"));
+        Some("--help" | "-h") => usage(),
+        Some("--version" | "-v" | "-V") => {
+            println!(
+                "HF_VERSION: {}.0\nHF_BUILD_VARIANT: {BUILD_VARIANT}",
+                env!("CARGO_PKG_VERSION")
+            );
         }
         Some("eval-json") => {
             let mut input = String::new();
             std::io::stdin()
                 .read_to_string(&mut input)
-                .unwrap_or_else(|error| fail(error));
+                .unwrap_or_else(|error| exit_with(error, 1));
+            let request = serde_json::from_str::<serde_json::Value>(&input)
+                .unwrap_or_else(|_| exit_with("eval-json: missing \"op\"", 1));
+            let op = request
+                .get("op")
+                .and_then(serde_json::Value::as_str)
+                .filter(|op| !op.is_empty())
+                .unwrap_or_else(|| exit_with("eval-json: missing \"op\"", 1));
             match hyperbolica::bridge::evaluate_json(&input) {
                 Ok(response) => println!("{response}"),
                 Err(error) => {
-                    let op = serde_json::from_str::<serde_json::Value>(&input)
-                        .ok()
-                        .and_then(|request| request.get("op")?.as_str().map(ToOwned::to_owned))
-                        .unwrap_or_default();
                     println!(
                         "{}",
                         serde_json::json!({"op": op, "error": error.to_string()})
                     );
-                    std::process::exit(1);
+                    std::process::exit(2);
                 }
             }
         }
         Some("factor") => {
             let expression = arguments
                 .next()
-                .unwrap_or_else(|| fail("factor requires an expression"));
-            let request = serde_json::json!({"op": "factor", "expr": expression});
+                .unwrap_or_else(|| exit_with("factor: expected <expression>", 1));
+            let mut variables = None;
+            while let Some(option) = arguments.next() {
+                match option.as_str() {
+                    "--vars" => {
+                        let value = arguments
+                            .next()
+                            .unwrap_or_else(|| exit_with("factor: --vars needs a value", 1));
+                        let parsed = value
+                            .split(',')
+                            .filter(|name| !name.is_empty())
+                            .map(ToOwned::to_owned)
+                            .collect::<Vec<_>>();
+                        if !parsed.is_empty() {
+                            variables = Some(parsed);
+                        }
+                    }
+                    other => exit_with(format!("factor: unknown option `{other}`"), 1),
+                }
+            }
+            let mut request = serde_json::json!({"op": "factor", "expr": expression});
+            if let Some(variables) = variables {
+                request["vars"] = serde_json::json!(variables);
+            }
             let response =
-                hyperbolica::bridge::evaluate(&request).unwrap_or_else(|error| fail(error));
+                hyperbolica::bridge::evaluate(&request).unwrap_or_else(|error| exit_with(error, 2));
             print!("{}", response["constant"].as_str().unwrap_or("1"));
             if let Some(factors) = response["factors"].as_array() {
                 for factor in factors {
@@ -58,6 +102,14 @@ fn main() {
             }
             println!();
         }
-        _ => fail("usage: hyperflint {eval-json|factor <expression>|--version}"),
+        Some(command) => {
+            eprintln!("hyperflint: unknown command `{command}`");
+            usage();
+            std::process::exit(1);
+        }
+        None => {
+            usage();
+            std::process::exit(1);
+        }
     }
 }

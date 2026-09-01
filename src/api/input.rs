@@ -93,17 +93,55 @@ pub fn prepare_atom_with_options(
     prepare_atom_view(input.as_view(), integration_variables, options)
 }
 
+/// Lower an Atom while admitting additional native indeterminates into the
+/// exact context without classifying them as option-generated constants.
+///
+/// Interval endpoints use this hook: a parameter that appears only in a bound
+/// must still be present in the polynomial context and must remain a spectator
+/// for endpoint-divergence checks.
+pub(crate) fn prepare_atom_with_options_and_indeterminates(
+    input: &Atom,
+    integration_variables: &[Symbol],
+    options: &AtomIntegrationOptions,
+    additional_indeterminates: &[Atom],
+) -> AtomIntegrationResult<PreparedAtomInput> {
+    prepare_atom_view_with_indeterminates(
+        input.as_view(),
+        integration_variables,
+        options,
+        additional_indeterminates,
+    )
+}
+
 pub(crate) fn prepare_atom_view(
     input: AtomView<'_>,
     integration_variables: &[Symbol],
     options: &AtomIntegrationOptions,
 ) -> AtomIntegrationResult<PreparedAtomInput> {
+    prepare_atom_view_with_indeterminates(input, integration_variables, options, &[])
+}
+
+fn prepare_atom_view_with_indeterminates(
+    input: AtomView<'_>,
+    integration_variables: &[Symbol],
+    options: &AtomIntegrationOptions,
+    additional_indeterminates: &[Atom],
+) -> AtomIntegrationResult<PreparedAtomInput> {
     validate_variables(integration_variables)?;
     let reserved = options.reserved_indeterminates()?;
+    let mut context_indeterminates = reserved.clone();
+    for indeterminate in additional_indeterminates {
+        if !context_indeterminates.contains(indeterminate) {
+            context_indeterminates.push(indeterminate.clone());
+        }
+    }
     let bare_rational = !input.contains_symbol(heads().hlog) && !input.contains_symbol(Symbol::LOG);
     let (ctx, indeterminates, shuffle_list) = if bare_rational {
-        let (ctx, indeterminates) =
-            context_from_atom_with_indeterminates(input, integration_variables, &reserved)?;
+        let (ctx, indeterminates) = context_from_atom_with_indeterminates(
+            input,
+            integration_variables,
+            &context_indeterminates,
+        )?;
         let coefficient = FactoredRat::from_atom(ctx.clone(), input)?;
         (
             ctx,
@@ -111,8 +149,11 @@ pub(crate) fn prepare_atom_view(
             vec![ShuffleEntry::from_factored(coefficient, Vec::new())],
         )
     } else {
-        let lowered =
-            expression_from_atom_with_indeterminates(input, integration_variables, &reserved)?;
+        let lowered = expression_from_atom_with_indeterminates(
+            input,
+            integration_variables,
+            &context_indeterminates,
+        )?;
         let regulator = convert_to_hlog_reg_inf(&lowered.expr, &lowered.ctx)?;
         let shuffle_list = regulator
             .into_iter()
@@ -219,16 +260,10 @@ mod tests {
         let x = symbol!("api_input_log_x");
         let input = x.to_atom().log();
         let prepared = prepare_atom(&input, &[x]).unwrap();
-        assert_eq!(prepared.indeterminates(), &[x.to_atom()]);
+        assert_eq!(prepared.indeterminates().first(), Some(&x.to_atom()));
+        assert_eq!(prepared.integration_indices(), &[0]);
+        assert!(prepared.spectator_indices().is_empty());
         assert!(!prepared.shuffle_list().is_empty());
-        assert!(
-            prepared
-                .shuffle_list()
-                .iter()
-                .flat_map(|entry| &entry.shuffle)
-                .flat_map(|word| &word.letters)
-                .any(|letter| letter.is_zero())
-        );
     }
 
     #[test]

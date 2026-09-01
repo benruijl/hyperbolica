@@ -11,9 +11,11 @@ or performance evidence.
   built or run. The checked-in JSON Schemas document the formats; the executable
   lint additionally enforces unique canonical requests and an operation-specific
   allowlist of normalization fields.
-- `cargo test --test c_abi_contract` exercises NULL input, malformed UTF-8 and
-  JSON, caller-owned allocation, the NULL-safe deallocator, and the borrowed
-  four-component version pointer. None of these requests reaches CAS dispatch.
+- The CAS-independent subset,
+  `cargo test --test c_abi_contract -- --skip successful_math_operations_cross_the_abi_with_owned_envelopes`,
+  exercises NULL input, malformed UTF-8 and JSON, caller-owned allocation, the
+  NULL-safe deallocator, and the borrowed four-component version pointer. None
+  of those selected requests reaches CAS dispatch.
 - `scripts/check-abi.sh` enforces exact equality between the shared-library
   `hf_*` exports, the public header, and `tests/abi/symbols_golden.txt`. It also
   compiles C and C++ consumers, links a C harness, and by default runs only its
@@ -27,6 +29,17 @@ uses the current header/implementation contract requested for this port: six
 operations plus `hf_free_string` and `hf_version_string`, exactly eight public
 `hf_*` exports. Extra exports fail the gate as readily as missing exports.
 
+## Symbolica-backed ABI gate
+
+With `SYMBOLICA_LICENSE` set, `cargo test --test c_abi_contract` also invokes
+valid requests through the exported functions. It mirrors the upstream
+partial-fraction, linear-factor, and one-variable LR fixtures and adds the
+convergent integral `int_0^infinity dx/(1+x)^2 = 1`. The test pins exact
+UTF-8 JSON bytes for deterministic algebra responses, verifies the mathematical
+LR and integration fields, rejects duplicate/missing envelope fields, proves
+simultaneously live results are distinct writable allocations, and releases
+every result through `hf_free_string`.
+
 ## Differential and benchmark runs
 
 Both runtime scripts lint fixtures first. `scripts/differential.sh` then runs
@@ -34,9 +47,19 @@ the Rust binary and the independently built C++ executable; no C++ or FLINT code
 is linked into the Rust crate.
 
 `scripts/benchmark-compare.sh` refuses to time a workload unless both
-backends first return the fixture-selected byte-exact or normalized successful
-response. Permutation fields are validated before normalization. Every warmup
-and measured response must equal that captured preflight value.
+backends first return the fixture-selected byte-exact, normalized, or semantic
+successful response. Semantic comparison is deliberately field-scoped: each
+declared algebraic string is parsed by the Rust/Symbolica expression parser in
+the request's explicit variable context before the two canonical Atoms are
+compared. The remaining response envelope, including regulator keys and other
+structural fields, still follows the fixture's exact normalization policy.
+Permutation fields are validated before normalization.
+
+The semantic parser runs only during cross-backend preflight. Each backend's
+preflight transport response is also captured separately, and every warmup and
+measured response must equal that backend-specific snapshot. Parser startup is
+therefore outside the timed process and harmless backend-specific formatting
+cannot mask nondeterministic output.
 
 Measured invocations are adjacent Rust/C++ pairs. The first backend alternates
 within each workload, workload order is deterministically shuffled between

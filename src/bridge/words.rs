@@ -1,24 +1,32 @@
 //! Expression conversion, word algebra, transformations, and differentiation.
 
+use std::sync::Arc;
+
 use serde_json::{Value, json};
 
 use super::wire::{
-    context_for, context_for_variable, explicit_variables, integer_array_field, parse_regulator,
-    parse_wire_rat, parse_word, parse_wordlist, parse_words, regulator_sym_value, regulator_value,
-    string_array_field, string_field, variable_index, wire_context_variables, wire_rat,
-    wordlist_value,
+    context_for, context_for_variable, explicit_variables, integer_array_field,
+    mzv_context_for_variable, optional_bool, parse_regulator, parse_wire_rat, parse_word,
+    parse_wordlist, parse_words, regulator_sym_value, regulator_value, string_array_field,
+    string_field, variable_index, wire_context_variables, wire_rat, wordlist_value,
 };
 use crate::algebra::convert::{
     convert_ab_to_zero_infinity, convert_one_infinity_to_zero_one, convert_zero_one,
 };
 use crate::algebra::diff::{diff_hlog, diff_mpl};
 use crate::algebra::shuffle::{collect_words, concat_mul, shuffle_product, shuffle_words};
+use crate::algebra::{
+    DEFAULT_ALGEBRAIC_LETTER_POOL_SIZE, begin_algebraic_letter_session,
+    build_algebraic_letter_atom_list,
+};
 use crate::convert::{convert_to_hlog_reg_inf, parse_expression};
 use crate::error::{Error, Result};
 use crate::integrator::{
-    TransformResult, reg_head, reg_tail, reg0, reglim_word, regzero_word_in_ctx, shuffle_symbolic,
-    transform_shuffle, transform_word,
+    TransformOptions, TransformResult, reg_head, reg_tail, reg0, reglim_word_with_table,
+    regzero_word_in_ctx, shuffle_symbolic, transform_shuffle_with_options_and_table,
+    transform_word_with_options_and_table,
 };
+use crate::reduce::MzvReductionTable;
 
 pub(super) fn evaluate(request: &Value, op: &str) -> Option<Result<Value>> {
     matches!(
@@ -190,28 +198,44 @@ fn evaluate_supported(request: &Value, op: &str) -> Result<Value> {
         "reglim_word" | "transform_word" => {
             let letter_values = string_array_field(request, "word")?;
             let expressions = letter_values.iter().map(String::as_str).collect::<Vec<_>>();
-            let ctx = context_for_variable(request, &expressions)?;
+            let introduce_algebraic_letters =
+                op == "transform_word" && optional_bool(request, "algebraic_letters", false)?;
+            let (ctx, response_variables, table) =
+                transform_context(request, &expressions, introduce_algebraic_letters)?;
             let variable = variable_index(&ctx, request)?;
             let word = parse_word(&ctx, &letter_values)?;
             if op == "reglim_word" {
-                let output = reglim_word(&ctx, &word, variable)?;
+                let output = reglim_word_with_table(&ctx, &word, variable, &table)?;
                 return Ok(json!({
                     "op": op,
                     "result": regulator_sym_value(&output),
-                    "vars": wire_context_variables(&ctx),
+                    "vars": response_variables,
                 }));
             }
-            match transform_word(&ctx, &word, variable) {
+            let _session = introduce_algebraic_letters
+                .then(begin_algebraic_letter_session)
+                .transpose()?;
+            let options = TransformOptions {
+                introduce_algebraic_letters,
+                forbidden_variables: &[],
+            };
+            match transform_word_with_options_and_table(
+                &ctx,
+                &word,
+                variable,
+                &options,
+                Some(&table),
+            ) {
                 Ok(output) => Ok(json!({
                     "op": op,
                     "result": transform_result_value(&output),
-                    "vars": wire_context_variables(&ctx),
+                    "vars": response_variables,
                 })),
                 Err(error) if error.to_string().contains("$Failed") => Ok(json!({
                     "op": op,
                     "failed": true,
                     "reason": error.to_string(),
-                    "vars": wire_context_variables(&ctx),
+                    "vars": response_variables,
                 })),
                 Err(error) => Err(error),
             }
@@ -220,20 +244,30 @@ fn evaluate_supported(request: &Value, op: &str) -> Result<Value> {
             let words_value = request
                 .get("wordlist")
                 .ok_or_else(|| Error::InvalidInput("missing array field `wordlist`".into()))?;
-            let ctx = context_for_variable(request, &[])?;
+            let introduce_algebraic_letters = optional_bool(request, "algebraic_letters", false)?;
+            let (ctx, response_variables, table) =
+                transform_context(request, &[], introduce_algebraic_letters)?;
             let variable = variable_index(&ctx, request)?;
             let words = parse_words(&ctx, words_value)?;
-            match transform_shuffle(&ctx, &words, variable) {
+            let _session = introduce_algebraic_letters
+                .then(begin_algebraic_letter_session)
+                .transpose()?;
+            let options = TransformOptions {
+                introduce_algebraic_letters,
+                forbidden_variables: &[],
+            };
+            match transform_shuffle_with_options_and_table(&ctx, &words, variable, &options, &table)
+            {
                 Ok(output) => Ok(json!({
                     "op": op,
                     "result": transform_result_value(&output),
-                    "vars": wire_context_variables(&ctx),
+                    "vars": response_variables,
                 })),
                 Err(error) if error.to_string().contains("$Failed") => Ok(json!({
                     "op": op,
                     "failed": true,
                     "reason": error.to_string(),
-                    "vars": wire_context_variables(&ctx),
+                    "vars": response_variables,
                 })),
                 Err(error) => Err(error),
             }
@@ -335,6 +369,26 @@ fn evaluate_supported(request: &Value, op: &str) -> Result<Value> {
     }
 }
 
+fn transform_context(
+    request: &Value,
+    expressions: &[&str],
+    introduce_algebraic_letters: bool,
+) -> Result<(Arc<crate::core::PolyCtx>, Vec<String>, MzvReductionTable)> {
+    let (base, table) = mzv_context_for_variable(request, expressions)?;
+    let response_variables = wire_context_variables(&base);
+    if !introduce_algebraic_letters {
+        return Ok((base, response_variables, table));
+    }
+    let variables = (0..base.len())
+        .map(|index| base.variable_atom(index))
+        .collect::<Result<Vec<_>>>()?;
+    let ctx = crate::core::PolyCtx::from_indeterminates(build_algebraic_letter_atom_list(
+        variables,
+        DEFAULT_ALGEBRAIC_LETTER_POOL_SIZE,
+    ))?;
+    Ok((ctx, response_variables, table))
+}
+
 fn transform_result_value(result: &TransformResult) -> Value {
     Value::Array(
         result
@@ -347,4 +401,30 @@ fn transform_result_value(result: &TransformResult) -> Value {
             })
             .collect(),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn transform_word_honors_the_algebraic_letter_option_without_leaking_pool_vars() {
+        let base = json!({
+            "op": "transform_word",
+            "word": ["bridge_transform_x^2+1"],
+            "var": "bridge_transform_x",
+            "vars": ["bridge_transform_x"],
+        });
+        let strict = evaluate_supported(&base, "transform_word").unwrap();
+        assert!(!strict.to_string().contains("Wm_"));
+        assert!(!strict.to_string().contains("Wp_"));
+
+        let mut algebraic = base;
+        algebraic["algebraic_letters"] = Value::Bool(true);
+        let transformed = evaluate_supported(&algebraic, "transform_word").unwrap();
+        let serialized = transformed.to_string();
+        assert!(serialized.contains("Wm_1"), "{serialized}");
+        assert!(serialized.contains("Wp_1"), "{serialized}");
+        assert_eq!(transformed["vars"], json!(["bridge_transform_x"]));
+    }
 }

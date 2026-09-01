@@ -103,6 +103,50 @@ impl PolyCtx {
         }))
     }
 
+    /// Build a context from native indeterminates while retaining explicit
+    /// transport spellings for diagnostics and round trips.
+    pub(crate) fn from_named_indeterminates<I, S>(
+        names: I,
+        indeterminates: impl IntoIterator<Item = Atom>,
+    ) -> Result<Arc<Self>>
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        let names = names.into_iter().map(Into::into).collect::<Vec<_>>();
+        let variables = indeterminates
+            .into_iter()
+            .map(|atom| PolyVariable::try_from(atom).map_err(Error::InvalidInput))
+            .collect::<Result<Vec<_>>>()?;
+        if names.len() != variables.len() {
+            return Err(Error::InvalidInput(format!(
+                "polynomial context has {} names but {} indeterminates",
+                names.len(),
+                variables.len()
+            )));
+        }
+        let mut seen_names = std::collections::HashSet::with_capacity(names.len());
+        for name in &names {
+            if name.is_empty() || !seen_names.insert(name.clone()) {
+                return Err(Error::InvalidInput(format!(
+                    "variable names must be non-empty and unique: `{name}`"
+                )));
+            }
+        }
+        let mut seen_variables = std::collections::HashSet::with_capacity(variables.len());
+        for variable in &variables {
+            if !seen_variables.insert(variable.clone()) {
+                return Err(Error::InvalidInput(format!(
+                    "polynomial indeterminates must be unique: `{variable}`"
+                )));
+            }
+        }
+        Ok(Arc::new(Self {
+            names: Arc::new(names),
+            variables: Arc::new(variables),
+        }))
+    }
+
     /// Diagnostic/presentation spellings in context order.
     ///
     /// These strings are not mathematical identities: distinct namespaced

@@ -64,6 +64,42 @@ class LicensedIntegrationTests(unittest.TestCase):
         self.assertIs(type(result), hb.Expression)
         self.assertEqual(result.to_canonical_string(), hb.N(1).to_canonical_string())
 
+    def test_native_directed_intervals_preserve_exact_bounds(self) -> None:
+        x, a = hb.S("python_licensed_interval_x", "python_licensed_interval_a")
+        options = hb.IntegrationOptions(check_divergences=True, parallel=False)
+
+        finite = hb.integrate_over(hb.N(1), [x], [(hb.N(2), hb.N(5))], options)
+        self.assertEqual(
+            finite.to_canonical_string(), hb.N(3).to_canonical_string()
+        )
+
+        tail = hb.integrate_detailed_over(
+            1 / (x + 1) ** 2,
+            [x],
+            [(a, hb.Symbol.INFINITY)],
+            options,
+        )
+        self.assertEqual(
+            tail.expression.to_canonical_string(),
+            (1 / (a + 1)).to_canonical_string(),
+        )
+        self.assertTrue(
+            any(
+                item.to_canonical_string() == a.to_canonical_string()
+                for item in tail.indeterminates
+            )
+        )
+
+        backwards = hb.integrate_over(
+            1 / (x + 1) ** 2,
+            [x],
+            [(hb.Symbol.INFINITY, hb.N(0))],
+            options,
+        )
+        self.assertEqual(
+            backwards.to_canonical_string(), hb.N(-1).to_canonical_string()
+        )
+
     def test_detailed_result_is_inspectable_and_copyable(self) -> None:
         x = hb.S("python_licensed_detailed_x")
         result = hb.integrate_detailed(1 / (x + 1) ** 2, [x])

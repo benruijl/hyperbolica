@@ -99,7 +99,7 @@ impl PythonPreparedIntegral {
     /// Integrate and return a native Symbolica expression.
     #[pyo3(
         signature = (options = None),
-        text_signature = "($self, options=None)"
+        text_signature = "(self, options=None)"
     )]
     fn integrate(
         &self,
@@ -112,7 +112,7 @@ impl PythonPreparedIntegral {
     /// Integrate and retain metadata about the collected exact result.
     #[pyo3(
         signature = (options = None),
-        text_signature = "($self, options=None)"
+        text_signature = "(self, options=None)"
     )]
     fn integrate_detailed(
         &self,

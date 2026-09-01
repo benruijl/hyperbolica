@@ -753,6 +753,76 @@ impl<R: Field + Echelonize, E: Exponent, O: MonomialOrder> GroebnerBasis<R, E, O
         b.reduce_basis()
     }
 
+    /// Verify this F4 result and complete it if a critical S-polynomial was
+    /// missed.
+    ///
+    /// Exact verification can be expensive for a large valid basis, so it is
+    /// explicit rather than part of [`Self::new`]. Callers that use a missing
+    /// leading monomial to make a semantic decision should invoke this method
+    /// before accepting that decision.
+    pub fn ensure_groebner_basis(mut self) -> Self {
+        if !Self::is_groebner_basis(&self.system) {
+            self.complete_with_buchberger();
+            self = self.reduce_basis();
+        }
+        self
+    }
+
+    /// Complete an incomplete F4 result using Buchberger's criterion.
+    ///
+    /// This is a correctness fallback, not the primary basis algorithm.  It
+    /// is called only when the much faster F4 result fails the exact
+    /// S-polynomial verification above.
+    fn complete_with_buchberger(&mut self) {
+        let mut pairs = (0..self.system.len())
+            .flat_map(|right| (0..right).map(move |left| (left, right)))
+            .collect::<Vec<_>>();
+
+        while let Some((left, right)) = pairs.pop() {
+            let first = self.system[left].clone();
+            let second = self.system[right].clone();
+            let lcm = first
+                .max_exp()
+                .iter()
+                .zip(second.max_exp())
+                .map(|(first, second)| *first.max(second))
+                .collect::<Vec<_>>();
+            let first_multiplier = lcm
+                .iter()
+                .zip(first.max_exp())
+                .map(|(lcm, exponent)| *lcm - *exponent)
+                .collect::<Vec<_>>();
+            let second_multiplier = lcm
+                .iter()
+                .zip(second.max_exp())
+                .map(|(lcm, exponent)| *lcm - *exponent)
+                .collect::<Vec<_>>();
+
+            // Buchberger's product criterion: relatively prime leading
+            // monomials always produce an S-polynomial that reduces to zero.
+            if first_multiplier == second.max_exp() && second_multiplier == first.max_exp() {
+                continue;
+            }
+
+            let first_scale = first.ring().inv(first.max_coeff());
+            let second_scale = second.ring().inv(second.max_coeff());
+            let s_polynomial = first.mul_exp(&first_multiplier).mul_coeff(first_scale)
+                - second.mul_exp(&second_multiplier).mul_coeff(second_scale);
+            let remainder = s_polynomial.reduce(&self.system);
+            if remainder.is_zero() {
+                continue;
+            }
+
+            let scale = remainder.ring().inv(remainder.max_coeff());
+            let remainder = remainder.mul_coeff(scale);
+            let new_index = self.system.len();
+            pairs.extend((0..new_index).map(|index| (index, new_index)));
+            self.system.push(remainder);
+        }
+
+        debug_assert!(Self::is_groebner_basis(&self.system));
+    }
+
     #[inline]
     fn simplify(
         tab: &mut Vec<(Vec<E>, Rc<MultivariatePolynomial<R, E, O>>)>,
@@ -969,6 +1039,13 @@ impl<R: Field + Echelonize, E: Exponent, O: MonomialOrder> GroebnerBasis<R, E, O
                 self.print_stats,
             );
 
+            // Simplification rules derived from this matrix may only rewrite
+            // multiples of the basis that existed when the matrix was built.
+            // A new row is not yet a valid reducer for another row from the
+            // same matrix: registering it here can replace both sides of an
+            // unprocessed S-pair by the same cached polynomial.
+            let simplification_basis = basis.clone();
+
             // construct new polynomials
             for m in &matrix {
                 let lmi = sorted_monomial_indices[m[0].1];
@@ -992,7 +1069,7 @@ impl<R: Field + Echelonize, E: Exponent, O: MonomialOrder> GroebnerBasis<R, E, O
                 } else {
                     // update entries in the tab with simpler polynomials
                     let mut diff = vec![E::zero(); nvars];
-                    'bf: for (g_ind, g) in &basis {
+                    'bf: for (g_ind, g) in &simplification_basis {
                         if poly
                             .last_exponents()
                             .iter()
@@ -1194,6 +1271,17 @@ impl<R: Field, E: Exponent, O: MonomialOrder> GroebnerBasis<R, E, O> {
     pub fn is_groebner_basis(system: &[MultivariatePolynomial<R, E, O>]) -> bool {
         for (i, p1) in system.iter().enumerate() {
             for p2 in &system[i + 1..] {
+                // Buchberger's product criterion avoids constructing and
+                // reducing an S-polynomial when the leading monomials are
+                // relatively prime.
+                if p1
+                    .max_exp()
+                    .iter()
+                    .zip(p2.max_exp())
+                    .all(|(first, second)| *first == E::zero() || *second == E::zero())
+                {
+                    continue;
+                }
                 let lcm: Vec<E> = p1
                     .max_exp()
                     .iter()
@@ -2820,7 +2908,12 @@ mod test {
 
     use crate::{
         atom::{Atom, AtomCore},
-        domains::{Ring, RingOps, algebraic::AlgebraicContext, finite_field::Zp, rational::Q},
+        domains::{
+            Ring, RingOps,
+            algebraic::AlgebraicContext,
+            finite_field::{FiniteFieldCore, Zp},
+            rational::Q,
+        },
         parse,
         poly::{
             GrevLexOrder, LexOrder, PolyVariable, groebner::GroebnerBasis,
@@ -2888,6 +2981,149 @@ mod test {
             context.field().is_zero(&value),
             "expected {expression} to be zero"
         );
+    }
+
+    #[test]
+    fn f4_does_not_cache_a_same_matrix_row_as_a_simplification_rule() {
+        let field = Zp::new(65_521);
+        let variables = Arc::new(vec![
+            PolyVariable::from(symbol!("x")),
+            PolyVariable::from(symbol!("y")),
+            PolyVariable::from(symbol!("z")),
+        ]);
+        let ideal: Vec<MultivariatePolynomial<_, u16, GrevLexOrder>> =
+            ["206*x*z+942*y", "422*x^2+422*x*y"]
+                .iter()
+                .map(|polynomial| {
+                    parse!(polynomial)
+                        .to_polynomial::<_, u16>(&field, Some(variables.clone()))
+                        .reorder::<GrevLexOrder>()
+                })
+                .collect();
+
+        // `new` must be correct without the defensive Buchberger completion.
+        let basis = GroebnerBasis::new(&ideal, false);
+
+        assert!(GroebnerBasis::is_groebner_basis(&basis.system));
+        assert!(
+            ideal
+                .iter()
+                .all(|polynomial| polynomial.reduce(&basis.system).is_zero())
+        );
+        assert!(
+            basis
+                .system
+                .iter()
+                .any(|polynomial| polynomial.max_exp() == [0, 2, 1])
+        );
+    }
+
+    #[test]
+    fn f4_random_small_systems_pass_exact_buchberger_verification() {
+        fn random_u32(state: &mut u64) -> u32 {
+            *state = state
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
+            (*state >> 32) as u32
+        }
+
+        let available_variables = [
+            PolyVariable::from(symbol!("w")),
+            PolyVariable::from(symbol!("x")),
+            PolyVariable::from(symbol!("y")),
+        ];
+        let primes = [3, 5, 7, 11, 101, 65_521];
+        let mut state = 0x5eed_f4c0_ffee_u64;
+
+        for case in 0..96 {
+            let prime = primes[random_u32(&mut state) as usize % primes.len()];
+            let field = Zp::new(prime);
+            let variable_count = 2 + random_u32(&mut state) as usize % 2;
+            let variables = Arc::new(available_variables[..variable_count].to_vec());
+            let generator_count = 2 + random_u32(&mut state) as usize % 2;
+            let mut ideal = Vec::with_capacity(generator_count);
+
+            for generator in 0..generator_count {
+                let term_count = 3 + random_u32(&mut state) as usize % 3;
+                let mut polynomial = MultivariatePolynomial::<_, u16, GrevLexOrder>::new(
+                    &field,
+                    Some(term_count),
+                    variables.clone(),
+                );
+                for term in 0..term_count {
+                    let mut exponents = (0..variable_count)
+                        .map(|_| (random_u32(&mut state) % 3) as u16)
+                        .collect::<Vec<_>>();
+                    if term == 0 && exponents.iter().all(|exponent| *exponent == 0) {
+                        exponents[generator % variable_count] = 1;
+                    }
+                    let coefficient = 1 + random_u32(&mut state) % (prime - 1);
+                    polynomial.append_monomial(field.to_element(coefficient), &exponents);
+                }
+                if polynomial.is_zero() {
+                    let mut exponents = vec![0; variable_count];
+                    exponents[generator % variable_count] = 1;
+                    polynomial.append_monomial(field.to_element(1), &exponents);
+                }
+                ideal.push(polynomial);
+            }
+
+            let basis = GroebnerBasis::new(&ideal, false);
+            let input = ideal.iter().map(ToString::to_string).collect::<Vec<_>>();
+            assert!(
+                GroebnerBasis::is_groebner_basis(&basis.system),
+                "random F4 case {case} over GF({prime}) failed: {input:?}"
+            );
+            assert!(
+                ideal
+                    .iter()
+                    .all(|polynomial| polynomial.reduce(&basis.system).is_zero()),
+                "random F4 case {case} changed the input ideal over GF({prime}): {input:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn f4_keeps_a_finite_field_basis_complete_when_simplifying_rows() {
+        let field = Zp::new(65_521);
+        let variables = Arc::new(vec![
+            PolyVariable::from(symbol!("r")),
+            PolyVariable::from(symbol!("x")),
+            PolyVariable::from(symbol!("y")),
+            PolyVariable::from(symbol!("z")),
+        ]);
+        let ideal: Vec<MultivariatePolynomial<_, u16, GrevLexOrder>> = [
+            "628*x*z+422*y*z+309*y+422*z^2+422*z",
+            "206*x*z+633*x+942*y+633*z+633",
+            "422*x^2+422*x*y+628*x*z+422*x+309*y",
+            "1-r*(2*x*z+3*y)*(1+x+y+z)",
+        ]
+        .iter()
+        .map(|polynomial| {
+            parse!(polynomial)
+                .expand()
+                .to_polynomial::<_, u16>(&field, Some(variables.clone()))
+                .reorder::<GrevLexOrder>()
+        })
+        .collect();
+
+        let basis = GroebnerBasis::new(&ideal, false);
+
+        assert!(GroebnerBasis::is_groebner_basis(&basis.system));
+        assert!(
+            ideal
+                .iter()
+                .all(|polynomial| polynomial.reduce(&basis.system).is_zero())
+        );
+        for variable in 0..ideal[0].nvars() {
+            assert!(basis.system.iter().any(|polynomial| {
+                polynomial
+                    .max_exp()
+                    .iter()
+                    .enumerate()
+                    .all(|(index, exponent)| (index == variable) == (*exponent != 0))
+            }));
+        }
     }
 
     #[test]

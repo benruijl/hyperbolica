@@ -35,8 +35,17 @@ pub struct PartialFractionPole {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PartialFractionization {
     pub polynomial_part: Rat,
-    /// Distinct poles in Symbolica's denominator-factor order.
+    /// Distinct poles in canonical HyperFLINT order: multiplicity first, then
+    /// the normalized pole's structural order.
     pub poles: Vec<PartialFractionPole>,
+}
+
+fn canonicalize_poles(output: &mut PartialFractionization) {
+    output.poles.sort_unstable_by(|left, right| {
+        left.multiplicity
+            .cmp(&right.multiplicity)
+            .then_with(|| left.pole.structural_cmp(&right.pole))
+    });
 }
 
 fn merge_pole(output: &mut PartialFractionization, incoming: PartialFractionPole) -> Result<()> {
@@ -264,6 +273,7 @@ pub fn partial_fractions_with_options(
         )?;
     }
 
+    canonicalize_poles(&mut output);
     Ok(output)
 }
 

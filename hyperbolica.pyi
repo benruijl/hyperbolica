@@ -23,6 +23,13 @@ class ParseMode:
     Mathematica: ClassVar[ParseMode]
 
 
+class Symbol:
+    """Built-in constants supplied by the embedded Symbolica kernel."""
+
+    INFINITY: ClassVar[Expression]
+    COMPLEX_INFINITY: ClassVar[Expression]
+
+
 class Expression:
     """A native expression owned by Hyperbolica's embedded Symbolica kernel."""
 
@@ -241,9 +248,25 @@ def integrate(
 ) -> Expression: ...
 
 
+def integrate_over(
+    expression: Expression,
+    variables: Sequence[Expression],
+    intervals: Sequence[tuple[Expression, Expression]],
+    options: IntegrationOptions | None = None,
+) -> Expression: ...
+
+
 def integrate_detailed(
     expression: Expression,
     variables: Sequence[Expression],
+    options: IntegrationOptions | None = None,
+) -> IntegrationResult: ...
+
+
+def integrate_detailed_over(
+    expression: Expression,
+    variables: Sequence[Expression],
+    intervals: Sequence[tuple[Expression, Expression]],
     options: IntegrationOptions | None = None,
 ) -> IntegrationResult: ...
 

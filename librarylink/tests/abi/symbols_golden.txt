@@ -1,0 +1,9 @@
+WolframLibrary_getVersion
+WolframLibrary_initialize
+WolframLibrary_uninitialize
+hf_clear_state
+hf_factor_table
+hf_find_lr_orders
+hf_find_lr_orders_scan
+hf_hyperflint_sym
+hf_version

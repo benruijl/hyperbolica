@@ -172,7 +172,7 @@ lint_benchmark() {
             def allowed_keys:
                 ["name", "compare", "request", "ignore", "ignore_recursive",
                  "reason", "permutation_field", "permutation_values", "tier",
-                 "timeout_seconds", "pairs"];
+                 "timeout_seconds", "pairs", "semantic_fields"];
             def strings_unique:
                 type == "array" and all(.[]; type == "string" and length > 0)
                 and (length == (unique | length));
@@ -191,6 +191,11 @@ lint_benchmark() {
                 if .request.op == "factor_table" then
                     ["t_build_s", "trial_s", "fallback_s"]
                 else [] end;
+            def allowed_semantic:
+                .request.op as $op |
+                if (["rat_add", "mul", "gcd", "resultant", "rat_sum",
+                     "series_expansion", "apply_mzv_reductions"] |
+                    index($op)) != null then ["result"] else [] end;
             ((keys_unsorted - allowed_keys) | length == 0)
             and ((.tier // "qualification") |
                  . == "qualification" or . == "nightly" or
@@ -198,15 +203,17 @@ lint_benchmark() {
             and ((.timeout_seconds // 1) |
                  type == "number" and floor == . and . >= 1)
             and ((.pairs // 1) | type == "number" and floor == . and . >= 1)
-            and ((.compare // "byte") == "byte" or .compare == "normalized")
+            and ((.compare // "byte") == "byte" or .compare == "normalized" or
+                 .compare == "semantic")
             and (
                 if (.compare // "byte") == "byte" then
                     (has("ignore") | not)
                     and (has("ignore_recursive") | not)
                     and (has("reason") | not)
+                    and (has("semantic_fields") | not)
                     and (has("permutation_field") | not)
                     and (has("permutation_values") | not)
-                else
+                elif .compare == "normalized" then
                     (.ignore | strings_unique and length > 0)
                     and ((.ignore_recursive // []) | strings_unique)
                     and (.reason | type == "string" and length > 0)
@@ -217,6 +224,7 @@ lint_benchmark() {
                     and ((has("permutation_field") and has("permutation_values"))
                          or ((has("permutation_field") | not)
                              and (has("permutation_values") | not)))
+                    and (has("semantic_fields") | not)
                     and (
                         if has("permutation_field") then
                             (.permutation_field | type == "string" and length > 0)
@@ -226,6 +234,20 @@ lint_benchmark() {
                             and ((.permutation_values | sort) == (.request.xvars | sort))
                         else true end
                     )
+                else
+                    (.semantic_fields | strings_unique and length > 0)
+                    and ([.semantic_fields[] as $key |
+                          allowed_semantic | index($key)] | all(.[]; . != null))
+                    and (.request.vars | strings_unique and length > 0)
+                    and ((.ignore // []) | strings_unique)
+                    and ((.ignore_recursive // []) | strings_unique)
+                    and (.reason | type == "string" and length > 0)
+                    and ([((.ignore // [])[]) as $key |
+                          allowed_ignored | index($key)] | all(.[]; . != null))
+                    and ([((.ignore_recursive // [])[]) as $key |
+                          allowed_recursive | index($key)] | all(.[]; . != null))
+                    and (has("permutation_field") | not)
+                    and (has("permutation_values") | not)
                 end
             )
         ' \

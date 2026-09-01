@@ -189,6 +189,27 @@ pub(crate) fn format_expression(atom: impl AtomCore) -> String {
 pub(crate) fn atom_from_name(name: &str) -> Result<Atom> {
     special_atom_from_name(name).map_or_else(
         || {
+            if let Some((head, subscripts)) = name.split_once('[')
+                && !head.is_empty()
+                && name.ends_with(']')
+            {
+                let body = &subscripts[..subscripts.len() - 1];
+                let indices = body
+                    .split(',')
+                    .map(str::trim)
+                    .map(str::parse::<i64>)
+                    .collect::<std::result::Result<Vec<_>, _>>();
+                if let Ok(indices) = indices
+                    && !indices.is_empty()
+                {
+                    return Symbol::parse(head, SYMBOL_NAMESPACE)
+                        .map(|symbol| symbol.call_args(indices))
+                        .map_err(|message| Error::PolynomialParse {
+                            expression: name.to_owned(),
+                            message,
+                        });
+                }
+            }
             Symbol::parse(name, SYMBOL_NAMESPACE)
                 .map(Symbol::to_atom)
                 .map_err(|message| Error::PolynomialParse {

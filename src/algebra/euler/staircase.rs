@@ -150,7 +150,7 @@ mod tests {
         assert_eq!(chi_staircase_count(&[], 0), ChiCount::finite(1));
         assert_eq!(chi_staircase_count(&[], 3).status, ChiStatus::PositiveDim);
         assert_eq!(
-            chi_staircase_count(&[vec![1, 0]], 3).status,
+            chi_staircase_count(&[vec![1, 0, 0]], 3).status,
             ChiStatus::PositiveDim
         );
         assert_eq!(

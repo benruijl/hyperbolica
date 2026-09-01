@@ -192,6 +192,8 @@ mod tests {
                 "__symbolica_version__",
                 "__version__",
                 "integrate",
+                "integrate_detailed_over",
+                "integrate_over",
                 "prepare",
             ] {
                 assert!(exports.iter().any(|name| name == required));

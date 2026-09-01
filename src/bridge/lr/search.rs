@@ -27,7 +27,9 @@ pub(super) fn evaluate_find_orders(request: &Value, op: &str) -> Result<Value> {
         allow_algebraic_letters,
         carry_discharge,
         score_prune_factor,
-        euler_filter: optional_bool(request, "euler_filter", false)? || legacy_euler_environment(),
+        // Upstream find_lr_orders is controlled only by HF_EULER_FILTER;
+        // the similarly named JSON option belongs to the scan operation.
+        euler_filter: legacy_euler_environment(),
     };
     let emit_sings = optional_bool(request, "emit_sings", false)?;
     let verify_order = request

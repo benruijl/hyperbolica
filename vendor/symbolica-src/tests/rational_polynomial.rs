@@ -6,7 +6,9 @@ use symbolica::{
         Ring,
         integer::Z,
         rational::Q,
-        rational_polynomial::{RationalPolynomial, RationalPolynomialField},
+        rational_polynomial::{
+            FromNumeratorAndDenominator, RationalPolynomial, RationalPolynomialField,
+        },
     },
     parse,
     parser::{ParseSettings, Token},
@@ -32,6 +34,27 @@ fn rational_polynomial_power_uses_exact_binary_exponentiation() {
 
     let field = RationalPolynomialField::from_poly(&value.numerator);
     assert_eq!(field.pow(&value, 13), expected);
+}
+
+#[test]
+fn integer_rational_polynomial_removes_common_scalar_content() {
+    let variables = Arc::new(vec![
+        PolyVariable::Symbol(symbol!("content_x")),
+        PolyVariable::Symbol(symbol!("content_y")),
+    ]);
+    let numerator = parse!("21+63*content_x^2+21*content_x^20")
+        .to_polynomial::<_, u16>(&Z, Some(variables.clone()));
+    let denominator =
+        parse!("21+21*content_y").to_polynomial::<_, u16>(&Z, Some(variables.clone()));
+    let expected_gcd = parse!("21").to_polynomial::<_, u16>(&Z, Some(variables.clone()));
+
+    assert_eq!(numerator.gcd(&denominator), expected_gcd);
+
+    let normalized = RationalPolynomial::from_num_den(numerator, denominator, &Z, true);
+    let expected: RationalPolynomial<_> = parse!("(1+3*content_x^2+content_x^20)/(1+content_y)")
+        .to_rational_polynomial(&Z, &Z, Some(variables));
+
+    assert_eq!(normalized, expected);
 }
 
 #[test]

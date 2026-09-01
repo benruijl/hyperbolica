@@ -5,10 +5,11 @@ use super::collection::{
     require_word_context,
 };
 use super::limits::{one_regulator, reglim_word_impl, word_depends_on_variable};
-use super::{RegulatorSym, TransformPair, TransformResult};
-use crate::algebra::linear_factors::linear_factors;
+use super::{RegulatorSym, TransformOptions, TransformPair, TransformResult};
+use crate::algebra::linear_factors::{LinearFactorOptions, linear_factors_with_options};
 use crate::core::{DigestBuckets, PolyCtx, Rat, structural_bucket_digest};
 use crate::error::{Error, Result};
+use crate::reduce::MzvReductionTable;
 use crate::symbols::{Word, Wordlist, WordlistTerm};
 
 const WORD_ROW_BUCKET_DOMAIN: u64 = 0x5452_574f_5244_0001;
@@ -207,17 +208,46 @@ impl TransformCache {
 
 /// Transform one word into shuffle factors and regularized limits.
 pub fn transform_word(ctx: &Arc<PolyCtx>, word: &Word, variable: usize) -> Result<TransformResult> {
+    transform_word_with_options(ctx, word, variable, &TransformOptions::default())
+}
+
+/// Transform one word with an explicit algebraic-letter policy.
+pub fn transform_word_with_options(
+    ctx: &Arc<PolyCtx>,
+    word: &Word,
+    variable: usize,
+    options: &TransformOptions<'_>,
+) -> Result<TransformResult> {
+    transform_word_with_options_and_table(ctx, word, variable, options, None)
+}
+
+pub(crate) fn transform_word_with_options_and_table(
+    ctx: &Arc<PolyCtx>,
+    word: &Word,
+    variable: usize,
+    options: &TransformOptions<'_>,
+    table: Option<&MzvReductionTable>,
+) -> Result<TransformResult> {
     if variable >= ctx.len() {
         return Err(Error::UnknownVariable(variable.to_string()));
     }
     require_word_context(word, ctx)?;
-    transform_word_impl(ctx, word, variable, &mut TransformCache::default())
+    transform_word_impl(
+        ctx,
+        word,
+        variable,
+        options,
+        table,
+        &mut TransformCache::default(),
+    )
 }
 
 fn transform_word_impl(
     ctx: &Arc<PolyCtx>,
     word: &Word,
     variable: usize,
+    options: &TransformOptions<'_>,
+    table: Option<&MzvReductionTable>,
     cache: &mut TransformCache,
 ) -> Result<TransformResult> {
     if let Some(cached) = cache.get(word, variable) {
@@ -229,7 +259,7 @@ fn transform_word_impl(
         return Ok(output);
     }
 
-    let limit = reglim_word_impl(ctx, word, variable)?;
+    let limit = reglim_word_impl(ctx, word, variable, table)?;
     let has_variable = word_depends_on_variable(word, variable)?;
     let mut rows = Vec::<ResultRow>::new();
     let mut row_indices = DigestBuckets::default();
@@ -275,8 +305,14 @@ fn transform_word_impl(
             continue;
         }
 
-        let numerator = linear_factors(difference.numerator(), variable)?;
-        let denominator = linear_factors(difference.denominator(), variable)?;
+        let factor_options = LinearFactorOptions {
+            introduce_algebraic_letters: options.introduce_algebraic_letters,
+            forbidden_variables: options.forbidden_variables,
+        };
+        let numerator =
+            linear_factors_with_options(difference.numerator(), variable, &factor_options)?;
+        let denominator =
+            linear_factors_with_options(difference.denominator(), variable, &factor_options)?;
         let mut factors = Vec::<SignedLinearFactor>::new();
         for factor in numerator.linear {
             factors.push(SignedLinearFactor {
@@ -304,7 +340,8 @@ fn transform_word_impl(
             letters.extend(word.letters[index + 2..].iter().cloned());
             let subword = Word::from(letters);
             if !subword.is_empty() && !trailing_zero(&subword) {
-                let transformed = transform_word_impl(ctx, &subword, variable, cache)?;
+                let transformed =
+                    transform_word_impl(ctx, &subword, variable, options, table, cache)?;
                 append_factored_rows(&mut rows, &mut row_indices, &transformed, &factors, 1, ctx)?;
             }
         }
@@ -314,7 +351,7 @@ fn transform_word_impl(
         letters.extend(word.letters[index + 1..].iter().cloned());
         let subword = Word::from(letters);
         if subword.is_empty() || !trailing_zero(&subword) {
-            let transformed = transform_word_impl(ctx, &subword, variable, cache)?;
+            let transformed = transform_word_impl(ctx, &subword, variable, options, table, cache)?;
             append_factored_rows(&mut rows, &mut row_indices, &transformed, &factors, -1, ctx)?;
         }
     }

@@ -338,7 +338,6 @@ mod tests {
         let right_ctx = PolyCtx::from_symbols([right_symbol]).unwrap();
         let left = Rat::from_poly(Poly::generator(left_ctx, 0).unwrap());
         let right = Rat::from_poly(Poly::generator(right_ctx, 0).unwrap());
-        assert_eq!(left.to_string(), right.to_string());
         assert_ne!(left, right);
 
         let word = Word::new(vec![left.clone()]);

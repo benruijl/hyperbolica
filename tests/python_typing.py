@@ -23,6 +23,12 @@ prepared_term_count: int = len(prepared)
 
 expression: hb.Expression = prepared.integrate()
 detailed: hb.IntegrationResult = hb.integrate_detailed(integrand, [x], options)
+finite: hb.Expression = hb.integrate_over(
+    hb.N(1), [x], [(hb.N(2), hb.N(5))], options
+)
+tail: hb.IntegrationResult = hb.integrate_detailed_over(
+    integrand, [x], [(hb.N(0), hb.Symbol.INFINITY)], options
+)
 result_expression: hb.Expression = detailed.expression
 result_variables: list[hb.Expression] = detailed.integration_variables
 result_term_count: int = len(detailed)

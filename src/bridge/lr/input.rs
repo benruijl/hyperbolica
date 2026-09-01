@@ -102,8 +102,7 @@ pub(super) fn scan_options(request: &Value) -> Result<ScanOptions> {
     };
     Ok(ScanOptions {
         keep_rule,
-        euler_filter: super::super::wire::optional_bool(request, "euler_filter", false)?
-            || legacy_euler_environment(),
+        euler_filter: super::super::wire::optional_bool(request, "euler_filter", false)?,
         max_orders: super::super::wire::optional_usize(request, "max_orders", 8192)?,
     })
 }

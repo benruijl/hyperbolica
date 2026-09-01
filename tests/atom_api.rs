@@ -175,3 +175,38 @@ fn atom_api_rejects_quadratic_roots_depending_on_a_later_variable() {
     let error = integrate_atom(&input, &[x, y], &options).unwrap_err();
     assert!(error.to_string().contains("remaining integration variable"));
 }
+
+#[test]
+fn atom_api_integrates_native_finite_and_parameterized_intervals() {
+    let (x, a) = symbol!("atom_api_interval_x", "atom_api_interval_a");
+    let options = AtomIntegrationOptions {
+        check_divergences: true,
+        parallel: false,
+        ..AtomIntegrationOptions::default()
+    };
+
+    let finite = integrate_atom_over(
+        &Atom::one(),
+        &[x],
+        &[IntegrationInterval::finite(2, 5)],
+        &options,
+    )
+    .unwrap();
+    assert_eq!(finite.to_atom().unwrap(), Atom::num(3));
+
+    let tail = IntegrationInterval::new(
+        IntegrationEndpoint::finite(a),
+        IntegrationEndpoint::PositiveInfinity,
+    );
+    let input = Atom::one() / (x + 1).pow(2);
+    let prepared = prepare_atom_over(&input, &[x], std::slice::from_ref(&tail), &options).unwrap();
+    let parameter_index = prepared.context().index_of_symbol(a).unwrap();
+    assert!(prepared.spectator_indices().contains(&parameter_index));
+    assert_eq!(
+        integrate_prepared_atom_over(&prepared, &[tail], &options)
+            .unwrap()
+            .to_atom()
+            .unwrap(),
+        Atom::one() / (a + 1)
+    );
+}

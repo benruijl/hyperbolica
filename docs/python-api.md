@@ -77,6 +77,39 @@ period constant is needed. Preparation reserves only those basis atoms rather
 than adding every generated reduction left-hand side to every polynomial
 context.
 
+## Directed intervals
+
+`integrate_over(expression, variables, intervals, options=None)` and
+`integrate_detailed_over(...)` accept exactly one `(from, to)` pair per
+integration variable. Endpoints are native `Expression` objects. Use
+`Symbol.INFINITY` and `-Symbol.INFINITY` for directed real infinity; complex
+infinity is rejected before integration.
+
+```python
+x, a = hb.S("x", "a")
+options = hb.IntegrationOptions(check_divergences=True, parallel=False)
+
+finite = hb.integrate_over(hb.N(1), [x], [(hb.N(2), hb.N(5))], options)
+assert finite == hb.N(3)
+
+tail = hb.integrate_detailed_over(
+    1 / (x + 1) ** 2,
+    [x],
+    [(a, hb.Symbol.INFINITY)],
+    options,
+)
+assert tail.expression == 1 / (a + 1)
+```
+
+Intervals are directed, so reversing endpoints reverses the sign. Finite
+bound parameters are preserved as exact spectator indeterminates even when
+they do not occur in the integrand. Prepared values made by `prepare(...)`
+cover the default `[0,+Infinity)` domain; interval-aware reuse is currently
+available through the Rust `prepare_atom_over` API. The reverse all-infinite
+domain `(+Infinity,-Infinity)` remains unsupported by the upstream interval
+rescaler; use the supported `(-Infinity,+Infinity)` direction and negate the
+result when needed.
+
 ## Errors
 
 Every Hyperbolica exception derives from `HyperbolicaError`:

@@ -20,15 +20,6 @@ pub const SCHEMA_VERSION: u64 = 2;
 /// Evaluate one JSON request and return a protocol response.
 pub fn evaluate(request: &Value) -> Result<Value> {
     let op = wire::string_field(request, "op")?;
-    if request
-        .get("schema_version_min")
-        .and_then(Value::as_u64)
-        .is_some_and(|minimum| minimum > SCHEMA_VERSION)
-    {
-        return Err(Error::InvalidInput(format!(
-            "schema_version_min exceeds supported schema version {SCHEMA_VERSION}"
-        )));
-    }
 
     if let Some(response) = words::evaluate(request, op) {
         return response;
@@ -94,5 +85,57 @@ mod tests {
             Poly::parse(ctx.clone(), response["result"].as_str().unwrap()).unwrap(),
             Poly::parse(ctx, "2*y^2+1").unwrap()
         );
+    }
+
+    #[test]
+    fn schema_gate_applies_only_to_enveloped_lr_operations() {
+        let ordinary = evaluate(&json!({
+            "op": "mul",
+            "a": "x",
+            "b": "x",
+            "schema_version_min": SCHEMA_VERSION + 1,
+        }))
+        .unwrap();
+        assert_eq!(ordinary["result"], "x^2");
+
+        let gated = evaluate(&json!({
+            "op": "find_lr_orders",
+            "xvars": ["x"],
+            "polys": ["x+1"],
+            "schema_version_min": SCHEMA_VERSION + 1,
+        }))
+        .unwrap_err();
+        assert!(gated.to_string().contains("schema_version_min"));
+    }
+
+    #[test]
+    fn upstream_flat_json_defaults_are_preserved() {
+        let discovered = evaluate(&json!({
+            "op": "mul",
+            "a": "x",
+            "b": "y",
+            "vars": [],
+        }))
+        .unwrap();
+        assert_eq!(discovered["vars"], json!(["x", "y"]));
+
+        let zero_power = evaluate(&json!({"op": "pow", "a": "x+1"})).unwrap();
+        assert_eq!(zero_power["result"], "1");
+
+        let mistyped_zero_power = evaluate(&json!({"op": "pow", "a": "x+1", "n": "2"})).unwrap();
+        assert_eq!(mistyped_zero_power["result"], "1");
+
+        let empty_shuffle = evaluate(&json!({"op": "shuffle_words"})).unwrap();
+        assert_eq!(empty_shuffle["vars"], json!(["x"]));
+        assert_eq!(empty_shuffle["result"], json!([]));
+
+        let ignored_contour_metadata = evaluate(&json!({
+            "op": "break_up_contour",
+            "wl": [],
+            "on_axis": [{"not": "interpreted"}],
+            "vars": ["x"],
+        }))
+        .unwrap();
+        assert_eq!(ignored_contour_metadata["result"], json!([]));
     }
 }

@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "fixture_sha256": "3eee783a9c8f0e2add8d92f8220f8b0f3f3f729e8076fcdd4ccdcb7fa70db5d8",
+  "fixture_sha256": "241e7627f262f51b2b83fd8fbf76b749a1ffb211edc7ad2d062c6d95d9262a13",
   "workloads": [
     {"name": "tiny_rational_addition", "tier": "qualification"},
     {"name": "sparse_high_degree_multiply", "tier": "qualification"},

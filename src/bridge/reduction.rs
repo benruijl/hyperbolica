@@ -138,16 +138,16 @@ fn evaluate_supported(request: &Value, op: &str) -> Result<Value> {
             }
         }
         "break_up_contour" | "break_up_contour_sym" => {
-            let expressions = payload_strings(request, &["wl", "on_axis"]);
+            let expressions = if op == "break_up_contour" {
+                payload_strings(request, &["wl"])
+            } else {
+                payload_strings(request, &["wl", "on_axis"])
+            };
             let (ctx, table) = mzv_context(request, &expressions)?;
             let wordlist = parse_wordlist(&ctx, request, "wl")?;
-            let on_axis_values = array_field(request, "on_axis")?;
             if op == "break_up_contour" {
-                if !on_axis_values.is_empty() {
-                    return Err(Error::InvalidInput(
-                        "non-empty `on_axis` requires break_up_contour_sym".into(),
-                    ));
-                }
+                // The ordinary upstream handler currently ignores `on_axis`;
+                // only the symbolic variant interprets those entries.
                 let output = break_up_contour(&ctx, &wordlist, &[] as &[OnAxisEntry], &table)?;
                 return Ok(json!({
                     "op": op,
@@ -156,6 +156,7 @@ fn evaluate_supported(request: &Value, op: &str) -> Result<Value> {
                 }));
             }
 
+            let on_axis_values = array_field(request, "on_axis")?;
             let on_axis = on_axis_values
                 .iter()
                 .map(|entry| {

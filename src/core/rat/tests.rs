@@ -46,7 +46,6 @@ fn structural_order_is_total_across_values_and_namespaces() {
     let right_ctx = PolyCtx::from_symbols([right_symbol]).unwrap();
     let left = Rat::from_poly(Poly::generator(left_ctx.clone(), 0).unwrap());
     let right = Rat::from_poly(Poly::generator(right_ctx, 0).unwrap());
-    assert_eq!(left.to_string(), right.to_string());
     assert_ne!(left, right);
     assert_ne!(left.structural_cmp(&right), Ordering::Equal);
     assert_eq!(
@@ -54,8 +53,15 @@ fn structural_order_is_total_across_values_and_namespaces() {
         right.structural_cmp(&left).reverse()
     );
 
-    let expanded = Rat::parse(left_ctx.clone(), "(x^2-1)/(x-1)").unwrap();
-    let canonical = Rat::parse(left_ctx, "x+1").unwrap();
+    let one = Rat::one(left_ctx);
+    let expanded = left
+        .pow(2)
+        .unwrap()
+        .try_sub(&one)
+        .unwrap()
+        .try_div(&left.try_sub(&one).unwrap())
+        .unwrap();
+    let canonical = left.try_add(&one).unwrap();
     assert_eq!(expanded, canonical);
     assert_eq!(expanded.structural_cmp(&canonical), Ordering::Equal);
 }

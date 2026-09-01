@@ -1,0 +1,32 @@
+[package]
+name = "hyperbolica-librarylink"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.89"
+publish = false
+license-file = "../DISTRIBUTION-LICENSE.md"
+description = "Wolfram LibraryLink adapter for Hyperbolica"
+build = "build.rs"
+
+[lib]
+name = "hyperflint_librarylink"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+libloading = "0.8.9"
+serde_json = "1.0"
+wolfram-library-link-sys = "=0.6.0"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[profile.release]
+codegen-units = 1
+lto = true
+strip = "debuginfo"
+
+# Keep this deployable adapter isolated from the parent package.  It exports
+# LibraryLink functions whose hf_* names intentionally overlap the stable C
+# ABI but whose signatures are different, so the two surfaces must be built as
+# separate dynamic libraries.
+[workspace]

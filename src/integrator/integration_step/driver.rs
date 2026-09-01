@@ -12,7 +12,8 @@ use super::{
 use crate::core::{DigestBuckets, PolyCtx, SymCoef, structural_bucket_digest};
 use crate::error::Error;
 use crate::integrator::{
-    RegulatorSym, TransformResult, canonicalize_regulator_sym, transform_shuffle,
+    RegulatorSym, TransformOptions, TransformResult, canonicalize_regulator_sym,
+    transform_shuffle_with_options_and_table,
 };
 use crate::reduce::MzvReductionTable;
 use crate::symbols::Word;
@@ -295,11 +296,21 @@ pub(crate) fn integration_step_core_sym_with_options(
     // retain context-owned Symbolica objects beyond their useful lifetime.
     let mut transform_cache = StepTransformCache::default();
     let mut transformed = Vec::with_capacity(input.len());
+    let transform_options = TransformOptions {
+        introduce_algebraic_letters: options.introduce_algebraic_letters,
+        forbidden_variables: forbidden_algebraic_variables,
+    };
     for entry in input {
         let value = if let Some(value) = transform_cache.get(&entry.shuffle, variable) {
             value.clone()
         } else {
-            let value = Arc::new(transform_shuffle(ctx, &entry.shuffle, variable)?);
+            let value = Arc::new(transform_shuffle_with_options_and_table(
+                ctx,
+                &entry.shuffle,
+                variable,
+                &transform_options,
+                table,
+            )?);
             transform_cache.insert(&entry.shuffle, variable, value.clone());
             value
         };

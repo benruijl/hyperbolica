@@ -1,4 +1,5 @@
 /target/
+/librarylink/target/
 /vendor/symbolica/
 /vendor/symbolica-src/target/
 .venv/

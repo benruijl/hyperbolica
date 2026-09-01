@@ -188,6 +188,21 @@ fn representative_json_cli_schemas_are_stable() {
     }));
     assert_eq!(parsed["canonical"], "Hlog[x,[0,1]]");
 
+    let scaled_rational = eval(&json!({
+        "op": "parse_expr",
+        "expr": "(2*x+2)/(2*y+2)",
+        "vars": ["x", "y"],
+    }));
+    let primitive_rational = eval(&json!({
+        "op": "parse_expr",
+        "expr": "(x+1)/(y+1)",
+        "vars": ["x", "y"],
+    }));
+    assert_eq!(
+        scaled_rational["canonical"],
+        primitive_rational["canonical"]
+    );
+
     let identity = eval(&json!({
         "op": "convert_to_hlog_reg_inf",
         "expr": "Hlog[x,[]]",

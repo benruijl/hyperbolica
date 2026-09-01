@@ -353,7 +353,7 @@ mod tests {
         let input = Wordlist::new(vec![
             WordlistTerm::new(
                 Rat::from_int(ctx.clone(), 2),
-                Word::new(vec![Rat::zero(ctx.clone()), Rat::one(ctx.clone())]),
+                Word::new(vec![Rat::zero(ctx.clone()), Rat::from_int(ctx.clone(), -1)]),
             ),
             WordlistTerm::new(
                 Rat::one(ctx.clone()),
@@ -372,7 +372,7 @@ mod tests {
                 )
                 .unwrap(),
             )
-            .try_mul(&Rat::from_int(ctx, -2))
+            .try_mul(&Rat::from_int(ctx, 2))
             .unwrap()
         );
     }

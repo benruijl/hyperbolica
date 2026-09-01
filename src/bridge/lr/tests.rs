@@ -102,6 +102,15 @@ fn factor_table_formats_and_lexically_orients_only_at_the_wire_boundary() {
     assert_eq!(response["pairs"][0]["g"], 0);
     assert_eq!(response["pairs"][0]["c"], "-1");
     assert_eq!(response["pairs"][0]["factors"], json!([]));
+    assert!(
+        response["singletons"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|entry| entry["deg"].as_u64().is_some_and(|degree| degree <= 1))
+            .all(|entry| entry.get("disc").is_none()),
+        "upstream omits discriminants for constant and linear singletons"
+    );
 }
 
 #[test]

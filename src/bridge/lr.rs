@@ -10,7 +10,7 @@ mod tests;
 
 use serde_json::Value;
 
-use crate::error::Result;
+use crate::error::{Error, Result};
 
 pub(super) fn evaluate(request: &Value, op: &str) -> Option<Result<Value>> {
     matches!(
@@ -21,6 +21,17 @@ pub(super) fn evaluate(request: &Value, op: &str) -> Option<Result<Value>> {
 }
 
 fn evaluate_supported(request: &Value, op: &str) -> Result<Value> {
+    if request
+        .get("schema_version_min")
+        .and_then(Value::as_u64)
+        .is_some_and(|minimum| minimum > super::SCHEMA_VERSION)
+    {
+        return Err(Error::InvalidInput(format!(
+            "schema_version_min exceeds supported schema version {}",
+            super::SCHEMA_VERSION
+        )));
+    }
+
     match op {
         "find_lr_orders" => search::evaluate_find_orders(request, op),
         "find_lr_orders_scan" => search::evaluate_scan(request, op),

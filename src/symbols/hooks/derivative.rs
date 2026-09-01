@@ -173,7 +173,7 @@ fn mpl_argument_partial(
         }
         let mut shortened_arguments = arguments[..arguments.len() - 1].to_vec();
         let last = shortened_arguments.len() - 1;
-        shortened_arguments[last] = &arguments[last] * argument;
+        shortened_arguments[last] = (&arguments[last] * argument).expand();
         return Some(
             mpl_atom(symbol, &indices[..indices.len() - 1], &shortened_arguments)
                 / (Atom::one() - argument),
@@ -193,12 +193,12 @@ fn mpl_argument_partial(
         .enumerate()
         .filter_map(|(index, value)| (index != position).then_some(value.clone()))
         .collect::<Vec<_>>();
-    let denominator = argument * (argument - 1);
-    let second_denominator = argument - 1;
+    let denominator = (argument * (argument - 1)).expand();
+    let second_denominator = (argument - 1).expand();
 
     if position == 0 {
         let mut merged_right = shortened_arguments.clone();
-        merged_right[0] = argument * &arguments[1];
+        merged_right[0] = (argument * &arguments[1]).expand();
         return Some(Atom::add_many([
             mpl_atom(symbol, &shortened_indices, &merged_right) / denominator,
             -mpl_atom(symbol, &shortened_indices, &shortened_arguments) / second_denominator,
@@ -206,9 +206,9 @@ fn mpl_argument_partial(
     }
 
     let mut merged_right = shortened_arguments.clone();
-    merged_right[position] = argument * &arguments[position + 1];
+    merged_right[position] = (argument * &arguments[position + 1]).expand();
     let mut merged_left = shortened_arguments;
-    merged_left[position - 1] = &arguments[position - 1] * argument;
+    merged_left[position - 1] = (&arguments[position - 1] * argument).expand();
     Some(Atom::add_many([
         mpl_atom(symbol, &shortened_indices, &merged_right) / denominator,
         -mpl_atom(symbol, &shortened_indices, &merged_left) / second_denominator,
@@ -268,6 +268,13 @@ mod tests {
         )
     }
 
+    fn assert_rationally_equal(actual: Atom, expected: Atom, label: &str) {
+        assert!(
+            (actual.clone() - &expected).together().cancel().is_zero(),
+            "native and typed {label} derivatives differ:\nactual: {actual}\nexpected: {expected}"
+        );
+    }
+
     #[test]
     fn both_registered_heads_expose_native_callbacks() {
         let symbols = heads();
@@ -308,9 +315,9 @@ mod tests {
             let input = heads().hlog.call_args(
                 std::iter::once(endpoint.to_atom()).chain(word.letters.iter().map(Rat::to_atom)),
             );
-            let actual = input.derivative(x).cancel();
-            let expected = typed_hlog_derivative(&endpoint, &word, 0).cancel();
-            assert_eq!(actual, expected);
+            let actual = input.derivative(x).cancel().expand();
+            let expected = typed_hlog_derivative(&endpoint, &word, 0).cancel().expand();
+            assert_rationally_equal(actual, expected, "Hlog");
         }
     }
 
@@ -348,9 +355,11 @@ mod tests {
                     .map(Atom::num)
                     .chain(arguments.iter().map(Rat::to_atom)),
             );
-            let actual = input.derivative(x).cancel();
-            let expected = typed_mpl_derivative(&indices, &arguments, 0).cancel();
-            assert_eq!(actual, expected);
+            let actual = input.derivative(x).cancel().expand();
+            let expected = typed_mpl_derivative(&indices, &arguments, 0)
+                .cancel()
+                .expand();
+            assert_rationally_equal(actual, expected, "Mpl");
         }
     }
 

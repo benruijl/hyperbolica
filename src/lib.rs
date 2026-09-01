@@ -26,8 +26,9 @@ pub mod prelude {
 
     pub use crate::api::{
         AtomIntegrationError, AtomIntegrationOptions, AtomIntegrationOutput, AtomIntegrationResult,
-        AtomIntegrationTerm, PreparedAtomInput, integrate_atom, integrate_prepared_atom,
-        prepare_atom, prepare_atom_with_options,
+        AtomIntegrationTerm, IntegrationEndpoint, IntegrationInterval, PreparedAtomInput,
+        integrate_atom, integrate_atom_over, integrate_prepared_atom, integrate_prepared_atom_over,
+        prepare_atom, prepare_atom_over, prepare_atom_with_options,
     };
     pub use crate::symbols::{HyperbolicaSymbols, heads};
 }

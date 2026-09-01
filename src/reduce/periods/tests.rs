@@ -120,7 +120,7 @@ fn evaluate_periods_keeps_parametric_keys_and_folds_constants() {
     let regulator = vec![
         RegTerm {
             coef: Rat::from_int(ctx.clone(), 2),
-            key: vec![word(&ctx, &[0, 1])],
+            key: vec![word(&ctx, &[0, -1])],
         },
         RegTerm {
             coef: Rat::one(ctx.clone()),
@@ -132,7 +132,7 @@ fn evaluate_periods_keeps_parametric_keys_and_folds_constants() {
     assert_eq!(
         result[0].coef,
         mzv(&ctx, &[2])
-            .try_mul(&Rat::from_int(ctx.clone(), -2))
+            .try_mul(&Rat::from_int(ctx.clone(), 2))
             .unwrap()
     );
     assert!(result[0].key.is_empty());

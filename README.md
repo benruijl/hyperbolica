@@ -89,6 +89,13 @@ materialized as one normalized `Atom`. See
 [`examples/atom_integration.rs`](examples/atom_integration.rs) and
 [`examples/atom_hlog.rs`](examples/atom_hlog.rs).
 
+Directed finite, semi-infinite, and whole-real-line domains use native
+Symbolica endpoints rather than string sentinels. Use `integrate_atom_over`,
+or prepare a reusable value with `prepare_atom_over` and call
+`integrate_prepared_atom_over`. Parameters that appear only in finite bounds
+remain exact spectator variables. See
+[`examples/atom_intervals.rs`](examples/atom_intervals.rs).
+
 ## Python API
 
 The standalone extension embeds the vendored Symbolica Python API and
@@ -111,6 +118,18 @@ integrand = 1 / (x + 1) ** 2
 options = hb.IntegrationOptions(parallel=False)
 prepared = hb.prepare(integrand, [x], options)
 result = prepared.integrate(options)
+```
+
+For a non-default domain, supply one directed endpoint pair per variable:
+
+```python
+a = hb.S("a")
+result = hb.integrate_over(
+    1 / (x + 1) ** 2,
+    [x],
+    [(a, hb.Symbol.INFINITY)],
+    hb.IntegrationOptions(check_divergences=True, parallel=False),
+)
 ```
 
 The root `pyproject.toml` selects the `python-extension` feature for maturin
@@ -144,6 +163,17 @@ printf '%s\n' \
 The accepted JSON operations and oracle workflow are documented in
 [`tests/COMPATIBILITY.md`](tests/COMPATIBILITY.md). This adapter deliberately
 does not define the production Rust API.
+
+## Wolfram LibraryLink
+
+An isolated `librarylink/` crate implements the nine-symbol surface loaded by
+the pinned SubTropica release. It is a separate dynamic library because the
+upstream LibraryLink callbacks and stable C ABI reuse several names with
+incompatible signatures. Build and stage both Symbolica-backed libraries with
+`scripts/build-librarylink.sh`; verify exports, C/C++ ABI layout, lifecycle,
+UTF-8 marshalling, and the six upstream LR strategy rows with
+`scripts/check-librarylink.sh`. See [`docs/librarylink.md`](docs/librarylink.md)
+for version stamping and a `LibraryFunctionLoad` example.
 
 ## Performance verification
 
@@ -191,7 +221,8 @@ artifact; see
 - `integrator` — transformation, primitives, regularization, and LR search
 - `series` — exact Hlog/MPL/Laurent expansions
 - `reduce` — periods, contours, MZVs, and fibration
-- `python` and `c_abi` — thin foreign-language boundaries over the typed core
+- `python`, `c_abi`, and the separate `librarylink/` crate — thin
+  foreign-language boundaries over the typed core
 - `bridge` — legacy string/JSON transport isolated from production APIs
 
 The detailed dependency and representation rules are in

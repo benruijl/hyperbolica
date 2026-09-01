@@ -38,6 +38,8 @@ class InstalledExtensionContractTests(unittest.TestCase):
             "__version__",
             "integrate",
             "integrate_detailed",
+            "integrate_detailed_over",
+            "integrate_over",
             "prepare",
         }
         self.assertTrue(required.issubset(hb.__all__))
@@ -98,6 +100,14 @@ class InstalledExtensionContractTests(unittest.TestCase):
             "(expression, variables, options=None)",
         )
         self.assertEqual(
+            str(inspect.signature(hb.integrate_over)),
+            "(expression, variables, intervals, options=None)",
+        )
+        self.assertEqual(
+            str(inspect.signature(hb.integrate_detailed_over)),
+            "(expression, variables, intervals, options=None)",
+        )
+        self.assertEqual(
             str(inspect.signature(hb.prepare)),
             "(expression, variables, options=None)",
         )
@@ -109,6 +119,7 @@ class InstalledExtensionContractTests(unittest.TestCase):
             "check_divergences=False", hb.IntegrationOptions.__text_signature__
         )
         self.assertIn("native", hb.prepare.__doc__.lower())
+        self.assertIn("interval", hb.integrate_over.__doc__.lower())
         self.assertIn("materialize", hb.IntegrationResult.expression.__doc__.lower())
 
     def test_exception_hierarchy_is_programmatic(self) -> None:
@@ -139,6 +150,20 @@ class InstalledExtensionContractTests(unittest.TestCase):
             hb.prepare(x + 1, ["python_type_error_x"])
         with self.assertRaises(TypeError):
             hb.integrate(x + 1, [x], object())
+
+    def test_non_real_infinity_is_rejected_before_integration(self) -> None:
+        x = hb.S("python_complex_infinity_bound_x")
+        with self.assertRaisesRegex(hb.InputError, "real directed infinities"):
+            hb.integrate_over(
+                hb.N(1),
+                [x],
+                [(hb.Symbol.COMPLEX_INFINITY, hb.Symbol.INFINITY)],
+            )
+
+    def test_interval_count_must_match_the_variable_schedule(self) -> None:
+        x = hb.S("python_interval_count_x")
+        with self.assertRaisesRegex(hb.InputError, "interval count 0"):
+            hb.integrate_over(hb.N(1), [x], [])
 
     def test_options_are_value_objects_with_independent_copies(self) -> None:
         options = hb.IntegrationOptions(

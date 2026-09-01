@@ -23,6 +23,7 @@ DRIVER_SCRIPT = REPOSITORY / "scripts" / "benchmark-compare.sh"
 PROCESS_SCRIPT = REPOSITORY / "scripts" / "benchmark_process.py"
 STATS_SCRIPT = REPOSITORY / "scripts" / "benchmark_stats.py"
 POLICY_SCRIPT = REPOSITORY / "scripts" / "benchmark_policy.py"
+RESPONSE_COMPARISON_SCRIPT = REPOSITORY / "scripts" / "lib" / "response-comparison.sh"
 SAMPLE_FIELDS = (
     "workload",
     "pair",
@@ -214,6 +215,114 @@ class ProcessMeasurementTests(unittest.TestCase):
             self.assertEqual(completed.returncode, 2)
             self.assertIn(b"must be finite", completed.stderr)
             self.assertFalse((directory / "stdout").exists())
+
+
+class SemanticResponseComparisonTests(unittest.TestCase):
+    def test_declared_field_is_parsed_on_both_sides_and_envelope_stays_exact(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            parser_log = directory / "parser.jsonl"
+            parser = directory / "semantic-parser"
+            parser.write_text(
+                f"""#!/usr/bin/env python3
+import json
+import sys
+
+if sys.argv[1:] != ["eval-json"]:
+    raise SystemExit(10)
+request = json.load(sys.stdin)
+if request.get("op") != "parse_expr" or request.get("vars") != ["x", "y"]:
+    raise SystemExit(11)
+with open({str(parser_log)!r}, "a", encoding="utf-8") as handle:
+    handle.write(json.dumps(request, sort_keys=True) + "\\n")
+json.dump({{"op": "parse_expr", "canonical": "(x + 1)/(y + 1)"}}, sys.stdout)
+""",
+                encoding="utf-8",
+            )
+            parser.chmod(0o755)
+            cpp_response = directory / "cpp.json"
+            rust_response = directory / "rust.json"
+            cpp_response.write_bytes(
+                compact_json(
+                    {
+                        "op": "rat_add",
+                        "result": "(2*x+2)/(2*y+2)",
+                        "tag": "stable",
+                        "vars": ["x", "y"],
+                    }
+                )
+            )
+            rust_response.write_bytes(
+                compact_json(
+                    {
+                        "op": "rat_add",
+                        "result": "(x+1)/(y+1)",
+                        "tag": "stable",
+                        "vars": ["x", "y"],
+                    }
+                )
+            )
+            command = """
+set -euo pipefail
+source "$1"
+hf_semantic_response "$2" '[]' '[]' '["result"]' '["x","y"]' "$3"
+"""
+
+            outputs: list[bytes] = []
+            for response in (cpp_response, rust_response):
+                completed = subprocess.run(
+                    [
+                        "bash",
+                        "-c",
+                        command,
+                        "semantic-comparison-test",
+                        str(RESPONSE_COMPARISON_SCRIPT),
+                        str(response),
+                        str(parser),
+                    ],
+                    cwd=REPOSITORY,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    timeout=5,
+                    check=False,
+                )
+                self.assertEqual(completed.returncode, 0, completed.stderr.decode())
+                outputs.append(completed.stdout)
+
+            self.assertEqual(outputs[0], outputs[1])
+            canonical = json.loads(outputs[0])
+            self.assertEqual(canonical["result"], "(x + 1)/(y + 1)")
+            self.assertEqual(canonical["tag"], "stable")
+            parsed_requests = [
+                json.loads(line)
+                for line in parser_log.read_text(encoding="utf-8").splitlines()
+            ]
+            self.assertEqual(
+                [request["expr"] for request in parsed_requests],
+                ["(2*x+2)/(2*y+2)", "(x+1)/(y+1)"],
+            )
+
+            changed_envelope = json.loads(rust_response.read_bytes())
+            changed_envelope["tag"] = "changed"
+            rust_response.write_bytes(compact_json(changed_envelope))
+            changed = subprocess.run(
+                [
+                    "bash",
+                    "-c",
+                    command,
+                    "semantic-comparison-test",
+                    str(RESPONSE_COMPARISON_SCRIPT),
+                    str(rust_response),
+                    str(parser),
+                ],
+                cwd=REPOSITORY,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                timeout=5,
+                check=False,
+            )
+            self.assertEqual(changed.returncode, 0, changed.stderr.decode())
+            self.assertNotEqual(outputs[0], changed.stdout)
 
 
 class PairedStatisticsTests(unittest.TestCase):

@@ -4,7 +4,7 @@ use crate::core::{FactoredRat, Rat};
 use crate::error::{Error, Result};
 
 use super::{
-    PartialFractionOptions, PartialFractionization, merge_decomposition,
+    PartialFractionOptions, PartialFractionization, canonicalize_poles, merge_decomposition,
     partial_fractions_with_options,
 };
 
@@ -57,6 +57,7 @@ pub fn partial_fractions_factored_with_options(
             partial_fractions_with_options(&component, variable, options)?,
         )?;
     }
+    canonicalize_poles(&mut output);
     Ok(output)
 }
 
@@ -214,5 +215,26 @@ mod tests {
             );
             assert_equivalent(&function, 0);
         }
+    }
+
+    #[test]
+    fn pole_order_is_independent_of_deferred_factor_insertion_order() {
+        let ctx = PolyCtx::new(["x", "a", "b"]).unwrap();
+        let numerator = "x^4+a*x^2+b*x+1";
+        let forward = build(&ctx, numerator, &[("2*x-a", 3), ("x+b", 2), ("3*x+1", 1)]);
+        let reverse = build(&ctx, numerator, &[("3*x+1", 1), ("x+b", 2), ("2*x-a", 3)]);
+
+        let forward = partial_fractions_factored(&forward, 0).unwrap();
+        let reverse = partial_fractions_factored(&reverse, 0).unwrap();
+
+        assert_eq!(forward, reverse);
+        assert_eq!(
+            forward
+                .poles
+                .iter()
+                .map(|pole| pole.multiplicity)
+                .collect::<Vec<_>>(),
+            [1, 2, 3]
+        );
     }
 }

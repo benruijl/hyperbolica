@@ -473,8 +473,9 @@ rust_manifest_sha256=$(sha256sum "$rust_manifest" | awk '{print $1}')
 cpp_manifest_sha256=$(sha256sum "$cpp_manifest" | awk '{print $1}')
 
 declare -a names=() requests=() compares=() ignored=() ignored_recursive=()
+declare -a semantic_fields=() semantic_variables=()
 declare -a permutation_fields=() permutation_values=() timeouts=()
-declare -a pair_counts=() expected_paths=()
+declare -a pair_counts=() expected_cpp_paths=() expected_rust_paths=()
 while IFS= read -r fixture || [[ -n "$fixture" ]]; do
     [[ -z "$fixture" ]] && continue
     name=$(jq -er '.name' <<<"$fixture")
@@ -500,6 +501,8 @@ while IFS= read -r fixture || [[ -n "$fixture" ]]; do
     compares[index]=$(jq -r '.compare // "byte"' <<<"$fixture")
     ignored[index]=$(jq -c '.ignore // []' <<<"$fixture")
     ignored_recursive[index]=$(jq -c '.ignore_recursive // []' <<<"$fixture")
+    semantic_fields[index]=$(jq -c '.semantic_fields // []' <<<"$fixture")
+    semantic_variables[index]=$(jq -c '.request.vars // []' <<<"$fixture")
     permutation_fields[index]=$(jq -r '.permutation_field // ""' <<<"$fixture")
     permutation_values[index]=$(jq -c '.permutation_values // []' <<<"$fixture")
     timeouts[index]=$(jq -r --argjson fallback "$default_timeout" '.timeout_seconds // $fallback' <<<"$fixture")
@@ -708,14 +711,19 @@ assert_fixture_output() {
     local index=$1
     local output=$2
     local label=$3
-    local canonical="$scratch/$run_serial.canonical"
+    local canonical="$scratch/$run_serial.canonical" expected
     if ! hf_validate_permutation "$output" "${permutation_fields[index]}" "${permutation_values[index]}"; then
         fail "$label did not return the required permutation" 1
     fi
     hf_canonical_response "$output" "${compares[index]}" "${ignored[index]}" "${ignored_recursive[index]}" >"$canonical"
-    if ! cmp -s "$canonical" "${expected_paths[index]}"; then
+    if [[ "$label" == */rust ]]; then
+        expected=${expected_rust_paths[index]}
+    else
+        expected=${expected_cpp_paths[index]}
+    fi
+    if ! cmp -s "$canonical" "$expected"; then
         printf 'benchmark-compare: nondeterministic output for %s\n' "$label" >&2
-        diff -u "${expected_paths[index]}" "$canonical" >&2 || true
+        diff -u "$expected" "$canonical" >&2 || true
         exit 1
     fi
 }
@@ -734,17 +742,33 @@ for index in "${!names[@]}"; do
             fail "'$name' did not return the required permutation" 1
         fi
     done
-    cpp_canonical="$scratch/preflight.$index.cpp.canonical"
-    rust_canonical="$scratch/preflight.$index.rust.canonical"
-    hf_canonical_response "$cpp_output" "${compares[index]}" "${ignored[index]}" "${ignored_recursive[index]}" >"$cpp_canonical"
-    hf_canonical_response "$rust_output" "${compares[index]}" "${ignored[index]}" "${ignored_recursive[index]}" >"$rust_canonical"
+    cpp_transport="$scratch/preflight.$index.cpp.transport"
+    rust_transport="$scratch/preflight.$index.rust.transport"
+    hf_canonical_response "$cpp_output" "${compares[index]}" "${ignored[index]}" "${ignored_recursive[index]}" >"$cpp_transport"
+    hf_canonical_response "$rust_output" "${compares[index]}" "${ignored[index]}" "${ignored_recursive[index]}" >"$rust_transport"
+    expected_cpp_paths[index]=$cpp_transport
+    expected_rust_paths[index]=$rust_transport
+    cpp_canonical=$cpp_transport
+    rust_canonical=$rust_transport
+    if [[ "${compares[index]}" == semantic ]]; then
+        cpp_canonical="$scratch/preflight.$index.cpp.semantic"
+        rust_canonical="$scratch/preflight.$index.rust.semantic"
+        hf_semantic_response "$cpp_output" "${ignored[index]}" "${ignored_recursive[index]}" \
+            "${semantic_fields[index]}" "${semantic_variables[index]}" "$rust_bin" >"$cpp_canonical"
+        hf_semantic_response "$rust_output" "${ignored[index]}" "${ignored_recursive[index]}" \
+            "${semantic_fields[index]}" "${semantic_variables[index]}" "$rust_bin" >"$rust_canonical"
+    fi
     if ! cmp -s "$cpp_canonical" "$rust_canonical"; then
         printf "benchmark-compare: refusing to time '%s': responses differ\n" "$name" >&2
         diff -u "$cpp_canonical" "$rust_canonical" >&2 || true
         exit 1
     fi
-    expected_paths[index]=$cpp_canonical
-    jq -cn --arg name "$name" --arg compare "${compares[index]}" --arg sha256 "$(sha256sum "$cpp_canonical" | awk '{print $1}')" '{name:$name,compare:$compare,canonical_response_sha256:$sha256}' >>"$correctness_ndjson"
+    jq -cn --arg name "$name" --arg compare "${compares[index]}" \
+        --argjson semantic_fields "${semantic_fields[index]}" \
+        --arg sha256 "$(sha256sum "$cpp_canonical" | awk '{print $1}')" \
+        '{name:$name,compare:$compare,canonical_response_sha256:$sha256} +
+         (if $compare == "semantic" then {semantic_fields:$semantic_fields} else {} end)' \
+        >>"$correctness_ndjson"
     printf '  [equal] %s\n' "$name"
 done
 jq -s '{schema:1,status:"pass",workloads:.}' "$correctness_ndjson" >"$correctness_file"

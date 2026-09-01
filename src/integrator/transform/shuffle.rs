@@ -1,11 +1,14 @@
 use std::sync::Arc;
 
 use super::collection::{require_word_context, shuffle_symbolic_sym};
-use super::word::{identity_transform, transform_word};
-use super::{RegTermSym, RegulatorSym, TransformPair, TransformResult};
+use super::word::{
+    identity_transform, transform_word_with_options, transform_word_with_options_and_table,
+};
+use super::{RegTermSym, RegulatorSym, TransformOptions, TransformPair, TransformResult};
 use crate::algebra::shuffle::shuffle_product;
 use crate::core::{DigestBuckets, PolyCtx, Rat, structural_bucket_digest};
 use crate::error::{Error, Result};
+use crate::reduce::MzvReductionTable;
 use crate::symbols::Word;
 
 const LOG_LETTER_BUCKET_DOMAIN: u64 = 0x5452_4c4f_474c_0001;
@@ -98,6 +101,36 @@ pub fn transform_shuffle(
     words: &[Word],
     variable: usize,
 ) -> Result<TransformResult> {
+    transform_shuffle_with_options(ctx, words, variable, &TransformOptions::default())
+}
+
+/// Transform a shuffle product with an explicit algebraic-letter policy.
+pub fn transform_shuffle_with_options(
+    ctx: &Arc<PolyCtx>,
+    words: &[Word],
+    variable: usize,
+    options: &TransformOptions<'_>,
+) -> Result<TransformResult> {
+    transform_shuffle_impl(ctx, words, variable, options, None)
+}
+
+pub(crate) fn transform_shuffle_with_options_and_table(
+    ctx: &Arc<PolyCtx>,
+    words: &[Word],
+    variable: usize,
+    options: &TransformOptions<'_>,
+    table: &MzvReductionTable,
+) -> Result<TransformResult> {
+    transform_shuffle_impl(ctx, words, variable, options, Some(table))
+}
+
+fn transform_shuffle_impl(
+    ctx: &Arc<PolyCtx>,
+    words: &[Word],
+    variable: usize,
+    options: &TransformOptions<'_>,
+    table: Option<&MzvReductionTable>,
+) -> Result<TransformResult> {
     if variable >= ctx.len() {
         return Err(Error::UnknownVariable(variable.to_string()));
     }
@@ -122,7 +155,7 @@ pub fn transform_shuffle(
             combined.push(Word::from(vec![letter; count]));
             combinatorial_factor = combinatorial_factor.try_mul(&factorial_rat(ctx, count)?)?;
         }
-        let transformed = transform_shuffle(ctx, &combined, variable)?;
+        let transformed = transform_shuffle_impl(ctx, &combined, variable, options, table)?;
         return transformed
             .into_iter()
             .map(|pair| {
@@ -136,7 +169,11 @@ pub fn transform_shuffle(
 
     let mut accumulator = identity_transform(ctx);
     for word in words {
-        let transformed = transform_word(ctx, word, variable)?;
+        let transformed = if let Some(table) = table {
+            transform_word_with_options_and_table(ctx, word, variable, options, Some(table))?
+        } else {
+            transform_word_with_options(ctx, word, variable, options)?
+        };
         if transformed.is_empty() {
             return Ok(Vec::new());
         }

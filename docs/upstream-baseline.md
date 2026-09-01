@@ -37,8 +37,11 @@ The following upstream mechanisms are not dependencies of the Rust library:
   finite-field Gröbner-basis API.
 - OpenMP and C++ allocator machinery are replaced by Rust ownership, Rayon at
   coarse independent-entry boundaries, and Symbolica's configured allocator.
-- Mathematica LibraryLink is not linked into the Rust kernel. The stable C ABI
-  and the JSON adapter preserve language-neutral integration points.
+- Mathematica LibraryLink is not linked into the mathematical Rust kernel.
+  The optional, separately built `librarylink/` adapter implements the pinned
+  SubTropica loader surface by dynamically delegating to the stable C ABI; it
+  needs neither FLINT nor a Wolfram runtime at build time. The stable C ABI and
+  JSON adapter remain the language-neutral integration points.
 - Diagnostic probes whose only purpose is inspecting a C++/FLINT allocator,
   OpenMP runtime, or C++ hash-table implementation are not compatibility
   requirements. Equivalent Rust performance telemetry may be added where it

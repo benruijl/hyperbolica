@@ -319,17 +319,26 @@ fn evaluate_supported(request: &Value, op: &str) -> Result<Value> {
                 &options,
                 &spectator_indices,
             ) {
-                Ok(output) => Ok(json!({
-                    "op": op,
-                    "result": regulator_sym_value(&output),
-                    "timing_compute_s": started.elapsed().as_secs_f64(),
-                    "vars": wire_context_variables(&ctx),
-                    "algebraic_letters": if introduce_algebraic_letters {
-                        Some(algebraic_letters_show()?.iter().map(algebraic_entry_value).collect::<Vec<_>>())
-                    } else {
-                        None
-                    },
-                })),
+                Ok(output) => {
+                    let mut response = json!({
+                        "op": op,
+                        "result": regulator_sym_value(&output),
+                        "timing_compute_s": started.elapsed().as_secs_f64(),
+                        "vars": wire_context_variables(&ctx),
+                    });
+                    if introduce_algebraic_letters {
+                        response.as_object_mut().expect("response is a map").insert(
+                            "algebraic_letters".into(),
+                            Value::Array(
+                                algebraic_letters_show()?
+                                    .iter()
+                                    .map(algebraic_entry_value)
+                                    .collect(),
+                            ),
+                        );
+                    }
+                    Ok(response)
+                }
                 Err(error @ IntegrationError::Divergent { .. }) => Ok(json!({
                     "op": op,
                     "divergent": true,

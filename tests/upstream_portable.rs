@@ -192,10 +192,15 @@ fn portable_upstream_regressions_are_preserved() {
     // Every emitted factor-table object is exact. Include the two upstream
     // edge cases that were not previously represented in the Rust suite.
     let factor_ctx = PolyCtx::new(["x", "y"]).unwrap();
+    // Upstream's original linear fixture predates the Brown constant-term
+    // reduction: its trailing coefficient is now part of the stage pool and
+    // therefore cannot exercise the advertised fallback. A quadratic middle
+    // coefficient is not one of the leading/constant/discriminant candidates,
+    // so this preserves the intended out-of-pool singleton contract.
     let oop = factor_table(
-        &[vec![parse_poly(&factor_ctx, "x+y^2+y+1")]],
-        &[0, 1],
-        false,
+        &[vec![parse_poly(&factor_ctx, "x^2+(y^2+y+1)*x+1")]],
+        &[0],
+        true,
         FactorTableLimits::default(),
     )
     .unwrap();
@@ -205,7 +210,7 @@ fn portable_upstream_regressions_are_preserved() {
             && entry
                 .coefficients
                 .iter()
-                .any(|coefficient| coefficient.power == 0 && coefficient.object.oop)
+                .any(|coefficient| coefficient.power == 1 && coefficient.object.oop)
     }));
     assert_factor_table_contracts(&factor_ctx, &oop);
 

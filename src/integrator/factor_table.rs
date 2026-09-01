@@ -183,7 +183,10 @@ mod tests {
             parse(&ctx, "z*x^2+x+1"),
             parse(&ctx, "x+y"),
         ]];
-        let table = factor_table(&groups, &[0, 1, 2], true, FactorTableLimits::default()).unwrap();
+        // `z` is a coefficient parameter, while `y` is a later integration
+        // variable. Only the quadratic whose leading coefficient depends on
+        // the latter must be rejected at the x stage.
+        let table = factor_table(&groups, &[0, 2], true, FactorTableLimits::default()).unwrap();
         assert_eq!(table.stages[0].inadmissible_count, 1);
         assert_eq!(table.stages[0].pair_count, 0);
         assert!(table.singletons.iter().any(|entry| {

@@ -92,18 +92,24 @@ pub(super) fn evaluate(request: &Value, op: &str) -> Result<Value> {
             "t_build_s": stage.build_seconds,
         })).collect::<Vec<_>>(),
         "pairs": wire_pairs,
-        "singletons": table.singletons.iter().map(|entry| json!({
-            "var": wire_context_variables(&ctx)[entry.var_idx],
-            "id": entry.id,
-            "deg": entry.degree,
-            "coeffs": entry.coefficients.iter().map(|coefficient| {
-                let mut value = factored_object_value(&coefficient.object);
-                value.as_object_mut().expect("factored object is a map")
-                    .insert("power".into(), Value::from(coefficient.power));
-                value
-            }).collect::<Vec<_>>(),
-            "disc": entry.discriminant.as_ref().map(factored_object_value),
-        })).collect::<Vec<_>>(),
+        "singletons": table.singletons.iter().map(|entry| {
+            let mut value = json!({
+                "var": wire_context_variables(&ctx)[entry.var_idx],
+                "id": entry.id,
+                "deg": entry.degree,
+                "coeffs": entry.coefficients.iter().map(|coefficient| {
+                    let mut value = factored_object_value(&coefficient.object);
+                    value.as_object_mut().expect("factored object is a map")
+                        .insert("power".into(), Value::from(coefficient.power));
+                    value
+                }).collect::<Vec<_>>(),
+            });
+            if let Some(discriminant) = &entry.discriminant {
+                value.as_object_mut().expect("singleton is a map")
+                    .insert("disc".into(), factored_object_value(discriminant));
+            }
+            value
+        }).collect::<Vec<_>>(),
         "stats": {
             "pairs_total": table.stats.pairs_total,
             "singletons_total": table.stats.singletons_total,

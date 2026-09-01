@@ -83,6 +83,10 @@ fn exception_kind(error: &AtomIntegrationError) -> ExceptionKind {
     }
 }
 
+fn user_variable_name(variable: &str) -> &str {
+    variable.rsplit("::").next().unwrap_or(variable)
+}
+
 pub(crate) fn integration_error(py: Python<'_>, error: AtomIntegrationError) -> PyErr {
     let kind = exception_kind(&error);
     let message = error.to_string();
@@ -99,7 +103,9 @@ pub(crate) fn integration_error(py: Python<'_>, error: AtomIntegrationError) -> 
     let attributes = (|| -> PyResult<()> {
         match &error {
             AtomIntegrationError::DuplicateIntegrationVariable { variable } => {
-                python_error.value(py).setattr("variable", variable)?;
+                python_error
+                    .value(py)
+                    .setattr("variable", user_variable_name(variable))?;
             }
             AtomIntegrationError::Divergent {
                 boundary,
@@ -109,12 +115,14 @@ pub(crate) fn integration_error(py: Python<'_>, error: AtomIntegrationError) -> 
             } => {
                 let value = python_error.value(py);
                 value.setattr("boundary", boundary.to_string())?;
-                value.setattr("variable", variable)?;
+                value.setattr("variable", user_variable_name(variable))?;
                 value.setattr("log_power", *log_power)?;
                 value.setattr("power", *power)?;
             }
             AtomIntegrationError::SymbolicVariableOutsideContext { variable } => {
-                python_error.value(py).setattr("variable", variable)?;
+                python_error
+                    .value(py)
+                    .setattr("variable", user_variable_name(variable))?;
             }
             AtomIntegrationError::Algebra(_) => {}
         }
@@ -175,5 +183,10 @@ mod tests {
             ))),
             ExceptionKind::Input
         );
+        assert_eq!(
+            user_variable_name("hyperbolica::python_duplicate_x"),
+            "python_duplicate_x"
+        );
+        assert_eq!(user_variable_name("plain_x"), "plain_x");
     }
 }

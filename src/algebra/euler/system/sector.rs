@@ -100,7 +100,7 @@ pub(super) fn count_sector(
 
     let f4_started = Instant::now();
     let basis = catch_unwind(AssertUnwindSafe(|| {
-        GroebnerBasis::<Zp, u16, GrevLexOrder>::new(&system, false)
+        GroebnerBasis::<Zp, u16, GrevLexOrder>::new(&system, false).ensure_groebner_basis()
     }));
     record_nanos(&F4_NANOS, f4_started.elapsed());
     let Ok(basis) = basis else {

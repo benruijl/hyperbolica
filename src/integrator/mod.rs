@@ -34,10 +34,13 @@ pub(crate) use primitive::integrate_ii_with_factored_prefactor;
 pub use primitive::{IntegrateIiOptions, integrate_ii, integrate_ii_with_options};
 pub use regularize::{reg_head, reg_tail, reg0, regzero_word, regzero_word_in_ctx};
 pub(crate) use transform::regkey_structural_cmp;
+pub(crate) use transform::transform_shuffle_with_options_and_table;
+pub(crate) use transform::transform_word_with_options_and_table;
 pub use transform::{
-    RegKey, RegTerm, RegTermSym, Regulator, RegulatorSym, TransformPair, TransformResult,
-    canonicalize_regkey, canonicalize_regulator, canonicalize_regulator_sym, collect_regulator,
-    collect_regulator_sym, regkey_content_key, reglim_word, regulator_content_key,
-    regulator_sym_content_key, shuffle_symbolic, shuffle_symbolic_sym, transform_shuffle,
-    transform_word,
+    RegKey, RegTerm, RegTermSym, Regulator, RegulatorSym, TransformOptions, TransformPair,
+    TransformResult, canonicalize_regkey, canonicalize_regulator, canonicalize_regulator_sym,
+    collect_regulator, collect_regulator_sym, regkey_content_key, reglim_word,
+    reglim_word_with_table, regulator_content_key, regulator_sym_content_key, shuffle_symbolic,
+    shuffle_symbolic_sym, transform_shuffle, transform_shuffle_with_options, transform_word,
+    transform_word_with_options,
 };

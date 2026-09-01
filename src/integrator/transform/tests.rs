@@ -1,15 +1,19 @@
 use std::sync::Arc;
 
-use symbolica::prelude::Symbol;
+use symbolica::prelude::{AtomCore, Symbol};
 
 use super::collection::collect_regulator_with_digest;
 use super::limits::{one_regulator, word_depends_on_variable};
 use super::shuffle::group_log_powers_with_digest;
 use super::word::{TransformCache, collect_result_rows_with_forced_collision, identity_transform};
 use super::{
-    RegTerm, RegTermSym, canonicalize_regkey, canonicalize_regulator, collect_regulator,
-    regkey_content_key, reglim_word, regulator_sym_content_key, shuffle_symbolic,
-    transform_shuffle, transform_word,
+    RegTerm, RegTermSym, TransformOptions, canonicalize_regkey, canonicalize_regulator,
+    collect_regulator, regkey_content_key, reglim_word, regulator_sym_content_key,
+    shuffle_symbolic, transform_shuffle, transform_word, transform_word_with_options,
+};
+use crate::algebra::{
+    DEFAULT_ALGEBRAIC_LETTER_POOL_SIZE, begin_algebraic_letter_session,
+    build_algebraic_letter_atom_list,
 };
 use crate::core::{Poly, PolyCtx, Rat, SymCoef};
 use crate::error::Error;
@@ -138,6 +142,52 @@ fn transform_variable_word_extracts_linear_poles() {
     assert_eq!(transformed[0].shuffle.terms.len(), 1);
     assert_eq!(transformed[0].shuffle.terms[0].coef, rat(&ctx, "-1"));
     assert_eq!(transformed[0].shuffle.terms[0].word, word(&ctx, &["0"]));
+}
+
+#[test]
+fn transform_options_split_quadratic_differences_into_registered_roots() {
+    let _session = begin_algebraic_letter_session().unwrap();
+    let variables = ["transform_alg_x", "transform_alg_y"]
+        .into_iter()
+        .map(|name| {
+            Symbol::parse(name, crate::symbols::SYMBOL_NAMESPACE)
+                .unwrap()
+                .to_atom()
+        });
+    let ctx = PolyCtx::from_indeterminates(build_algebraic_letter_atom_list(
+        variables,
+        DEFAULT_ALGEBRAIC_LETTER_POOL_SIZE,
+    ))
+    .unwrap();
+    let input = word(&ctx, &["transform_alg_x^2+1"]);
+
+    let strict = transform_word(&ctx, &input, 0).unwrap();
+    let algebraic = transform_word_with_options(
+        &ctx,
+        &input,
+        0,
+        &TransformOptions {
+            introduce_algebraic_letters: true,
+            forbidden_variables: &[],
+        },
+    )
+    .unwrap();
+    let has_registered_root = |result: &super::TransformResult| {
+        result.iter().any(|pair| {
+            pair.shuffle.terms.iter().any(|term| {
+                term.word.letters.iter().any(|letter| {
+                    letter.to_atom().as_fun_view().is_some_and(|call| {
+                        let heads = crate::symbols::heads();
+                        call.get_symbol() == heads.algebraic_minus
+                            || call.get_symbol() == heads.algebraic_plus
+                    })
+                })
+            })
+        })
+    };
+
+    assert!(!has_registered_root(&strict));
+    assert!(has_registered_root(&algebraic));
 }
 
 #[test]

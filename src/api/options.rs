@@ -5,7 +5,109 @@ use crate::{
     error::Result,
     reduce::{build_mzv_atom_list, build_mzv_basis_atom_list, standard_mzv_reductions},
 };
-use symbolica::prelude::Atom;
+use symbolica::prelude::{Atom, AtomView, CoefficientView};
+
+/// One endpoint of a directed real integration interval.
+///
+/// Finite endpoints remain native Symbolica expressions.  The two infinity
+/// variants are explicit so a symbol merely named `Infinity` can never be
+/// mistaken for an endpoint sentinel.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum IntegrationEndpoint {
+    Finite(Atom),
+    PositiveInfinity,
+    NegativeInfinity,
+}
+
+impl IntegrationEndpoint {
+    /// Construct a finite endpoint from a native Symbolica expression.
+    pub fn finite(value: impl Into<Atom>) -> Self {
+        Self::Finite(value.into())
+    }
+
+    /// Classify a native Symbolica expression as a finite or directed-infinite
+    /// endpoint.
+    ///
+    /// Real `+Infinity` and `-Infinity` coefficients are accepted. Complex or
+    /// non-real directed infinities are rejected because interval rescaling is
+    /// defined only on the real line.
+    pub fn try_from_atom(value: Atom) -> Result<Self> {
+        if let AtomView::Num(number) = value.as_view()
+            && let CoefficientView::Infinity(direction) = number.get_coeff_view()
+        {
+            return match direction {
+                Some((real, imaginary))
+                    if imaginary.is_zero() && !real.is_zero() && real.is_negative() =>
+                {
+                    Ok(Self::NegativeInfinity)
+                }
+                Some((real, imaginary)) if imaginary.is_zero() && !real.is_zero() => {
+                    Ok(Self::PositiveInfinity)
+                }
+                _ => Err(crate::error::Error::InvalidInput(
+                    "integration endpoints must be finite or real directed infinities".into(),
+                )),
+            };
+        }
+        Ok(Self::Finite(value))
+    }
+
+    /// Return the native expression when this endpoint is finite.
+    pub fn as_finite(&self) -> Option<&Atom> {
+        match self {
+            Self::Finite(value) => Some(value),
+            Self::PositiveInfinity | Self::NegativeInfinity => None,
+        }
+    }
+}
+
+/// A directed interval associated with one integration variable.
+///
+/// The supported endpoint combinations match HyperFLINT's interval rescaler:
+/// finite-to-finite, finite-to-either-infinity, either-infinity-to-finite,
+/// and the whole real line from negative to positive infinity.  The reverse
+/// all-infinite interval is intentionally unsupported upstream.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct IntegrationInterval {
+    pub from: IntegrationEndpoint,
+    pub to: IntegrationEndpoint,
+}
+
+impl IntegrationInterval {
+    pub fn new(from: IntegrationEndpoint, to: IntegrationEndpoint) -> Self {
+        Self { from, to }
+    }
+
+    /// Construct an interval with two finite native Symbolica endpoints.
+    pub fn finite(from: impl Into<Atom>, to: impl Into<Atom>) -> Self {
+        Self::new(
+            IntegrationEndpoint::finite(from),
+            IntegrationEndpoint::finite(to),
+        )
+    }
+
+    /// The default integration interval `[0, +Infinity)`.
+    pub fn zero_to_infinity() -> Self {
+        Self::new(
+            IntegrationEndpoint::finite(Atom::zero()),
+            IntegrationEndpoint::PositiveInfinity,
+        )
+    }
+
+    /// The whole real line `[-Infinity, +Infinity)`.
+    pub fn real_line() -> Self {
+        Self::new(
+            IntegrationEndpoint::NegativeInfinity,
+            IntegrationEndpoint::PositiveInfinity,
+        )
+    }
+}
+
+impl Default for IntegrationInterval {
+    fn default() -> Self {
+        Self::zero_to_infinity()
+    }
+}
 
 /// Configuration for an Atom-native integration.
 ///
@@ -76,7 +178,7 @@ impl AtomIntegrationOptions {
 
 #[cfg(test)]
 mod tests {
-    use symbolica::prelude::AtomCore;
+    use symbolica::prelude::{AtomCore, Coefficient};
 
     use crate::{
         reduce::{MzvReductionRule, MzvReductionTable},
@@ -84,6 +186,52 @@ mod tests {
     };
 
     use super::*;
+
+    #[test]
+    fn native_endpoints_classify_real_infinities_without_string_sentinels() {
+        let positive = Atom::num(Coefficient::positive_infinity());
+        let negative = -positive.clone();
+        assert_eq!(
+            IntegrationEndpoint::try_from_atom(positive).unwrap(),
+            IntegrationEndpoint::PositiveInfinity
+        );
+        assert_eq!(
+            IntegrationEndpoint::try_from_atom(negative).unwrap(),
+            IntegrationEndpoint::NegativeInfinity
+        );
+        assert_eq!(
+            IntegrationEndpoint::try_from_atom(Atom::num(7)).unwrap(),
+            IntegrationEndpoint::Finite(Atom::num(7))
+        );
+        assert!(
+            IntegrationEndpoint::try_from_atom(Atom::num(Coefficient::complex_infinity())).is_err()
+        );
+    }
+
+    #[test]
+    fn interval_constructors_preserve_direction() {
+        assert_eq!(
+            IntegrationInterval::default(),
+            IntegrationInterval::new(
+                IntegrationEndpoint::Finite(Atom::zero()),
+                IntegrationEndpoint::PositiveInfinity,
+            )
+        );
+        assert_eq!(
+            IntegrationInterval::real_line(),
+            IntegrationInterval::new(
+                IntegrationEndpoint::NegativeInfinity,
+                IntegrationEndpoint::PositiveInfinity,
+            )
+        );
+        assert_eq!(
+            IntegrationInterval::finite(2, 5),
+            IntegrationInterval::new(
+                IntegrationEndpoint::Finite(Atom::num(2)),
+                IntegrationEndpoint::Finite(Atom::num(5)),
+            )
+        );
+    }
 
     #[test]
     fn defaults_match_the_core_pipeline() {

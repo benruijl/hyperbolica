@@ -1,10 +1,13 @@
 //! Shared JSON request validation and response encoding.
 
 use std::collections::{BTreeSet, HashSet};
+use std::fmt::{Display, Write};
 use std::sync::Arc;
 
 use serde_json::{Value, json};
-use symbolica::prelude::{Atom, AtomCore, Rational};
+use symbolica::prelude::{
+    Atom, AtomCore, Exponent, MonomialOrder, MultivariatePolynomial, Rational, Ring,
+};
 
 use crate::core::{Poly, PolyCtx, Rat};
 use crate::error::{Error, Result};
@@ -30,11 +33,11 @@ pub(super) fn integer_field(request: &Value, name: &str) -> Result<i64> {
 }
 
 pub(super) fn array_field<'a>(request: &'a Value, name: &str) -> Result<&'a [Value]> {
-    request
-        .get(name)
-        .and_then(Value::as_array)
-        .map(Vec::as_slice)
-        .ok_or_else(|| Error::InvalidInput(format!("missing array field `{name}`")))
+    match request.get(name) {
+        None => Ok(&[]),
+        Some(Value::Array(values)) => Ok(values),
+        Some(_) => Err(Error::InvalidInput(format!("`{name}` must be an array"))),
+    }
 }
 
 pub(super) fn string_array_field(request: &Value, name: &str) -> Result<Vec<String>> {
@@ -61,12 +64,13 @@ pub(super) fn integer_array_field(request: &Value, name: &str) -> Result<Vec<i64
 }
 
 pub(super) fn optional_bool(request: &Value, name: &str, default: bool) -> Result<bool> {
-    match request.get(name) {
-        None => Ok(default),
-        Some(value) => value
-            .as_bool()
-            .ok_or_else(|| Error::InvalidInput(format!("`{name}` must be a boolean"))),
-    }
+    // The upstream flat-JSON adapter recognizes only literal true/false.
+    // Missing fields and values of another JSON type both retain the
+    // operation's default.
+    Ok(request
+        .get(name)
+        .and_then(Value::as_bool)
+        .unwrap_or(default))
 }
 
 pub(super) fn optional_usize(request: &Value, name: &str, default: usize) -> Result<usize> {
@@ -88,7 +92,7 @@ pub(super) fn explicit_variables(request: &Value) -> Result<Option<Vec<String>>>
     let values = value
         .as_array()
         .ok_or_else(|| Error::InvalidInput("`vars` must be an array".into()))?;
-    values
+    let variables = values
         .iter()
         .map(|value| {
             value
@@ -96,8 +100,10 @@ pub(super) fn explicit_variables(request: &Value) -> Result<Option<Vec<String>>>
                 .map(ToOwned::to_owned)
                 .ok_or_else(|| Error::InvalidInput("`vars` entries must be strings".into()))
         })
-        .collect::<Result<Vec<_>>>()
-        .map(Some)
+        .collect::<Result<Vec<_>>>()?;
+    // HyperFLINT treats an explicitly empty list like an omitted list and
+    // falls back to lexical variable discovery.
+    Ok((!variables.is_empty()).then_some(variables))
 }
 
 pub(super) fn mzv_context(
@@ -106,6 +112,21 @@ pub(super) fn mzv_context(
 ) -> Result<(Arc<PolyCtx>, MzvReductionTable)> {
     let table = mzv_reduction_table(request)?;
     let user_variables = wire_indeterminates(request, expressions)?;
+    let variables = mzv_indeterminates(&table, user_variables, expressions)?;
+    Ok((PolyCtx::from_indeterminates(variables)?, table))
+}
+
+pub(super) fn mzv_context_for_variable(
+    request: &Value,
+    expressions: &[&str],
+) -> Result<(Arc<PolyCtx>, MzvReductionTable)> {
+    let table = mzv_reduction_table(request)?;
+    let variable = string_field(request, "var")?;
+    let variable_atom = legacy::atom_from_name(variable)?;
+    let mut user_variables = wire_indeterminates(request, expressions)?;
+    if !user_variables.contains(&variable_atom) {
+        user_variables.push(variable_atom);
+    }
     let variables = mzv_indeterminates(&table, user_variables, expressions)?;
     Ok((PolyCtx::from_indeterminates(variables)?, table))
 }
@@ -231,13 +252,13 @@ impl<T: WireValue + ?Sized> WireValue for &T {
 
 impl WireValue for Rat {
     fn wire_value(&self) -> String {
-        wire_atom(self.to_atom())
+        wire_rat(self)
     }
 }
 
 impl WireValue for Poly {
     fn wire_value(&self) -> String {
-        wire_atom(self.to_atom())
+        wire_poly(self)
     }
 }
 
@@ -281,16 +302,115 @@ pub(super) fn parse_wire_rational_scalar(ctx: &Arc<PolyCtx>, expression: &str) -
         })
 }
 
-pub(super) fn wire_atom(atom: impl AtomCore) -> String {
-    legacy::format_expression(atom)
-}
-
 pub(super) fn wire_rat(value: &Rat) -> String {
-    wire_atom(value.to_atom())
+    let variables = wire_context_variables(value.ctx());
+    let numerator = pretty_wire_polynomial(&value.native().numerator, &variables);
+    if value.native().denominator.is_one() {
+        numerator
+    } else {
+        let denominator = pretty_wire_polynomial(&value.native().denominator, &variables);
+        format!(
+            "{}/{}",
+            wrap_wire_numerator(numerator),
+            wrap_wire_denominator(denominator)
+        )
+    }
 }
 
 pub(super) fn wire_poly(value: &Poly) -> String {
-    wire_atom(value.to_atom())
+    pretty_wire_polynomial(value.inner(), &wire_context_variables(value.ctx()))
+}
+
+fn pretty_wire_polynomial<F, E, O>(
+    value: &MultivariatePolynomial<F, E, O>,
+    variables: &[String],
+) -> String
+where
+    F: Ring,
+    F::Element: Display,
+    E: Exponent,
+    O: MonomialOrder,
+{
+    if value.nterms() == 0 {
+        return "0".into();
+    }
+
+    let mut output = String::new();
+    for term_index in (0..value.nterms()).rev() {
+        let coefficient = value.coefficients[term_index].to_string();
+        let (negative, magnitude) = coefficient
+            .strip_prefix('-')
+            .map_or((false, coefficient.as_str()), |magnitude| (true, magnitude));
+        if term_index == value.nterms() - 1 {
+            if negative {
+                output.push('-');
+            }
+        } else if negative {
+            output.push_str(" - ");
+        } else {
+            output.push_str(" + ");
+        }
+
+        let exponents = value.exponents(term_index);
+        let has_monomial = exponents.iter().any(|exponent| !exponent.is_zero());
+        if !has_monomial || magnitude != "1" {
+            output.push_str(magnitude);
+            if has_monomial {
+                output.push('*');
+            }
+        }
+
+        let mut first_variable = true;
+        for (name, exponent) in variables.iter().zip(exponents) {
+            if exponent.is_zero() {
+                continue;
+            }
+            if !first_variable {
+                output.push('*');
+            }
+            first_variable = false;
+            output.push_str(name);
+            if exponent.to_i32() != 1 {
+                write!(output, "^{exponent}").expect("writing to a String cannot fail");
+            }
+        }
+    }
+    output
+}
+
+fn wire_has_top_level(expression: &str, needle: char) -> bool {
+    let mut depth = 0_i32;
+    for character in expression.chars().skip(1) {
+        match character {
+            '(' => depth += 1,
+            ')' => depth -= 1,
+            character if depth == 0 && character == needle => return true,
+            _ => {}
+        }
+    }
+    false
+}
+
+fn wrap_wire_numerator(expression: String) -> String {
+    if ['+', '-', ' ']
+        .into_iter()
+        .any(|needle| wire_has_top_level(&expression, needle))
+    {
+        format!("({expression})")
+    } else {
+        expression
+    }
+}
+
+fn wrap_wire_denominator(expression: String) -> String {
+    if ['+', '-', '*', ' ']
+        .into_iter()
+        .any(|needle| wire_has_top_level(&expression, needle))
+    {
+        format!("({expression})")
+    } else {
+        expression
+    }
 }
 
 pub(super) fn wire_context_variables(ctx: &PolyCtx) -> Vec<String> {
@@ -537,5 +657,25 @@ mod tests {
         let request = json!({});
         let ctx = context_for(&request, &["wire_scan_z+wire_scan_a"]).unwrap();
         assert_eq!(wire_context_variables(&ctx), ["wire_scan_a", "wire_scan_z"]);
+    }
+
+    #[test]
+    fn flat_json_optional_booleans_retain_the_default_for_other_types() {
+        assert!(!optional_bool(&json!({"flag": "true"}), "flag", false).unwrap());
+        assert!(optional_bool(&json!({"flag": 0}), "flag", true).unwrap());
+        assert!(optional_bool(&json!({}), "flag", true).unwrap());
+        assert!(!optional_bool(&json!({"flag": false}), "flag", true).unwrap());
+    }
+
+    #[test]
+    fn generic_wire_values_use_flint_polynomial_term_order() {
+        let ctx = PolyCtx::new(["x"]).unwrap();
+        let value = Rat::parse(ctx.clone(), "-2/(x^2-1)").unwrap();
+
+        assert_eq!(value.wire_value(), "-2/(x^2 - 1)");
+        assert_eq!(
+            result_response("rat_add", &ctx, value),
+            json!({"op": "rat_add", "result": "-2/(x^2 - 1)", "vars": ["x"]})
+        );
     }
 }
