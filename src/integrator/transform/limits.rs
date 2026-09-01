@@ -42,6 +42,27 @@ fn all_letters_in_period_scope(word: &Word) -> bool {
         })
 }
 
+/// Return distinct positive integer letters in ascending value order while
+/// retaining the index of each value's first occurrence. The original index
+/// determines the contour side when the leading Laurent order is zero.
+pub(super) fn first_positive_letters(word: &Word) -> Vec<(i64, usize, Rat)> {
+    let mut positive_letters = Vec::new();
+    for (index, letter) in word.letters.iter().enumerate() {
+        let Some(value) = letter
+            .integer_constant()
+            .and_then(|value| value.to_i64())
+            .filter(|value| *value > 0)
+        else {
+            continue;
+        };
+        if !positive_letters.iter().any(|(seen, _, _)| *seen == value) {
+            positive_letters.push((value, index, letter.clone()));
+        }
+    }
+    positive_letters.sort_by_key(|(value, _, _)| *value);
+    positive_letters
+}
+
 pub(super) fn one_regulator(ctx: &Arc<PolyCtx>, key: RegKey) -> RegulatorSym {
     vec![RegTermSym {
         coef: SymCoef::one(ctx.clone()),
@@ -190,20 +211,7 @@ pub(super) fn reglim_word_impl(
         // value because its original letter determines the contour side.
         // Deduplicate before sorting so equal scaled letters with distinct
         // subleading terms cannot select a later occurrence accidentally.
-        let mut positive_letters = Vec::new();
-        for (index, letter) in scaled.letters.iter().enumerate() {
-            let Some(value) = letter
-                .integer_constant()
-                .and_then(|value| value.to_i64())
-                .filter(|value| *value > 0)
-            else {
-                continue;
-            };
-            if !positive_letters.iter().any(|(seen, _, _)| *seen == value) {
-                positive_letters.push((value, index, letter.clone()));
-            }
-        }
-        positive_letters.sort_by_key(|(value, _, _)| *value);
+        let positive_letters = first_positive_letters(&scaled);
 
         if !positive_letters.is_empty() {
             let delta = SymCoef::delta_factor(ctx.clone(), variable)?;

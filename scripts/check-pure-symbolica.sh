@@ -64,10 +64,48 @@ if rg -n \
 fi
 
 if ! rg -q \
-    'symbolica[[:space:]]*=[[:space:]]*\{[^}]*path[[:space:]]*=[[:space:]]*"vendor/symbolica-src"[^}]*default-features[[:space:]]*=[[:space:]]*false' \
+    'symbolica[[:space:]]*=[[:space:]]*\{[^}]*path[[:space:]]*=[[:space:]]*"vendor/symbolica"[^}]*default-features[[:space:]]*=[[:space:]]*false' \
     "$repo_root/Cargo.toml"; then
     echo "pure-Symbolica gate: the pinned, feature-controlled vendor dependency is missing" >&2
     exit 1
 fi
 
-echo "pure-Symbolica gate: default/Python dependency graphs, source imports, and special symbols are clean"
+symbolica_checkout="$repo_root/vendor/symbolica"
+symbolica_patch="$repo_root/vendor/symbolica-dev_poly.patch"
+symbolica_revision=76e3eb630abcc4d597463d759a0b40fedb57b764
+symbolica_diff_command=(
+    git -C "$symbolica_checkout"
+    -c diff.noprefix=false
+    -c diff.mnemonicPrefix=false
+    diff --binary --no-ext-diff --no-color --full-index --no-renames
+    --src-prefix=a/ --dst-prefix=b/ --diff-algorithm=myers
+    --no-indent-heuristic --unified=3 HEAD
+)
+
+if [[ ! -d "$symbolica_checkout/.git" ]]; then
+    echo "pure-Symbolica gate: vendor/symbolica is not a Git checkout" >&2
+    exit 1
+fi
+if [[ $(git -C "$symbolica_checkout" remote get-url origin) \
+        != https://github.com/symbolica-dev/symbolica.git \
+    || $(git -C "$symbolica_checkout" rev-parse --abbrev-ref HEAD) != dev_poly \
+    || $(git -C "$symbolica_checkout" rev-parse HEAD) != "$symbolica_revision" ]]; then
+    echo "pure-Symbolica gate: vendor/symbolica is not the audited dev_poly revision" >&2
+    exit 1
+fi
+mapfile -t symbolica_untracked < <(
+    git -C "$symbolica_checkout" ls-files --others --exclude-standard
+)
+if [[ ${#symbolica_untracked[@]} -ne 0 ]]; then
+    echo "pure-Symbolica gate: vendor/symbolica contains untracked files" >&2
+    printf 'untracked Symbolica file: %s\n' "${symbolica_untracked[@]}" >&2
+    exit 1
+fi
+if ! cmp -s \
+    <("${symbolica_diff_command[@]}") \
+    "$symbolica_patch"; then
+    echo "pure-Symbolica gate: the Symbolica checkout does not match the recorded patch" >&2
+    exit 1
+fi
+
+echo "pure-Symbolica gate: dependency graphs, source imports, special symbols, and the dev_poly checkout are clean"

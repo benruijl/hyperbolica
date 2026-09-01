@@ -34,6 +34,7 @@ ALLOWED_ENVIRONMENT_NAMES = {
     "PATH",
     "RAYON_NUM_THREADS",
     "SYMBOLICA_HIDE_BANNER",
+    "SYMBOLICA_LICENSE",
     "SYMBOLICA_LICENSE_SERVER",
     "TZ",
 }
@@ -1085,6 +1086,42 @@ def verify(
             measurement.get("environment_sanitized"),
             True,
         )
+        credential_inheritance = measurement.get("credential_inheritance")
+        if not isinstance(credential_inheritance, dict):
+            _deviation(
+                deviations,
+                "measurement_credential_inheritance",
+                "credential-inheritance metadata is absent",
+                actual=credential_inheritance,
+            )
+        else:
+            expected_credential_keys = {
+                "rust_symbolica_license",
+                "cpp_oracle_symbolica_license",
+            }
+            if set(credential_inheritance) != expected_credential_keys:
+                _deviation(
+                    deviations,
+                    "measurement_credential_inheritance_schema",
+                    "credential inheritance must contain exactly the two backend booleans",
+                    actual=sorted(credential_inheritance),
+                    expected=sorted(expected_credential_keys),
+                )
+            rust_license = credential_inheritance.get("rust_symbolica_license")
+            if not isinstance(rust_license, bool):
+                _deviation(
+                    deviations,
+                    "measurement_rust_symbolica_license",
+                    "Rust Symbolica-license inheritance must be recorded as a boolean",
+                    actual=rust_license,
+                )
+            _expect_equal(
+                deviations,
+                "measurement_cpp_oracle_symbolica_license",
+                "the C++ oracle must not inherit the Symbolica credential",
+                credential_inheritance.get("cpp_oracle_symbolica_license"),
+                False,
+            )
 
     artifacts = metadata.get("artifacts")
     if not isinstance(artifacts, dict):

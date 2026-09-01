@@ -407,6 +407,18 @@ fn transform_result_value(result: &TransformResult) -> Value {
 mod tests {
     use super::*;
 
+    fn assert_mzv_transform_vars(response: &Value, integration_variable: &str) {
+        let variables = response["vars"].as_array().expect("vars array");
+        assert_eq!(variables.first(), Some(&json!(integration_variable)));
+        assert!(variables.iter().any(|value| value == "Log2"));
+        assert!(variables.iter().any(|value| value == "mzv_2"));
+        assert!(variables.iter().all(|value| {
+            value
+                .as_str()
+                .is_some_and(|name| !name.starts_with("Wm_") && !name.starts_with("Wp_"))
+        }));
+    }
+
     #[test]
     fn transform_word_honors_the_algebraic_letter_option_without_leaking_pool_vars() {
         let base = json!({
@@ -425,6 +437,104 @@ mod tests {
         let serialized = transformed.to_string();
         assert!(serialized.contains("Wm_1"), "{serialized}");
         assert!(serialized.contains("Wp_1"), "{serialized}");
-        assert_eq!(transformed["vars"], json!(["bridge_transform_x"]));
+        assert_mzv_transform_vars(&transformed, "bridge_transform_x");
+    }
+
+    #[test]
+    fn reglim_bridge_evaluates_periods_and_positive_axis_sides() {
+        let period = evaluate_supported(
+            &json!({
+                "op": "reglim_word",
+                "word": ["-2", "0"],
+                "var": "x",
+                "vars": ["x"],
+            }),
+            "reglim_word",
+        )
+        .unwrap();
+        assert_eq!(
+            period["result"],
+            json!([{"coef": "((-Log2^2 - 2*mzv_2)/2)", "key": []}])
+        );
+        assert_mzv_transform_vars(&period, "x");
+
+        let scaled_period = evaluate_supported(
+            &json!({
+                "op": "reglim_word",
+                "word": ["-2*x", "-x"],
+                "var": "x",
+                "vars": ["x"],
+            }),
+            "reglim_word",
+        )
+        .unwrap();
+        assert_eq!(
+            scaled_period["result"],
+            json!([{"coef": "(-mzv_2/2)", "key": []}])
+        );
+
+        for (letter, coefficient) in [
+            ("x", "1*Pi*I*delta[x]"),
+            ("1/x", "(-1)*Pi*I*delta[x]"),
+            ("1+x", "1*Pi*I*delta[x]"),
+            ("1-x", "(-1)*Pi*I*delta[x]"),
+        ] {
+            let response = evaluate_supported(
+                &json!({
+                    "op": "reglim_word",
+                    "word": [letter],
+                    "var": "x",
+                    "vars": ["x"],
+                }),
+                "reglim_word",
+            )
+            .unwrap();
+            assert_eq!(
+                response["result"],
+                json!([{"coef": coefficient, "key": []}]),
+                "letter {letter}"
+            );
+        }
+    }
+
+    #[test]
+    fn transform_word_and_shuffle_thread_the_same_contour_table() {
+        let transformed_word = evaluate_supported(
+            &json!({
+                "op": "transform_word",
+                "word": ["x+1"],
+                "var": "x",
+                "vars": ["x"],
+            }),
+            "transform_word",
+        )
+        .unwrap();
+        let transformed_shuffle = evaluate_supported(
+            &json!({
+                "op": "transform_shuffle",
+                "wordlist": [["x+1"]],
+                "var": "x",
+                "vars": ["x"],
+            }),
+            "transform_shuffle",
+        )
+        .unwrap();
+
+        assert_eq!(transformed_word["result"], transformed_shuffle["result"]);
+        assert_eq!(
+            transformed_word["result"],
+            json!([
+                {
+                    "shuffle": [{"coef": "1", "word": []}],
+                    "regulator": [{"coef": "1*Pi*I*delta[x]", "key": []}],
+                },
+                {
+                    "shuffle": [{"coef": "-1", "word": ["-1"]}],
+                    "regulator": [{"coef": "1", "key": []}],
+                },
+            ])
+        );
+        assert_mzv_transform_vars(&transformed_word, "x");
+        assert_mzv_transform_vars(&transformed_shuffle, "x");
     }
 }

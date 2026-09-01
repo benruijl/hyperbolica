@@ -156,6 +156,104 @@ class ProcessMeasurementTests(unittest.TestCase):
             self.assertEqual(stdout_path.read_bytes(), b"request-body\n")
             self.assertEqual(stderr_path.read_text(encoding="utf-8"), "isolated:False")
 
+    def test_selective_environment_inheritance_preserves_clear_env_isolation(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            stdout_path = directory / "child.stdout"
+            stderr_path = directory / "child.stderr"
+            secret = "synthetic-secret-that-must-not-be-recorded"
+            environment = dict(os.environ)
+            environment["BENCHMARK_TEST_SECRET"] = secret
+            environment["BENCHMARK_TEST_UNRELATED"] = "must-not-be-inherited"
+            child = (
+                "import hashlib,json,os,sys; "
+                "json.dump({'secret_sha256': hashlib.sha256("
+                "os.environ['BENCHMARK_TEST_SECRET'].encode()).hexdigest(), "
+                "'unrelated_present': 'BENCHMARK_TEST_UNRELATED' in os.environ}, "
+                "sys.stdout)"
+            )
+            arguments = [
+                sys.executable,
+                str(PROCESS_SCRIPT),
+                "--stdout",
+                str(stdout_path),
+                "--stderr",
+                str(stderr_path),
+                "--timeout-seconds",
+                "2",
+                "--inherit-env-var",
+                "BENCHMARK_TEST_SECRET",
+                "--clear-env",
+                "--",
+                sys.executable,
+                "-c",
+                child,
+            ]
+            completed = subprocess.run(
+                arguments,
+                env=environment,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                timeout=5,
+                check=False,
+            )
+
+            self.assertEqual(completed.returncode, 0, completed.stderr.decode())
+            measurement = json.loads(completed.stdout)
+            self.assertEqual(measurement["exit_code"], 0)
+            self.assertNotIn(secret.encode(), completed.stdout)
+            self.assertNotIn(secret, "\0".join(arguments))
+            child_result = json.loads(stdout_path.read_bytes())
+            self.assertEqual(
+                child_result["secret_sha256"],
+                hashlib.sha256(secret.encode()).hexdigest(),
+            )
+            self.assertIs(child_result["unrelated_present"], False)
+
+    def test_selective_environment_inheritance_rejects_invalid_or_missing_names(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            for index, (name, expected) in enumerate(
+                (
+                    ("INVALID=NAME", b"invalid --inherit-env-var name"),
+                    ("BENCHMARK_TEST_MISSING", b"is not set"),
+                )
+            ):
+                with self.subTest(name=name):
+                    environment = dict(os.environ)
+                    environment.pop("BENCHMARK_TEST_MISSING", None)
+                    completed = subprocess.run(
+                        [
+                            sys.executable,
+                            str(PROCESS_SCRIPT),
+                            "--stdout",
+                            str(directory / f"{index}.stdout"),
+                            "--stderr",
+                            str(directory / f"{index}.stderr"),
+                            "--timeout-seconds",
+                            "2",
+                            "--inherit-env-var",
+                            name,
+                            "--clear-env",
+                            "--",
+                            sys.executable,
+                            "-c",
+                            "raise SystemExit(99)",
+                        ],
+                        env=environment,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                        timeout=5,
+                        check=False,
+                    )
+                    self.assertEqual(completed.returncode, 2)
+                    self.assertIn(expected, completed.stderr)
+                    self.assertEqual(completed.stdout, b"")
+
     def test_timeout_escalates_to_process_group_kill(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             directory = Path(temporary)
@@ -457,6 +555,7 @@ class BenchmarkDriverTests(unittest.TestCase):
             "GLOBAL_UPPER_CI",
             "MAX_WORKLOAD_RATIO",
             "MAX_RSS_RATIO",
+            "SYMBOLICA_LICENSE",
         ):
             environment.pop(name, None)
         environment["PYTHON"] = sys.executable
@@ -513,6 +612,7 @@ class BenchmarkDriverTests(unittest.TestCase):
                     "OPENBLAS_NUM_THREADS",
                     "RAYON_NUM_THREADS",
                     "SYMBOLICA_HIDE_BANNER",
+                    "SYMBOLICA_LICENSE",
                 ],
                 "performance_environment": {
                     "OMP_NUM_THREADS": "1",
@@ -523,7 +623,7 @@ class BenchmarkDriverTests(unittest.TestCase):
             },
         }
 
-    def test_license_free_fake_backends_exercise_the_complete_driver(self) -> None:
+    def test_license_is_inherited_only_by_the_rust_backend(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             directory = Path(temporary)
             fixture_path = directory / "benchmark.jsonl"
@@ -544,22 +644,33 @@ class BenchmarkDriverTests(unittest.TestCase):
             )
             policy_path = directory / "policy.json"
             policy_path.write_bytes(compact_json(self._policy()))
-            backend = directory / "fake-backend"
-            backend.write_text(
-                """#!/bin/sh
+            rust_backend = directory / "fake-rust-backend"
+            cpp_backend = directory / "fake-cpp-backend"
+            secret = "synthetic-driver-license-do-not-record"
+            backend_script = """#!/bin/sh
 [ "$#" -eq 1 ] && [ "$1" = eval-json ] || exit 10
 [ -z "${HOME+x}" ] || exit 11
 [ "${OMP_NUM_THREADS-}" = 1 ] || exit 12
 [ "${OPENBLAS_NUM_THREADS-}" = 1 ] || exit 13
 [ "${RAYON_NUM_THREADS-}" = 1 ] || exit 14
 [ "${SYMBOLICA_HIDE_BANNER-}" = 1 ] || exit 15
-IFS= read -r request || exit 16
-[ "$request" = '{"op":"fake"}' ] || exit 17
+case "${0##*/}" in
+  fake-rust-backend)
+    [ "${SYMBOLICA_LICENSE-}" = @EXPECTED_LICENSE@ ] || exit 16
+    ;;
+  fake-cpp-backend)
+    [ -z "${SYMBOLICA_LICENSE+x}" ] || exit 19
+    ;;
+  *) exit 20 ;;
+esac
+IFS= read -r request || exit 17
+[ "$request" = '{"op":"fake"}' ] || exit 18
 printf '%s\n' '{"ok":true}'
-""",
-                encoding="utf-8",
-            )
-            backend.chmod(0o755)
+""".replace("@EXPECTED_LICENSE@", shlex.quote(secret))
+            rust_backend.write_text(backend_script, encoding="utf-8")
+            cpp_backend.write_text(backend_script, encoding="utf-8")
+            rust_backend.chmod(0o755)
+            cpp_backend.chmod(0o755)
             (directory / "CMakeCache.txt").write_text(
                 "\n".join(
                     (
@@ -595,8 +706,8 @@ exec "$@"
                     "BENCHMARK_CORPUS": str(corpus_path),
                     "BENCHMARK_MODE": "exploratory",
                     "BENCHMARK_TIER": "qualification",
-                    "HYPERFLINT_RUST": str(backend),
-                    "HYPERFLINT_CPP": str(backend),
+                    "HYPERFLINT_RUST": str(rust_backend),
+                    "HYPERFLINT_CPP": str(cpp_backend),
                     "BUILD_RUST": "0",
                     "PAIRS": "2",
                     "WARMUP": "0",
@@ -610,6 +721,7 @@ exec "$@"
                     "MAX_RSS_RATIO": "1000000000",
                     "EVIDENCE_DIR": str(evidence),
                     "PATH": f"{directory}:{environment['PATH']}",
+                    "SYMBOLICA_LICENSE": secret,
                 }
             )
             completed = subprocess.run(
@@ -622,10 +734,19 @@ exec "$@"
                 check=False,
             )
             self.assertEqual(completed.returncode, 0, completed.stderr.decode())
+            self.assertNotIn(secret.encode(), completed.stdout)
+            self.assertNotIn(secret.encode(), completed.stderr)
             metadata = json.loads((evidence / "metadata.json").read_bytes())
             self.assertEqual(metadata["status"], "passed")
             self.assertEqual(metadata["configuration"]["pairs_per_workload"], 2)
             self.assertIs(metadata["measurement"]["environment_sanitized"], True)
+            self.assertEqual(
+                metadata["measurement"]["credential_inheritance"],
+                {
+                    "rust_symbolica_license": True,
+                    "cpp_oracle_symbolica_license": False,
+                },
+            )
             samples = json.loads((evidence / "samples.json").read_bytes())
             self.assertEqual(len(samples), 4)
             self.assertEqual({sample["backend"] for sample in samples}, {"cpp", "rust"})
@@ -642,6 +763,9 @@ exec "$@"
             qualification = json.loads((evidence / "qualification.json").read_bytes())
             self.assertEqual(qualification["status"], "exploratory")
             self.assertIs(qualification["qualified"], False)
+            for artifact in evidence.rglob("*"):
+                if artifact.is_file():
+                    self.assertNotIn(secret.encode(), artifact.read_bytes(), artifact)
 
     def test_qualification_rejects_revision_environment_override(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -795,6 +919,7 @@ class QualificationPolicyTests(unittest.TestCase):
                     "OPENBLAS_NUM_THREADS",
                     "RAYON_NUM_THREADS",
                     "SYMBOLICA_HIDE_BANNER",
+                    "SYMBOLICA_LICENSE",
                 ],
                 "performance_environment": {
                     "OMP_NUM_THREADS": "1",
@@ -978,6 +1103,10 @@ class QualificationPolicyTests(unittest.TestCase):
                 "performance_environment": self.policy["requirements"][  # type: ignore[index]
                     "performance_environment"
                 ],
+                "credential_inheritance": {
+                    "rust_symbolica_license": True,
+                    "cpp_oracle_symbolica_license": False,
+                },
             },
             "artifacts": {
                 "summary_sha256": "0" * 64,
@@ -1240,6 +1369,43 @@ class QualificationPolicyTests(unittest.TestCase):
         codes = {deviation["code"] for deviation in result["deviations"]}
         self.assertIn("measurement_cpuset", codes)
         self.assertIn("measurement_environment_sanitized", codes)
+
+    def test_cpp_oracle_credential_inheritance_is_rejected(self) -> None:
+        metadata = copy.deepcopy(self.metadata)
+        metadata["measurement"]["credential_inheritance"][  # type: ignore[index]
+            "cpp_oracle_symbolica_license"
+        ] = True
+        completed, result = self._verify(metadata, "qualification")
+        self.assertEqual(completed.returncode, 1)
+        self.assertIn(
+            "measurement_cpp_oracle_symbolica_license",
+            {deviation["code"] for deviation in result["deviations"]},
+        )
+
+    def test_credential_inheritance_schema_rejects_extra_keys(self) -> None:
+        metadata = copy.deepcopy(self.metadata)
+        metadata["measurement"]["credential_inheritance"][  # type: ignore[index]
+            "untracked_backend"
+        ] = False
+        completed, result = self._verify(metadata, "qualification")
+        self.assertEqual(completed.returncode, 1)
+        self.assertIn(
+            "measurement_credential_inheritance_schema",
+            {deviation["code"] for deviation in result["deviations"]},
+        )
+
+    def test_cpp_setup_commands_use_the_credential_scrubber(self) -> None:
+        source = DRIVER_SCRIPT.read_text(encoding="utf-8")
+        self.assertIn(
+            'without_symbolica_license "$cmake_bin" -S "$cpp_source"', source
+        )
+        self.assertIn(
+            'without_symbolica_license "$cmake_bin" --build "$cpp_build_dir"',
+            source,
+        )
+        self.assertIn(
+            'without_symbolica_license "$cpp_bin" --version', source
+        )
 
 
 if __name__ == "__main__":

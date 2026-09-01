@@ -143,14 +143,14 @@ impl Poly {
     }
 
     pub fn resultant(&self, other: &Self, variable: usize) -> Result<Self> {
-        self.resultant_with_strategy(other, variable, ResultantStrategy::Ducos)
+        self.resultant_with_strategy(other, variable, ResultantStrategy::Auto)
     }
 
     /// Compute an exact resultant with one of Symbolica's public kernels.
     ///
-    /// This is primarily an evidence hook. Production calls use
-    /// [`Self::resultant`], which is pinned to the improved Ducos kernel until
-    /// workload-level benchmarks justify a deterministic alternative.
+    /// `Auto` delegates coefficient-domain-specific selection to Symbolica.
+    /// Explicit strategies keep comparisons against integer and direct
+    /// rational Ducos, Brown, primitive, and CRT recurrences reproducible.
     pub fn resultant_with_strategy(
         &self,
         other: &Self,
@@ -164,7 +164,9 @@ impl Poly {
         let left = self.inner.to_univariate(variable);
         let right = other.inner.to_univariate(variable);
         let resultant = match strategy {
-            ResultantStrategy::Ducos => left.resultant(&right),
+            ResultantStrategy::Auto => left.resultant_auto(&right),
+            ResultantStrategy::Ducos => left.resultant_ducos_integer(&right),
+            ResultantStrategy::RationalDucos => left.resultant(&right),
             ResultantStrategy::Brown => left.resultant_brown(&right),
             ResultantStrategy::Primitive => left.resultant_primitive(&right),
             ResultantStrategy::Crt => left.resultant_crt(&right),

@@ -12,6 +12,7 @@ import argparse
 import json
 import math
 import os
+import re
 import resource
 import signal
 import subprocess
@@ -25,6 +26,17 @@ from typing import BinaryIO, Sequence
 
 class ProcessMeasurementError(ValueError):
     """An invalid measurement request that should be reported to the caller."""
+
+
+ENVIRONMENT_NAME_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+
+def _environment_name(value: str, option: str) -> str:
+    if not ENVIRONMENT_NAME_PATTERN.fullmatch(value):
+        raise ProcessMeasurementError(
+            f"invalid {option} name {value!r}; expected a shell environment name"
+        )
+    return value
 
 
 def _positive_float(value: str) -> float:
@@ -42,21 +54,31 @@ def _nonnegative_float(value: str) -> float:
 
 
 def _environment(
-    entries: Sequence[str], removals: Sequence[str], *, clear: bool
+    entries: Sequence[str],
+    removals: Sequence[str],
+    inherited_names: Sequence[str],
+    *,
+    clear: bool,
 ) -> dict[str, str]:
     environment = {} if clear else dict(os.environ)
-    for name in removals:
-        if not name or "=" in name:
+    for name_value in inherited_names:
+        name = _environment_name(name_value, "--inherit-env-var")
+        if name not in os.environ:
             raise ProcessMeasurementError(
-                f"invalid --unset-env name {name!r}; expected NAME"
+                f"parent environment variable {name!r} requested by "
+                "--inherit-env-var is not set"
             )
+        environment[name] = os.environ[name]
+    for name in removals:
+        name = _environment_name(name, "--unset-env")
         environment.pop(name, None)
     for entry in entries:
         name, separator, value = entry.partition("=")
-        if not separator or not name:
+        if not separator:
             raise ProcessMeasurementError(
                 f"invalid --env value {entry!r}; expected NAME=VALUE"
             )
+        name = _environment_name(name, "--env")
         environment[name] = value
     return environment
 
@@ -219,11 +241,21 @@ def _parser() -> argparse.ArgumentParser:
         metavar="NAME",
         help="remove child env",
     )
+    parser.add_argument(
+        "--inherit-env-var",
+        action="append",
+        default=[],
+        metavar="NAME",
+        help="copy one named parent variable into the child environment",
+    )
     environment_group = parser.add_mutually_exclusive_group()
     environment_group.add_argument(
         "--clear-env",
         action="store_true",
-        help="start from an empty child environment before applying --env",
+        help=(
+            "start from an empty child environment before applying --env and "
+            "--inherit-env-var"
+        ),
     )
     environment_group.add_argument(
         "--inherit-env",
@@ -254,7 +286,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             raise ProcessMeasurementError("--stdout and --stderr must be distinct")
         request = _request_bytes(arguments)
         environment = _environment(
-            arguments.env, arguments.unset_env, clear=arguments.clear_env
+            arguments.env,
+            arguments.unset_env,
+            arguments.inherit_env_var,
+            clear=arguments.clear_env,
         )
         arguments.stdout.parent.mkdir(parents=True, exist_ok=True)
         arguments.stderr.parent.mkdir(parents=True, exist_ok=True)

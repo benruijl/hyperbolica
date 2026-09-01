@@ -4,8 +4,8 @@ Hyperbolica is a Rust port of
 [SubTropica/HyperFLINT](https://github.com/SubTropica/SubTropica/tree/main/HyperFLINT)
 for exact hyperlogarithmic integration and linear-reducibility analysis. Its
 production API accepts Symbolica `Atom` values directly, and its only computer
-algebra backend is the pinned Symbolica source snapshot in
-`vendor/symbolica-src`.
+algebra backend is the official Symbolica `dev_poly` checkout in
+`vendor/symbolica`.
 
 The port is under active development. The Rust core, typed Atom API, JSON
 compatibility adapter, C ABI, and optional PyO3 layer are present. Differential
@@ -31,15 +31,26 @@ Run the dependency and source audit with:
 scripts/check-pure-symbolica.sh
 ```
 
-The exact vendored revision and any local Symbolica patch are recorded in
-[`vendor/SYMBOLICA_SNAPSHOT.md`](vendor/SYMBOLICA_SNAPSHOT.md). The original
-local Symbolica checkout is left untouched and is not part of this repository.
+The exact revision, checkout command, and small local Symbolica patch are
+recorded in
+[`vendor/SYMBOLICA_SNAPSHOT.md`](vendor/SYMBOLICA_SNAPSHOT.md). The former
+`vendor/symbolica-src` source copy is retained only as a historical audit
+artifact and is not selected by Cargo.
+
+The current symbolized profiling record, including resultant-backend and
+partial-fraction hotspots, is in
+[`docs/performance-profile.md`](docs/performance-profile.md).
 
 ## Build and test
 
 Rust 1.89 or newer is required.
 
 ```sh
+git clone --branch dev_poly --single-branch \
+  https://github.com/symbolica-dev/symbolica.git vendor/symbolica
+git -C vendor/symbolica checkout 76e3eb630abcc4d597463d759a0b40fedb57b764
+git -C vendor/symbolica switch -C dev_poly
+git -C vendor/symbolica apply ../symbolica-dev_poly.patch
 cargo build --release
 cargo test --all-targets
 cargo clippy --all-targets -- -D warnings
@@ -237,4 +248,4 @@ separate terms that require express prior permission to copy or distribute
 its code. Do not publish this repository or a built wheel until that
 permission is obtained and recorded. See
 [`DISTRIBUTION-LICENSE.md`](DISTRIBUTION-LICENSE.md) and
-[`vendor/symbolica-src/License.md`](vendor/symbolica-src/License.md).
+`vendor/symbolica/License.md` in the selected checkout.

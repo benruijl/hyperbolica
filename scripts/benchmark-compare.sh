@@ -207,6 +207,13 @@ if [[ -n "$cpuset" ]]; then
         fail "CPUSET requires taskset"
 fi
 
+rust_license_measure_args=()
+rust_license_inherited=false
+if [[ -v SYMBOLICA_LICENSE ]]; then
+    rust_license_measure_args=(--inherit-env-var SYMBOLICA_LICENSE)
+    rust_license_inherited=true
+fi
+
 rust_build_command="$cargo_bin build --locked --release --bin hyperflint"
 if [[ "$build_rust" == 1 ]]; then
     if [[ "$mode" == qualification ]]; then
@@ -233,6 +240,10 @@ resolve_executable() {
         resolved=$(command -v "$selected") || return 1
         realpath "$resolved"
     fi
+}
+
+without_symbolica_license() {
+    env -u SYMBOLICA_LICENSE -- "$@"
 }
 
 rust_bin=$(resolve_executable "$rust_bin") ||
@@ -321,7 +332,7 @@ if [[ "$mode" == qualification ]]; then
     cpp_bin="$cpp_build_dir/hyperflint"
 
     cpp_build_command="$cmake_bin -S $cpp_source -B $cpp_build_dir [locked release-portable cache values] && $cmake_bin --build $cpp_build_dir --target hyperflint-cli --clean-first"
-    "$cmake_bin" -S "$cpp_source" -B "$cpp_build_dir" \
+    without_symbolica_license "$cmake_bin" -S "$cpp_source" -B "$cpp_build_dir" \
         -G "$cpp_generator_required" \
         "-DCMAKE_BUILD_TYPE=$cpp_build_type_required" \
         "-DCMAKE_EXPORT_COMPILE_COMMANDS=ON" \
@@ -333,7 +344,8 @@ if [[ "$mode" == qualification ]]; then
         "-DHF_ASAN=$cpp_asan_required" \
         "-DHF_TSAN=$cpp_tsan_required" \
         "-DHF_CLI_STATIC_DEPS=$cpp_static_deps_required"
-    "$cmake_bin" --build "$cpp_build_dir" --target hyperflint-cli --clean-first
+    without_symbolica_license "$cmake_bin" --build "$cpp_build_dir" \
+        --target hyperflint-cli --clean-first
     cpp_bin=$(resolve_executable "$cpp_bin") ||
         qualification_fail "fresh C++ hyperflint-cli build output is unavailable"
 
@@ -368,7 +380,7 @@ if [[ "$mode" == qualification ]]; then
         qualification_fail "C++ sanitizer settings differ from the locked values"
     [[ "$cpp_static_deps" == "$cpp_static_deps_required" ]] ||
         qualification_fail "C++ CLI static-dependency setting differs from the locked value"
-    cpp_version=$({ "$cpp_bin" --version; } 2>&1) ||
+    cpp_version=$({ without_symbolica_license "$cpp_bin" --version; } 2>&1) ||
         qualification_fail "newly built C++ binary does not report its build stamp"
     grep -F "HF_BUILD_VARIANT: $cpp_profile_required" <<<"$cpp_version" >/dev/null ||
         qualification_fail "C++ binary's compiled build-variant stamp is not release-portable"
@@ -549,6 +561,7 @@ metadata_args=(
     --arg cpuset "$cpuset"
     --argjson environment_allowlist "$environment_allowlist"
     --argjson performance_environment "$performance_environment"
+    --argjson rust_license_inherited "$rust_license_inherited"
     --arg host "$host_name"
     --arg os "$(uname -srm)"
     --arg cpu_model "$cpu_model"
@@ -603,7 +616,9 @@ jq -n "${metadata_args[@]}" '{
                    affinity_scope:"measurement_helper_and_backend",
                    cpuset:$cpuset,environment_sanitized:true,
                    environment_allowlist:$environment_allowlist,
-                   performance_environment:$performance_environment},
+                   performance_environment:$performance_environment,
+                   credential_inheritance:{rust_symbolica_license:$rust_license_inherited,
+                                           cpp_oracle_symbolica_license:false}},
       host:{name:$host,os:$os,cpu_model:$cpu_model,cpu_governor:$cpu_governor},
       rust:{binary:$rust_binary,binary_sha256:$rust_sha256,source:$rust_source,
             revision:$rust_revision,
@@ -662,6 +677,7 @@ run_backend() {
     local request=$2
     local timeout_seconds=$3
     local label=$4
+    local inherit_rust_license=$5
     local -a command=("$executable" eval-json)
     local -a measure_args measure_command
     run_serial=$((run_serial + 1))
@@ -677,8 +693,11 @@ run_backend() {
         --env "OPENBLAS_NUM_THREADS=$threads"
         --env "RAYON_NUM_THREADS=$threads"
         --env SYMBOLICA_HIDE_BANNER=1
-        --clear-env --
     )
+    if [[ "$inherit_rust_license" == 1 ]]; then
+        measure_args+=("${rust_license_measure_args[@]}")
+    fi
+    measure_args+=(--clear-env --)
     measure_command=(
         "$python_bin" "$repo_root/scripts/benchmark_process.py"
         "${measure_args[@]}" "${command[@]}"
@@ -733,9 +752,9 @@ correctness_ndjson="$scratch/correctness.ndjson"
 printf 'correctness preflight (%d workloads)\n' "${#names[@]}"
 for index in "${!names[@]}"; do
     name=${names[index]}
-    run_backend "$cpp_bin" "${requests[index]}" "${timeouts[index]}" "preflight.$name.cpp"
+    run_backend "$cpp_bin" "${requests[index]}" "${timeouts[index]}" "preflight.$name.cpp" 0
     cpp_output=$last_output
-    run_backend "$rust_bin" "${requests[index]}" "${timeouts[index]}" "preflight.$name.rust"
+    run_backend "$rust_bin" "${requests[index]}" "${timeouts[index]}" "preflight.$name.rust" 1
     rust_output=$last_output
     for output in "$cpp_output" "$rust_output"; do
         if ! hf_validate_permutation "$output" "${permutation_fields[index]}" "${permutation_values[index]}"; then
@@ -794,7 +813,13 @@ run_checked() {
     else
         executable=$cpp_bin
     fi
-    run_backend "$executable" "${requests[index]}" "${timeouts[index]}" "$phase.${names[index]}.$backend"
+    if [[ "$backend" == rust ]]; then
+        run_backend "$executable" "${requests[index]}" "${timeouts[index]}" \
+            "$phase.${names[index]}.$backend" 1
+    else
+        run_backend "$executable" "${requests[index]}" "${timeouts[index]}" \
+            "$phase.${names[index]}.$backend" 0
+    fi
     assert_fixture_output "$index" "$last_output" "$phase/${names[index]}/$backend"
 }
 

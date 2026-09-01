@@ -78,7 +78,7 @@ fn context_compatibility_ignores_constructor_specific_diagnostic_spelling() {
 }
 
 #[test]
-fn improved_symbolica_resultant_is_used() {
+fn optimized_symbolica_resultant_is_used() {
     let ctx = context();
     let left = Poly::parse(ctx.clone(), "x^2+y*x+1").unwrap();
     let right = Poly::parse(ctx.clone(), "x-y").unwrap();
@@ -118,6 +118,8 @@ fn every_public_symbolica_resultant_strategy_agrees_on_bounded_sparse_inputs() {
             .resultant_with_strategy(&right, 0, ResultantStrategy::Ducos)
             .unwrap();
         for strategy in [
+            ResultantStrategy::Auto,
+            ResultantStrategy::RationalDucos,
             ResultantStrategy::Brown,
             ResultantStrategy::Primitive,
             ResultantStrategy::Crt,
@@ -128,6 +130,12 @@ fn every_public_symbolica_resultant_strategy_agrees_on_bounded_sparse_inputs() {
                 "strategy {strategy:?}, case {case}"
             );
         }
+        assert_eq!(
+            left.resultant(&right, 0).unwrap(),
+            left.resultant_with_strategy(&right, 0, ResultantStrategy::Auto)
+                .unwrap(),
+            "production Auto strategy, case {case}"
+        );
     }
 }
 

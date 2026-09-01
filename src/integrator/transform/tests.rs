@@ -3,7 +3,7 @@ use std::sync::Arc;
 use symbolica::prelude::{AtomCore, Symbol};
 
 use super::collection::collect_regulator_with_digest;
-use super::limits::{one_regulator, word_depends_on_variable};
+use super::limits::{first_positive_letters, one_regulator, word_depends_on_variable};
 use super::shuffle::group_log_powers_with_digest;
 use super::word::{TransformCache, collect_result_rows_with_forced_collision, identity_transform};
 use super::{
@@ -96,6 +96,22 @@ fn regularized_limit_handles_empty_constant_and_scaled_words() {
 
     let scaled = reglim_word(&ctx, &word(&ctx, &["x", "-x"]), 0).unwrap();
     assert_eq!(scaled, one_regulator(&ctx, vec![word(&ctx, &["1", "-1"])]));
+}
+
+#[test]
+fn positive_letter_dedup_keeps_the_first_occurrence_before_sorting() {
+    let ctx = context();
+    let mut letters = vec![rat(&ctx, "3"), rat(&ctx, "1"), rat(&ctx, "2")];
+    letters.extend((0..30).map(|_| rat(&ctx, "1")));
+    let positive = first_positive_letters(&Word::new(letters));
+
+    assert_eq!(positive.len(), 3);
+    assert_eq!(positive[0].0, 1);
+    assert_eq!(positive[0].1, 1);
+    assert_eq!(positive[1].0, 2);
+    assert_eq!(positive[1].1, 2);
+    assert_eq!(positive[2].0, 3);
+    assert_eq!(positive[2].1, 0);
 }
 
 #[test]

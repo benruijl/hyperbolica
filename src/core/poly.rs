@@ -35,16 +35,21 @@ pub struct Poly {
     inner: SymbolicaPoly,
 }
 
-/// Public Symbolica resultant kernels available for differential benchmarking.
+/// Public Symbolica resultant kernels available for production selection and
+/// differential benchmarking.
 ///
-/// [`ResultantStrategy::Ducos`] is the production default because this vendored
-/// Symbolica snapshot contains the improved Lazard--Ducos implementation. The
-/// alternatives are exposed so callers can build evidence on their own input
-/// distribution; Hyperbolica does not silently dispatch between them.
+/// [`ResultantStrategy::Auto`] is the production default. It delegates the
+/// representation-specific choice between optimized integer-associate Ducos
+/// and modular CRT to Symbolica. The direct recurrence over rational
+/// coefficients remains available only as a diagnostic baseline.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum ResultantStrategy {
     #[default]
+    Auto,
+    /// Clear rational scalar denominators/content once, then run Ducos over Z.
     Ducos,
+    /// Run the Ducos recurrence directly over rational polynomial coefficients.
+    RationalDucos,
     Brown,
     Primitive,
     Crt,

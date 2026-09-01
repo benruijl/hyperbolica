@@ -1,12 +1,17 @@
 # Symbolica public-API audit and migration map
 
-Status: source audit of the vendored Symbolica snapshot used by this repository, 2026-08-31.
+Status: source audit of the selected Symbolica checkout used by this repository, updated 2026-09-01.
 
 This document is a migration decision record, not a claim that an API name alone makes a replacement correct or faster. Every positive capability below was checked in the public Rust source, including the implementation bounds and relevant tests. Performance statements marked *expected* are hypotheses that must pass the benchmark gates near the end of this document.
 
 ## Scope and verdict vocabulary
 
-The selected dependency is Symbolica 2.2.0 at `vendor/symbolica-src` (`vendor/symbolica-src/Cargo.toml:5-17`), not the other vendor snapshots that may be present in the workspace. Source anchors below are relative to `vendor/symbolica-src/src` unless a different root is stated.
+The selected dependency is Symbolica 2.2.0 from the official `dev_poly` branch
+at `vendor/symbolica`, audited at
+`76e3eb630abcc4d597463d759a0b40fedb57b764`. The copied
+`vendor/symbolica-src` tree is archival and is not selected by Cargo. Source
+anchors below are relative to `vendor/symbolica/src` unless a different root
+is stated.
 
 - **REPLACE**: delete the hand-written CAS algorithm and call the named public Symbolica operation.
 - **WRAP**: preserve Hyperbolica's type, validation, error, or output contract around a native Symbolica representation/operation.
@@ -31,11 +36,11 @@ The audit covered `src/**`, Symbolica's Rust source and in-tree tests, and publi
 The root dependency is:
 
 ```toml
-symbolica = { path = "vendor/symbolica-src", default-features = false,
+symbolica = { path = "vendor/symbolica", default-features = false,
               features = ["faster_alloc", "integer-gmp", "float-mpfr"] }
 ```
 
-This is at `Cargo.toml:23-29`. In the vendored manifest, the default feature set includes `native_code_generation`, but defaults are disabled here (`vendor/symbolica-src/Cargo.toml:38-52`). FLINT appears only as the optional dependency behind `flint_benchmarks` and `flint_system_benchmarks` (`vendor/symbolica-src/Cargo.toml:87-92,136-146`). Neither feature is selected. The optional root `python` feature adds Symbolica's `python_export`; that feature's dependency list is at `vendor/symbolica-src/Cargo.toml:61-79` and does not select a FLINT feature.
+This is at `Cargo.toml:31`. In the selected manifest, the default feature set includes `native_code_generation`, but defaults are disabled here (`vendor/symbolica/Cargo.toml:38-72`). FLINT appears only as the optional dependency behind `flint_benchmarks` and `flint_system_benchmarks` (`vendor/symbolica/Cargo.toml:88-92,136-142`). Neither feature is selected. The optional root `python` feature adds Symbolica's `python_export`; that feature's dependency list is at `vendor/symbolica/Cargo.toml:61-72` and does not select a FLINT feature.
 
 Both of these checks report that `flint3-sys` is absent:
 
@@ -378,9 +383,39 @@ manual monomial reconstruction duplicated that complete public operation.
 
 ### Resultant and discriminant
 
-`UnivariatePolynomial<F: EuclideanDomain>` exposes Brown's PRS resultant and the default Lazard-Ducos resultant (`poly/resultant.rs:91-130`). For coefficients that are integer or rational multivariate polynomials, specialized public CRT reconstruction is available (`poly/resultant.rs:581-610,735-761`); over a coefficient field there is `resultant_euclidean` (`poly/resultant.rs:789-810`). The default documents why Ducos is attractive for multivariate-polynomial coefficients (`poly/resultant.rs:101-108`).
+`UnivariatePolynomial<F: EuclideanDomain>` exposes Brown's PRS resultant and
+the generic Lazard-Ducos resultant. For rational multivariate-polynomial
+coefficients the maintained patch adds public `resultant_ducos_integer`, which
+clears scalar denominators and global contents once before using that current
+integer kernel, and `resultant_auto`, which owns the representation-specific
+choice between integer Ducos and CRT. Specialized public CRT reconstruction
+remains available; over a coefficient field there is `resultant_euclidean`.
 
-`Poly::resultant` already calls `to_univariate(variable).resultant(...)` (`src/core/poly.rs:452-460`), so it is already using the improved vendored code. **WRAP** it. Benchmark the default against `resultant_crt()` on LR workloads rather than assuming one wins; record degree/term/coefficient-size regimes.
+Hyperbolica's `Poly` stores rational rather than integer coefficients. A
+symbolized LTO strategy probe at Symbolica `dev_poly` revision `76e3eb6`
+therefore compared the public kernels in that actual representation. CRT was
+6.2x faster on the locked five-variable dense fixture (`1.812 s` versus
+`11.257 s`), 7.2x faster on Symbolica's dense outer-degree 7/6 fixture
+(`0.0247 s` versus `0.178 s`), and 6.5x faster on Symbolica's deliberately
+lacunary outer-degree 18/11 fixture (`0.166 s` versus `1.069 s`). The direct
+Ducos profile spent 28.8% of samples in integer GCD and another 49.1% in
+rational-field multiply/add/accumulate operations. Those repeated fraction
+normalizations do not occur in Symbolica's historical integer-polynomial
+Ducos-versus-FLINT table.
+
+The missing like-for-like comparison was FLINT's actual rational-polynomial
+route: split each input into a rational content and primitive integer
+polynomial, run integer Ducos, then restore
+`content(a)^deg(b) content(b)^deg(a)`. The new public Symbolica method follows
+that route and measured 0.413 s median cold wall on the locked fixture, versus
+1.823 s for CRT and 10.873 s for direct rational Ducos. `Poly::resultant` now
+uses `Auto` and delegates to Symbolica's rational-coefficient selector. Its
+temporary compatibility rule selects integer Ducos through a term-product of
+2000 and CRT above it, matching HyperFLINT's coefficient-swell guard. This is
+an internal ownership improvement analogous to `PolynomialGCD`, not a claim
+that total term count is a universal crossover model. **WRAP, implemented.**
+Direct rational Ducos, Brown, primitive PRS, and CRT remain explicit strategy
+hooks; deterministic bounded tests require every backend to agree.
 
 No public `discriminant` method was found in the selected snapshot. Hyperbolica
 therefore composes it from native derivative, resultant, and leading
@@ -404,7 +439,7 @@ No public exact-square predicate was found. The helper named `exact_square_root`
 
 Native RP functionality and bounds:
 
-- `inv`, `pow`, and `gcd` require `R: EuclideanDomain + PolynomialGCD<E>` and a matching `FromNumeratorAndDenominator` (`domains/rational_polynomial.rs:526-570`). In the selected `vendor/symbolica-src` snapshot, native `pow` uses exponentiation by squaring (`domains/rational_polynomial.rs:540-565`). Retain only the thin checked wrapper for signed exponents and zero inversion; it should delegate nonnegative magnitudes to this public native implementation rather than duplicate its power algorithm.
+- `inv`, `pow`, and `gcd` require `R: EuclideanDomain + PolynomialGCD<E>` and a matching `FromNumeratorAndDenominator` (`domains/rational_polynomial.rs:526-570`). Hyperbolica's recorded `dev_poly` patch makes native `pow` use exponentiation by squaring (`domains/rational_polynomial.rs:540-574`). Retain only the thin checked wrapper for signed exponents and zero inversion; it should delegate nonnegative magnitudes to this public native implementation rather than duplicate its power algorithm.
 - `evaluate` exists only for `R: Field` (`domains/rational_polynomial.rs:713-720`). Integer-backed RP evaluation must use `evaluate_with_coeff_map<U: Field>` (`domains/rational_polynomial.rs:722-737`).
 - addition computes a denominator GCD, chooses a smaller multiplication arrangement, and removes the residual common factor (`domains/rational_polynomial.rs:1051-1100`); multiplication cross-cancels numerator/denominator pairs (`domains/rational_polynomial.rs:1136-1177`). These duplicate `Rat::try_add` and `Rat::try_mul` (`src/core/rat.rs:151-189`).
 - native quotient-rule `derivative` is public (`domains/rational_polynomial.rs:1193-1222`) and duplicates `Rat::derivative`.
@@ -435,13 +470,14 @@ The native factorized type exposes numerator/coefficient/factor storage (`domain
 - `pow` is repeated multiplication with a binary-exponentiation TODO (`domains/factorized_rational_polynomial.rs:740-761`);
 - no public derivative was found.
 
-The pinned snapshot also had a correctness defect in the field trait:
+Pristine `dev_poly` still has a correctness defect in the field trait:
 `FactorizedRationalPolynomialField::is_one` checked `numerator`, denominator
 factors, and `denom_coeff` but omitted `numer_coeff`, so a scalar such as `2`
-was classified as one through the field API. The tracked vendor patch adds that
-one missing predicate and a focused in-module regression; the inherent value
-predicate already had the correct four-part check. The patch is recorded in
-`vendor/SYMBOLICA_SNAPSHOT.md`.
+was classified as one through the field API. The recorded checkout patch adds
+that one missing predicate and a focused in-module regression; the inherent
+value predicate already had the correct four-part check. The patch is recorded
+in `vendor/SYMBOLICA_SNAPSHOT.md` and
+`vendor/symbolica-dev_poly.patch`.
 
 Bare rational production ingress uses public
 `AtomCore::try_to_factorized_rational_polynomial(&Q, &Z, Some(var_map))`
@@ -564,7 +600,7 @@ The pure-Symbolica port should map it as follows:
 | Euler step | Symbolica API | Verdict |
 |---|---|---|
 | integer polynomial factors/derivatives/products/evaluation | `MultivariatePolynomial<IntegerRing,u16>` derivative, multiplication, and typed `replace`/`replace_all` | **REPLACE** all FLINT polynomial use. |
-| specialize coefficients modulo an odd prime | `Zp::new(p)` (`vendor/symbolica-src/lib/numerica/src/domains/finite_field.rs:34-37,197-230`) and polynomial `map_coeff`; Atom can also convert directly with `to_polynomial(&Zp, ...)` as shown in `poly/groebner.rs:1-43` | **REPLACE** FLINT/nmod conversion. |
+| specialize coefficients modulo an odd prime | `Zp::new(p)` (`vendor/symbolica/lib/numerica/src/domains/finite_field.rs:34-37,197-230`) and polynomial `map_coeff`; Atom can also convert directly with `to_polynomial(&Zp, ...)` as shown in `poly/groebner.rs:1-43` | **REPLACE** FLINT/nmod conversion. |
 | choose a root of the now-univariate constraint | factor the lex-order `MultivariatePolynomial<Zp,...>` through public `Factorize`; select a degree-one factor and compute `-c0/c1` with field operations. Finite-field `Factorize` is implemented in `poly/factor.rs:4560-4610` | **REPLACE** `nmod_poly_roots`, preserving the matched-prime/retry policy. Do not use complex `UnivariatePolynomial::roots`; that API is numerical. |
 | grevlex GB | reorder generators to `GrevLexOrder`, then `GroebnerBasis::new(&system,false)` | **REPLACE** the `msolve` subprocess, temp files, serializer, parser, and spawn circuit breaker. |
 | leading exponent vectors | `gb.system.iter().map(|p| p.max_exp())`; `max_exp` is public (`poly/polynomial.rs:2075-2087`) | **REPLACE** parsed msolve terms. |
@@ -609,7 +645,8 @@ shuffle | hyperlog | multiple polylog | MPL | MZV | multiple zeta |
 iterated integral | Hlog | fibration | linear reducibility
 ```
 
-Search scope was `vendor/symbolica-src/src`, `vendor/symbolica-src/tests`, and `vendor/symbolica-src/examples` in this exact snapshot. Therefore:
+Search scope was `vendor/symbolica/src`, `vendor/symbolica/tests`, and
+`vendor/symbolica/examples` at the audited revision. Therefore:
 
 - `algebra/shuffle.rs`, word concatenation/collection/regularization: **RETAIN**;
 - Hlog/MPL differentiation, conversion, summation, and series: **RETAIN**, while exposing them through fixed Symbolica heads/hooks;
@@ -668,7 +705,7 @@ This table is deliberately exhaustive at module granularity. “Native primitive
 | P1 | `Poly` string substitute/evaluate and bridge reparsing | typed polynomial `replace`/evaluation | **Implemented.** Production APIs take `Rational`/`Integer`; string conversion exists only in the JSON wire adapter. Criterion cases cover sparse substitution/evaluation. |
 | P1 | manual primitive polynomial loop | polynomial `.integrate` | **Implemented.** Exact field division is native; derivative round-trip tests include sparse and parameter-denominator cases. |
 | P1 | Euler external GB/process parser | `Zp` + native F4 `GroebnerBasis` | Expected very large orchestration win; kernel comparison unknown; staircase/domain policy remains. |
-| P1 | single unqualified resultant kernel | public improved Ducos, Brown PRS, primitive PRS, and rational-coefficient CRT (`poly/resultant.rs:91-99,508-589,735-761`) | **WRAP, implemented:** Ducos remains the explicit production default; strategy hooks, deterministic bounded equality tests, and Criterion cases prevent heuristic dispatch without corpus evidence. |
+| P1 | single unqualified resultant kernel | public improved Ducos, maintained rational-to-integer Ducos adapter, Brown PRS, primitive PRS, and rational-coefficient CRT | **WRAP, implemented:** Symbolica internally selects guarded integer-associate Ducos or CRT for the production default; explicit strategy hooks, deterministic bounded equality tests, Criterion cases, and the dense/lacunary strategy example retain reproducible backend evidence. |
 | P2 | custom parser as public algebra parser | `Atom::parse` + Atom traversal | Removes duplicate grammar and string variable scans; preserve explicit legacy compatibility if required. |
 | P2 | general Atom tree rewrite/scanning | `Pattern`, `Replacement`, `replace_map`, `Transformer` | Correctness/maintainability gain; benchmark hot rewrites before using patterns inside polynomial loops. |
 | P2 | manual general-expression derivative | `AtomCore::derivative` plus registered callbacks | Consistent chain rule; typed structured derivative remains. |
@@ -708,7 +745,7 @@ path must have a corpus showing why.
 
 Before implementing any additional CAS algorithm, search all of:
 
-1. public re-exports in `vendor/symbolica-src/src/lib.rs` and `prelude`;
+1. public re-exports in `vendor/symbolica/src/lib.rs` and `prelude`;
 2. the relevant `atom/core.rs`, `poly/**`, `domains/**`, `solve.rs`, `transformer.rs`, and `transcendental.rs` implementation;
 3. in-tree tests/examples for behavior and unsupported cases;
 4. trait bounds and feature gates at the method's actual `impl`, not only its name.

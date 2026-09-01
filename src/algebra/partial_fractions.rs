@@ -1,11 +1,14 @@
 use symbolica::domains::rational_polynomial::FromNumeratorAndDenominator;
-use symbolica::prelude::Z;
+use symbolica::prelude::{RationalPolynomialField, Z};
 
 use crate::core::{NativeRat, Poly, Rat};
 use crate::error::{Error, Result};
 
 use super::algebraic_introduction::introduce_quadratic;
 use super::algebraic_letters::join_algebraic_letter_session;
+use super::linear_factors::{
+    LinearFactor, LinearFactorOptions, linear_factors, linear_factors_with_options,
+};
 
 mod factored;
 
@@ -97,24 +100,303 @@ fn nonlinear_denominator_error(base: &Rat, variable: usize, degree: i64) -> Erro
     ))
 }
 
-/// Compute a univariate partial-fraction decomposition using Symbolica's
-/// factored-denominator `apart` implementation.
+fn add_rats(left: &Rat, right: &Rat) -> Result<Rat> {
+    if left.is_zero() {
+        Ok(right.clone())
+    } else if right.is_zero() {
+        Ok(left.clone())
+    } else {
+        left.try_add(right)
+    }
+}
+
+fn sub_rats(left: &Rat, right: &Rat) -> Result<Rat> {
+    if right.is_zero() {
+        Ok(left.clone())
+    } else if left.is_zero() {
+        Ok(right.negated())
+    } else {
+        left.try_sub(right)
+    }
+}
+
+fn mul_rats(left: &Rat, right: &Rat) -> Result<Rat> {
+    if left.is_zero() || right.is_zero() {
+        Ok(Rat::zero(left.ctx().clone()))
+    } else if left.is_one() {
+        Ok(right.clone())
+    } else if right.is_one() {
+        Ok(left.clone())
+    } else {
+        left.try_mul(right)
+    }
+}
+
+/// Multiply a truncated power series by `t + constant` in place.
+fn multiply_by_shifted_linear(
+    coefficients: &mut [Rat],
+    constant: &Rat,
+    degree: usize,
+) -> Result<usize> {
+    if coefficients.is_empty() {
+        return Ok(0);
+    }
+
+    let new_degree = degree.saturating_add(1).min(coefficients.len() - 1);
+    for exponent in (1..=new_degree).rev() {
+        let scaled = if exponent <= degree {
+            mul_rats(&coefficients[exponent], constant)?
+        } else {
+            Rat::zero(constant.ctx().clone())
+        };
+        coefficients[exponent] = add_rats(&scaled, &coefficients[exponent - 1])?;
+    }
+    coefficients[0] = mul_rats(&coefficients[0], constant)?;
+    Ok(new_degree)
+}
+
+/// Return the first `terms` coefficients of `polynomial(pole + t)`.
+fn shifted_polynomial_series(
+    polynomial: &Poly,
+    variable: usize,
+    pole: &Rat,
+    terms: usize,
+) -> Result<Vec<Rat>> {
+    let mut shifted = vec![Rat::zero(polynomial.ctx().clone()); terms];
+    if terms == 0 || polynomial.is_zero() {
+        return Ok(shifted);
+    }
+
+    let degree = usize::try_from(polynomial.degree(variable)?)
+        .map_err(|_| Error::InvalidInput("negative polynomial degree".into()))?;
+    let mut shifted_degree = 0;
+    for exponent in (0..=degree).rev() {
+        if exponent != degree {
+            shifted_degree = multiply_by_shifted_linear(&mut shifted, pole, shifted_degree)?;
+        }
+        let coefficient = Rat::from_poly(polynomial.coefficient_of(variable, exponent as i64)?);
+        shifted[0] = add_rats(&shifted[0], &coefficient)?;
+    }
+    Ok(shifted)
+}
+
+/// Fast exact decomposition for proper fractions whose denominator splits
+/// completely into linear factors over the current rational-function field.
 ///
-/// Denominator multiplicities are taken directly from Symbolica's
-/// `(numerator, denominator_base, exponent)` output.  This avoids expanding
-/// powers merely to recover them again and keeps `coefs` in HyperFLINT's
+/// At a pole `a` of multiplicity `m`, write
+///
+/// `f(a+t) = t^-m * N(a+t) / G(a+t)`,
+///
+/// where `G = D/(x-a)^m`.  Only the first `m` Taylor coefficients of `N/G`
+/// are needed.  Building `G(a+t)` from the already factored denominator and
+/// solving the triangular Cauchy product avoids the much larger global linear
+/// system used by a general-purpose `apart` implementation.
+fn try_linear_partial_fractions(
+    function: &Rat,
+    variable: usize,
+) -> Result<Option<PartialFractionization>> {
+    let ctx = function.ctx().clone();
+    let numerator_degree = function.numerator().degree(variable)?;
+    let denominator_degree = function.denominator().degree(variable)?;
+    if numerator_degree >= denominator_degree {
+        return Ok(None);
+    }
+
+    let factorization = linear_factors(function.denominator(), variable)?;
+    if !factorization.nonlinear.is_empty() || factorization.linear.is_empty() {
+        return Ok(None);
+    }
+
+    // A square-free factorization should already have one entry per distinct
+    // pole. Merge defensively so a zero pole difference can never make the
+    // local cofactor's constant term vanish.
+    let mut factors: Vec<LinearFactor> = Vec::with_capacity(factorization.linear.len());
+    for factor in factorization.linear {
+        if let Some(existing) = factors
+            .iter_mut()
+            .find(|existing| existing.pole.equal(&factor.pole))
+        {
+            existing.multiplicity = existing
+                .multiplicity
+                .checked_add(factor.multiplicity)
+                .ok_or_else(|| {
+                    Error::InvalidInput("partial-fraction multiplicity overflow".into())
+                })?;
+        } else {
+            factors.push(factor);
+        }
+    }
+
+    let denominator_constant = Rat::from_poly(factorization.constant);
+    let mut output = PartialFractionization {
+        polynomial_part: Rat::zero(ctx.clone()),
+        poles: Vec::with_capacity(factors.len()),
+    };
+
+    for (pole_index, factor) in factors.iter().enumerate() {
+        let terms = factor.multiplicity;
+        let numerator_series =
+            shifted_polynomial_series(function.numerator(), variable, &factor.pole, terms)?;
+
+        let mut cofactor_series = vec![Rat::zero(ctx.clone()); terms];
+        cofactor_series[0] = denominator_constant.clone();
+        let mut cofactor_degree = 0;
+        for (other_index, other) in factors.iter().enumerate() {
+            if pole_index == other_index {
+                continue;
+            }
+            let pole_difference = sub_rats(&factor.pole, &other.pole)?;
+            if pole_difference.is_zero() {
+                // This can only arise if an exotic factorization presents the
+                // same root in non-identical canonical forms. Let native apart
+                // handle that representation instead of dividing by zero.
+                return Ok(None);
+            }
+            for _ in 0..other.multiplicity {
+                cofactor_degree = multiply_by_shifted_linear(
+                    &mut cofactor_series,
+                    &pole_difference,
+                    cofactor_degree,
+                )?;
+            }
+        }
+
+        if cofactor_series[0].is_zero() {
+            return Ok(None);
+        }
+
+        // N/G = h_0 + h_1*t + ... modulo t^m. The coefficient h_n
+        // multiplies 1/(x-a)^(m-n), hence the reversal below.
+        let mut quotient_series = Vec::with_capacity(terms);
+        for exponent in 0..terms {
+            let mut value = numerator_series[exponent].clone();
+            for cofactor_exponent in 1..=exponent {
+                let product = mul_rats(
+                    &cofactor_series[cofactor_exponent],
+                    &quotient_series[exponent - cofactor_exponent],
+                )?;
+                value = sub_rats(&value, &product)?;
+            }
+            quotient_series.push(value.try_div(&cofactor_series[0])?);
+        }
+
+        let mut coefs = vec![Rat::zero(ctx.clone()); terms];
+        for (series_exponent, coefficient) in quotient_series.into_iter().enumerate() {
+            coefs[terms - series_exponent - 1] = coefficient;
+        }
+        output.poles.push(PartialFractionPole {
+            pole: factor.pole.clone(),
+            multiplicity: factor.multiplicity,
+            coefs,
+        });
+    }
+
+    canonicalize_poles(&mut output);
+    Ok(Some(output))
+}
+
+/// Divide in the selected variable over the rational-function coefficient
+/// field, returning the polynomial quotient and the proper remainder.
+///
+/// Multivariate polynomial division is not sufficient here: the leading
+/// coefficients may depend on the other variables and therefore need to be
+/// inverted. This mirrors the quotient extraction used by Symbolica's native
+/// rational-polynomial `apart` implementation.
+fn polynomial_part_and_proper_remainder(function: &Rat, variable: usize) -> Result<(Rat, Rat)> {
+    if function.numerator().degree(variable)? < function.denominator().degree(variable)? {
+        return Ok((Rat::zero(function.ctx().clone()), function.clone()));
+    }
+
+    let native = function.native();
+    let coefficient_field = RationalPolynomialField::from_poly(&native.numerator);
+    let numerator = native.numerator.to_univariate(variable).map_coeff(
+        |coefficient| coefficient.clone().into(),
+        coefficient_field.clone(),
+    );
+    let denominator = native
+        .denominator
+        .to_univariate(variable)
+        .map_coeff(|coefficient| coefficient.clone().into(), coefficient_field);
+    let (quotient, _) = numerator.quot_rem(&denominator);
+    let polynomial_part =
+        Rat::from_native(function.ctx().clone(), NativeRat::from_univariate(quotient))?;
+    let proper_remainder = function.try_sub(&polynomial_part)?;
+    Ok((polynomial_part, proper_remainder))
+}
+
+/// Replace every admissible quadratic denominator factor in one operation and
+/// decompose the resulting fully split rational function.
+///
+/// Splitting isolated components of an `apart` result is not equivalent over
+/// the independent formal `Wm`/`Wp` indeterminates: coefficients of the other
+/// components were computed using the original quadratic and only become
+/// equivalent after applying the registered Vieta relations. Constructing the
+/// entire split denominator first keeps the returned decomposition exactly
+/// valid in the formal-symbol field, without relying on a later reduction.
+fn try_algebraic_linear_partial_fractions(
+    function: &Rat,
+    variable: usize,
+    forbidden_variables: &[usize],
+) -> Result<Option<PartialFractionization>> {
+    let (polynomial_part, proper_remainder) =
+        polynomial_part_and_proper_remainder(function, variable)?;
+    if proper_remainder.is_zero() {
+        return Ok(Some(PartialFractionization {
+            polynomial_part,
+            poles: Vec::new(),
+        }));
+    }
+
+    let factorization = linear_factors_with_options(
+        proper_remainder.denominator(),
+        variable,
+        &LinearFactorOptions {
+            introduce_algebraic_letters: true,
+            forbidden_variables,
+        },
+    )?;
+    if !factorization.nonlinear.is_empty() || factorization.linear.is_empty() {
+        return Ok(None);
+    }
+
+    let ctx = function.ctx().clone();
+    let x = Rat::from_poly(Poly::generator(ctx.clone(), variable)?);
+    let mut split_denominator = Rat::from_poly(factorization.constant);
+    for factor in factorization.linear {
+        let exponent = i64::try_from(factor.multiplicity)
+            .map_err(|_| Error::InvalidInput("partial-fraction exponent overflow".into()))?;
+        split_denominator = split_denominator.try_mul(&x.try_sub(&factor.pole)?.pow(exponent)?)?;
+    }
+
+    let split_function =
+        Rat::from_poly(proper_remainder.numerator().clone()).try_div(&split_denominator)?;
+    let Some(mut decomposition) = try_linear_partial_fractions(&split_function, variable)? else {
+        return Ok(None);
+    };
+    decomposition.polynomial_part = polynomial_part;
+    Ok(Some(decomposition))
+}
+
+/// Compute a univariate partial-fraction decomposition with Symbolica-backed
+/// exact arithmetic.
+///
+/// Completely linear denominators use the Taylor/Cauchy recurrence below.
+/// Remaining inputs fall back to Symbolica's factored-denominator `apart`
+/// output. Both routes retain multiplicities and keep `coefs` in HyperFLINT's
 /// ascending order `c_1, ..., c_m`.
 pub fn partial_fractions(function: &Rat, variable: usize) -> Result<PartialFractionization> {
     partial_fractions_with_options(function, variable, &PartialFractionOptions::default())
 }
 
-/// Compute a Symbolica-native decomposition, optionally extending the
+/// Compute a Symbolica-backed decomposition, optionally extending the
 /// coefficient alphabet by formal roots of irreducible quadratics.
 ///
-/// Symbolica's native `apart_factored_denominators` remains the only partial-
-/// fraction engine. For a quadratic component, this adapter replaces its
-/// denominator base by the exact formal factorization
-/// `lc*(x-Wm(i))*(x-Wp(i))` and invokes the same native engine again.
+/// Fractions with a completely linear denominator use an exact local
+/// Taylor/Cauchy recurrence over Symbolica rational functions. In algebraic
+/// mode, an improper input is first divided over the rational-function
+/// coefficient field, then every quadratic in the proper remainder is split
+/// together. Inputs that remain nonlinear retain Symbolica's native
+/// `apart_factored_denominators` fallback.
 pub fn partial_fractions_with_options(
     function: &Rat,
     variable: usize,
@@ -141,6 +423,16 @@ pub fn partial_fractions_with_options(
     if denominator_degree <= 0 {
         output.polynomial_part = function.clone();
         return Ok(output);
+    }
+
+    if options.introduce_algebraic_letters {
+        if let Some(linear) =
+            try_algebraic_linear_partial_fractions(function, variable, options.forbidden_variables)?
+        {
+            return Ok(linear);
+        }
+    } else if let Some(linear) = try_linear_partial_fractions(function, variable)? {
+        return Ok(linear);
     }
 
     for (numerator, denominator_base, exponent) in
@@ -307,6 +599,13 @@ mod tests {
         value
     }
 
+    fn assert_cross_product_equal(left: &Rat, right: &Rat) {
+        assert_eq!(
+            left.native().numerator.clone() * &right.native().denominator,
+            right.native().numerator.clone() * &left.native().denominator
+        );
+    }
+
     fn algebraic_context() -> std::sync::Arc<PolyCtx> {
         let variables = ["pf_alg_x", "pf_alg_a", "pf_alg_b", "pf_alg_z"]
             .into_iter()
@@ -429,6 +728,43 @@ mod tests {
     }
 
     #[test]
+    fn mixed_repeated_function_indeterminate_poles_reconstruct_exactly() {
+        let ctx = algebraic_context();
+        let atoms = crate::symbols::algebraic_atoms(1);
+        let minus_index = ctx.index_of_indeterminate(atoms.minus.as_view()).unwrap();
+        let plus_index = ctx.index_of_indeterminate(atoms.plus.as_view()).unwrap();
+        let x = Rat::from_poly(Poly::generator(ctx.clone(), 0).unwrap());
+        let b = Rat::from_poly(Poly::generator(ctx.clone(), 2).unwrap());
+        let minus = Rat::from_poly(Poly::generator(ctx.clone(), minus_index).unwrap());
+        let plus = Rat::from_poly(Poly::generator(ctx.clone(), plus_index).unwrap());
+        let numerator =
+            Rat::parse(ctx.clone(), "pf_alg_x^4+pf_alg_a*pf_alg_x^2+pf_alg_b+1").unwrap();
+        let denominator = x
+            .try_sub(&minus)
+            .unwrap()
+            .pow(4)
+            .unwrap()
+            .try_mul(&x.try_sub(&plus).unwrap().pow(3).unwrap())
+            .unwrap()
+            .try_mul(&x.try_sub(&b).unwrap().pow(2).unwrap())
+            .unwrap();
+        let function = numerator.try_div(&denominator).unwrap();
+
+        let result = partial_fractions(&function, 0).unwrap();
+        let mut multiplicities = result
+            .poles
+            .iter()
+            .map(|pole| pole.multiplicity)
+            .collect::<Vec<_>>();
+        multiplicities.sort_unstable();
+        assert_eq!(multiplicities, [2, 3, 4]);
+
+        let reconstructed = reconstruct(&result, 0);
+        assert_cross_product_equal(&reconstructed, &function);
+        assert_eq!(reconstructed, function);
+    }
+
+    #[test]
     fn invalid_variable_is_reported_before_trivial_returns() {
         let ctx = PolyCtx::new(["x"]).unwrap();
         let error = partial_fractions(&Rat::zero(ctx), 1).unwrap_err();
@@ -506,7 +842,101 @@ mod tests {
             .try_mul(&x.try_sub(&b).unwrap())
             .unwrap();
         let expected = numerator.try_div(&split_denominator).unwrap();
-        assert_eq!(reconstruct(&result, 0), expected);
+        let reconstructed = reconstruct(&result, 0);
+        assert_cross_product_equal(&reconstructed, &expected);
+        assert_eq!(reconstructed, expected);
+    }
+
+    #[test]
+    fn multiple_quadratics_with_a_repeated_pair_are_split_as_one_formal_rational_function() {
+        let _session = begin_algebraic_letter_session().unwrap();
+        let ctx = algebraic_context();
+        let numerator = Rat::parse(ctx.clone(), "pf_alg_x+pf_alg_b").unwrap();
+        let function = Rat::parse(
+            ctx.clone(),
+            "(pf_alg_x+pf_alg_b)/((pf_alg_x^2-pf_alg_a)^2*(pf_alg_z*pf_alg_x^2+pf_alg_x+pf_alg_b)*(pf_alg_x-pf_alg_b))",
+        )
+        .unwrap();
+        let result = partial_fractions_with_options(&function, 0, &algebraic_options(&[])).unwrap();
+
+        let mut multiplicities = result
+            .poles
+            .iter()
+            .map(|pole| pole.multiplicity)
+            .collect::<Vec<_>>();
+        multiplicities.sort_unstable();
+        assert_eq!(multiplicities, [1, 1, 1, 2, 2]);
+        assert_eq!(AlgebraicLetterTable::global().size().unwrap(), 2);
+
+        let x = Rat::from_poly(Poly::generator(ctx.clone(), 0).unwrap());
+        let z = Rat::from_poly(Poly::generator(ctx.clone(), 3).unwrap());
+        let mut split_denominator = z;
+        for pole in &result.poles {
+            split_denominator = split_denominator
+                .try_mul(
+                    &x.try_sub(&pole.pole)
+                        .unwrap()
+                        .pow(pole.multiplicity as i64)
+                        .unwrap(),
+                )
+                .unwrap();
+        }
+        let expected = numerator.try_div(&split_denominator).unwrap();
+        let reconstructed = reconstruct(&result, 0);
+        assert_cross_product_equal(&reconstructed, &expected);
+        assert_eq!(reconstructed, expected);
+    }
+
+    #[test]
+    fn improper_multiple_quadratics_preserve_the_polynomial_part_before_splitting() {
+        let _session = begin_algebraic_letter_session().unwrap();
+        let ctx = algebraic_context();
+        let function = Rat::parse(
+            ctx.clone(),
+            "pf_alg_x+1/((pf_alg_x^2-pf_alg_a)*(pf_alg_x^2-pf_alg_b))",
+        )
+        .unwrap();
+        let result = partial_fractions_with_options(&function, 0, &algebraic_options(&[])).unwrap();
+
+        assert_eq!(
+            result.polynomial_part,
+            Rat::parse(ctx.clone(), "pf_alg_x").unwrap()
+        );
+        assert_eq!(result.poles.len(), 4);
+        assert!(result.poles.iter().all(|pole| pole.multiplicity == 1));
+        assert_eq!(AlgebraicLetterTable::global().size().unwrap(), 2);
+
+        let x = Rat::from_poly(Poly::generator(ctx.clone(), 0).unwrap());
+        let mut split_denominator = Rat::one(ctx.clone());
+        for pole in &result.poles {
+            split_denominator = split_denominator
+                .try_mul(&x.try_sub(&pole.pole).unwrap())
+                .unwrap();
+        }
+        let expected = x
+            .try_add(&Rat::one(ctx).try_div(&split_denominator).unwrap())
+            .unwrap();
+        assert_cross_product_equal(&reconstruct(&result, 0), &expected);
+    }
+
+    #[test]
+    fn repeated_linear_pole_keeps_structural_zero_coefficients() {
+        let ctx = PolyCtx::new(["x", "a"]).unwrap();
+        let function = Rat::parse(ctx.clone(), "1/(x-a)^4").unwrap();
+        let result = partial_fractions(&function, 0).unwrap();
+
+        assert_eq!(result.poles.len(), 1);
+        assert_eq!(result.poles[0].multiplicity, 4);
+        assert_eq!(
+            result.poles[0].coefs,
+            vec![
+                Rat::zero(ctx.clone()),
+                Rat::zero(ctx.clone()),
+                Rat::zero(ctx.clone()),
+                Rat::one(ctx),
+            ]
+        );
+        assert_cross_product_equal(&reconstruct(&result, 0), &function);
     }
 
     #[test]

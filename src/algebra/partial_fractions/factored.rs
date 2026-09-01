@@ -7,6 +7,7 @@ use super::{
     PartialFractionOptions, PartialFractionization, canonicalize_poles, merge_decomposition,
     partial_fractions_with_options,
 };
+use crate::algebra::algebraic_letters::join_algebraic_letter_session;
 
 /// Decompose a [`FactoredRat`] blockwise when its target-dependent denominator
 /// blocks are pairwise coprime.
@@ -21,20 +22,23 @@ pub fn partial_fractions_factored(
     partial_fractions_factored_with_options(function, variable, &PartialFractionOptions::default())
 }
 
-/// Decompose a deferred denominator using only Symbolica's public partial-
-/// fraction engines.
+/// Decompose a deferred denominator with Symbolica-backed exact arithmetic and
+/// public factorization/partial-fraction primitives.
 ///
-/// First, `FactorizedRationalPolynomial::apart` separates already-known
-/// pairwise-coprime target-dependent denominator blocks. Hyperbolica eagerly
-/// materializes each resulting component (one target-dependent block plus all
-/// target-independent factors) and then hands it to
-/// `RationalPolynomial::apart_factored_denominators`, through the ordinary
-/// adapter, for irreducible factors and repeated-pole coefficients. The pinned
-/// native `apart` still expands powered blocks and intermediate suffix products
-/// internally; callers must treat this as a benchmarked blockwise route, not
-/// as a promise that every intermediate remains factored. If callers supplied
-/// overlapping target-dependent blocks, the function instead materializes the
-/// complete rational function once so correctness is unchanged.
+/// With algebraic-letter introduction enabled, Hyperbolica materializes the
+/// complete function once so all quadratic blocks are split in one formal
+/// coefficient field. Otherwise, `FactorizedRationalPolynomial::apart`
+/// separates already-known pairwise-coprime target-dependent denominator
+/// blocks. Hyperbolica eagerly materializes each resulting component (one
+/// target-dependent block plus all target-independent factors) and hands it to
+/// the ordinary adapter. Linear components use its Taylor/Cauchy recurrence;
+/// nonlinear components fall back to
+/// `RationalPolynomial::apart_factored_denominators`. The pinned native `apart`
+/// still expands powered blocks and intermediate suffix products internally;
+/// callers must treat this as a benchmarked blockwise route, not as a promise
+/// that every intermediate remains factored. If callers supplied overlapping
+/// target-dependent blocks, the function instead materializes the complete
+/// rational function once so correctness is unchanged.
 pub fn partial_fractions_factored_with_options(
     function: &FactoredRat,
     variable: usize,
@@ -42,6 +46,19 @@ pub fn partial_fractions_factored_with_options(
 ) -> Result<PartialFractionization> {
     if variable >= function.ctx().len() {
         return Err(Error::UnknownVariable(variable.to_string()));
+    }
+
+    let _session = options
+        .introduce_algebraic_letters
+        .then(join_algebraic_letter_session)
+        .transpose()?;
+    if options.introduce_algebraic_letters {
+        // Algebraic roots from separate blockwise decompositions live in one
+        // formal coefficient field, so the blocks cannot safely be split in
+        // isolation. Materialize once and let the ordinary adapter replace
+        // every admissible quadratic in one operation while this session is
+        // held through the complete result construction.
+        return partial_fractions_with_options(&function.materialize()?, variable, options);
     }
 
     let Some(components) = function.apart_components(variable)? else {
@@ -64,7 +81,13 @@ pub fn partial_fractions_factored_with_options(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::algebra::algebraic_letters::{
+        AlgebraicLetterTable, DEFAULT_ALGEBRAIC_LETTER_POOL_SIZE, begin_algebraic_letter_session,
+        build_algebraic_letter_atom_list,
+    };
     use crate::core::{Poly, PolyCtx};
+    use crate::symbols::SYMBOL_NAMESPACE;
+    use symbolica::prelude::Symbol;
 
     fn reconstruct(result: &PartialFractionization, variable: usize) -> Rat {
         let ctx = result.polynomial_part.ctx().clone();
@@ -83,6 +106,24 @@ mod tests {
             }
         }
         value
+    }
+
+    fn assert_cross_product_equal(left: &Rat, right: &Rat) {
+        assert_eq!(
+            left.native().numerator.clone() * &right.native().denominator,
+            right.native().numerator.clone() * &left.native().denominator
+        );
+    }
+
+    fn algebraic_context() -> std::sync::Arc<PolyCtx> {
+        let variables = ["pf_fact_alg_x", "pf_fact_alg_a", "pf_fact_alg_b"]
+            .into_iter()
+            .map(|name| Symbol::parse(name, SYMBOL_NAMESPACE).unwrap().to_atom());
+        PolyCtx::from_indeterminates(build_algebraic_letter_atom_list(
+            variables,
+            DEFAULT_ALGEBRAIC_LETTER_POOL_SIZE,
+        ))
+        .unwrap()
     }
 
     fn build(
@@ -236,5 +277,38 @@ mod tests {
                 .collect::<Vec<_>>(),
             [1, 2, 3]
         );
+    }
+
+    #[test]
+    fn algebraic_two_quadratic_blocks_are_split_as_one_materialized_function() {
+        let _session = begin_algebraic_letter_session().unwrap();
+        let ctx = algebraic_context();
+        let function = build(
+            &ctx,
+            "1",
+            &[
+                ("pf_fact_alg_x^2-pf_fact_alg_a", 1),
+                ("pf_fact_alg_x^2-pf_fact_alg_b", 1),
+            ],
+        );
+        let options = PartialFractionOptions {
+            introduce_algebraic_letters: true,
+            forbidden_variables: &[],
+        };
+        let result = partial_fractions_factored_with_options(&function, 0, &options).unwrap();
+
+        assert_eq!(result.poles.len(), 4);
+        assert!(result.poles.iter().all(|pole| pole.multiplicity == 1));
+        assert_eq!(AlgebraicLetterTable::global().size().unwrap(), 2);
+
+        let x = Rat::from_poly(Poly::generator(ctx.clone(), 0).unwrap());
+        let mut split_denominator = Rat::one(ctx.clone());
+        for pole in &result.poles {
+            split_denominator = split_denominator
+                .try_mul(&x.try_sub(&pole.pole).unwrap())
+                .unwrap();
+        }
+        let expected = Rat::one(ctx).try_div(&split_denominator).unwrap();
+        assert_cross_product_equal(&reconstruct(&result, 0), &expected);
     }
 }

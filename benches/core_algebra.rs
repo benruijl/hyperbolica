@@ -43,9 +43,10 @@ fn core_algebra(criterion: &mut Criterion) {
     let resultant_right = Poly::parse(ctx.clone(), "x^6+(y-z)*x^4+(s+t)*x^2+y*t-z*s").unwrap();
     let mut resultants = criterion.benchmark_group("polynomial/resultant_strategies");
     for strategy in [
+        ResultantStrategy::Auto,
         ResultantStrategy::Ducos,
+        ResultantStrategy::RationalDucos,
         ResultantStrategy::Brown,
-        ResultantStrategy::Primitive,
         ResultantStrategy::Crt,
     ] {
         resultants.bench_function(format!("{strategy:?}").to_lowercase(), |bench| {
@@ -56,6 +57,9 @@ fn core_algebra(criterion: &mut Criterion) {
             })
         });
     }
+    // Primitive PRS remains a bounded differential-test strategy. On this
+    // parameter-dense input it is too slow for a repeatable Criterion or
+    // `cargo test --all-targets` smoke run.
     resultants.finish();
 
     let rational_left = Rat::parse(ctx.clone(), "(x^4+y^2+z*s+1)/((x+y+1)^2*(z+t+1))").unwrap();
@@ -162,7 +166,8 @@ fn typed_substitution_and_evaluation(criterion: &mut Criterion) {
         Rational::from(7),
         Rational::new(-1, 11),
     ];
-    let integer_point = [1, -2, 3, 7, -1].map(Integer::from);
+    // Keep both denominator factors nonzero: x + y + 1 = 4 and z + t + 2 = 4.
+    let integer_point = [1, 2, 3, 7, -1].map(Integer::from);
 
     let mut group = criterion.benchmark_group("polynomial/typed_exact_ops");
     group.bench_function("sparse_coefficient_60000", |bench| {
@@ -232,17 +237,25 @@ fn algebraic_partial_fractions(criterion: &mut Criterion) {
 
 fn factored_denominator_partial_fractions(criterion: &mut Criterion) {
     let ctx = PolyCtx::new(["x", "a", "b", "c"]).unwrap();
-    let mut factored = FactoredRat::from_poly(
-        Poly::parse(ctx.clone(), "x^13+a*x^11+b*x^8+c*x^5+a*b*x^3+b*c*x+a*b*c+1").unwrap(),
-    );
-    for (base, exponent) in [
-        ("2*x-a", 5),
-        ("x+b", 4),
-        ("3*x+c", 4),
-        ("x+a+b+1", 3),
-        ("2*x+b+c+3", 2),
-        ("x+a+c+5", 1),
-    ] {
+    let numerator = if cfg!(debug_assertions) {
+        "x^3+a*x+b*c+1"
+    } else {
+        "x^13+a*x^11+b*x^8+c*x^5+a*b*x^3+b*c*x+a*b*c+1"
+    };
+    let mut factored = FactoredRat::from_poly(Poly::parse(ctx.clone(), numerator).unwrap());
+    let factors: &[(&str, i64)] = if cfg!(debug_assertions) {
+        &[("2*x-a", 2), ("x+b", 1)]
+    } else {
+        &[
+            ("2*x-a", 5),
+            ("x+b", 4),
+            ("3*x+c", 4),
+            ("x+a+b+1", 3),
+            ("2*x+b+c+3", 2),
+            ("x+a+c+5", 1),
+        ]
+    };
+    for &(base, exponent) in factors {
         factored
             .push_factor(&Poly::parse(ctx.clone(), base).unwrap(), exponent)
             .unwrap();

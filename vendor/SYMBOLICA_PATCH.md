@@ -1,9 +1,53 @@
 # Hyperbolica-maintained Symbolica patches
 
-Hyperbolica carries the two correctness patches below on top of the vendored
-Symbolica source snapshot at commit
-`61f88b381247f5f25dd7832b0286b5e362bd4148`. The other pre-existing local
-changes are catalogued in `SYMBOLICA_SNAPSHOT.md`.
+## Current `dev_poly` patch
+
+The selected dependency is the official `dev_poly` checkout at
+`vendor/symbolica`, audited at
+`76e3eb630abcc4d597463d759a0b40fedb57b764`. Its complete local diff is the
+machine-applicable [`symbolica-dev_poly.patch`](symbolica-dev_poly.patch).
+Apply it from the repository root after creating the checkout:
+
+```sh
+git -C vendor/symbolica apply ../symbolica-dev_poly.patch
+```
+
+The current patch contains three changes:
+
+1. `RationalPolynomial::pow` uses exponentiation by squaring, and the
+   `RationalPolynomialField` implementation delegates to it. Pristine
+   `dev_poly` still performs `e` multiplications. The focused
+   `rational_polynomial_power_uses_exact_binary_exponentiation` test covers
+   exponents 0, 1, and 13 through both APIs.
+2. `FactorizedRationalPolynomialField::is_one` checks `numer_coeff`. Pristine
+   `dev_poly` misclassifies the scalar `2` because its polynomial payload is
+   one and the scalar lives in `numer_coeff`. This can route native factorized
+   partial fractions into monic division with a nonmonic divisor. The focused
+   `field_is_one_checks_the_numerator_coefficient` test and Hyperbolica's
+   factored-partial-fraction suite cover the fix.
+3. `UnivariatePolynomial<PolynomialRing<RationalField, _>>` exposes
+   `resultant_ducos_integer` and `resultant_auto`. The former clears scalar
+   denominators and global integer contents once, runs the checkout's optimized
+   Ducos recurrence over `Z[parameters]`, and restores the exact homogeneous
+   rational scale. The latter owns the coefficient-domain-specific choice
+   between that path and CRT, analogous to Symbolica's internal polynomial-GCD
+   planning; Hyperbolica does not duplicate the guard. Native tests cover the
+   dispatch boundary, denominators, nontrivial contents and signs, swapped odd
+   degrees, zero, constants, and the small-resultant formulas. The existing CRT
+   adapter shares the same primitive-integer conversion.
+
+The exact scalar-content `from_num_den(..., true)` regression and the F4
+same-matrix regression already pass on pristine `dev_poly`, so their old local
+patches are not applied to the selected checkout. Symbolica's derivative still
+uses `do_gcd = false` internally; Hyperbolica performs a targeted scalar
+normalization at that wrapper boundary.
+
+## Archived `symbolica-src` patch record
+
+The sections below record the patches formerly carried on the archived source
+copy at `61f88b381247f5f25dd7832b0286b5e362bd4148`. Paths and commands in this
+archived section intentionally refer to `vendor/symbolica-src`; they are kept
+for provenance and are not instructions for the selected build.
 
 ## Rational-polynomial scalar-content normalization
 

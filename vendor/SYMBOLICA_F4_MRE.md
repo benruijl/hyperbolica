@@ -1,21 +1,20 @@
 # Symbolica F4 same-matrix simplification reproducer
 
-The standalone Rust example
+The archived standalone Rust example
 [`symbolica-src/examples/f4_incomplete_basis_mre.rs`](symbolica-src/examples/f4_incomplete_basis_mre.rs)
 is the minimized regression for an F4 correctness failure that does not use
-any Hyperbolica code. It constructs two binomials in three variables over
-`GF(65521)` in GrevLex order, calls raw `GroebnerBasis::new`, and checks the
-result with Symbolica's exact `GroebnerBasis::is_groebner_basis` verifier. The
-vendored native F4 fix makes the example succeed; removing the pre-matrix basis
-snapshot reproduces the historical failure.
+any Hyperbolica code. The selected official `dev_poly` checkout contains the
+same case as its native `prevent_live_basis_update` unit test. Both construct
+two binomials in three variables over `GF(65521)` in GrevLex order, call raw
+`GroebnerBasis::new`, and check the result with Symbolica's exact
+`GroebnerBasis::is_groebner_basis` verifier.
 
 From the Hyperbolica repository root, run:
 
 ```sh
 export SYMBOLICA_LICENSE='<your Symbolica license>'
-cargo run --manifest-path vendor/symbolica-src/Cargo.toml \
-  --example f4_incomplete_basis_mre \
-  --no-default-features --features integer-malachite,float-astro
+cargo test --manifest-path vendor/symbolica/Cargo.toml --lib \
+  prevent_live_basis_update -- --nocapture
 ```
 
 Without the native fix, F4 fails deterministically:
@@ -33,8 +32,9 @@ let basis = GroebnerBasis::new(&ideal, false);
 assert!(GroebnerBasis::is_groebner_basis(&basis.system));
 ```
 
-The MRE deliberately does not call the vendored `ensure_groebner_basis`
-fallback: the assertion tests the native F4 algorithm itself.
+The MRE deliberately tests the native F4 algorithm itself. The selected
+checkout has no `ensure_groebner_basis` fallback, and Hyperbolica no longer
+needs one for the known defect.
 
 The two input generators are:
 
@@ -89,14 +89,11 @@ other rows produced by their own matrix.
 
 ## Verified environment
 
-- Current Symbolica `dev`: `f9f756250201a13d2b06a5a75b383cb1e522c69f`
-- Hyperbolica's Symbolica source snapshot: `61f88b381247f5f25dd7832b0286b5e362bd4148`
+- Selected Symbolica branch: `dev_poly`
+- Audited revision: `76e3eb630abcc4d597463d759a0b40fedb57b764`
+- Native fix commit: `ec19eeb211685aa216dbd28a4df547cd4c6baca1`
 - Symbolica package version: `2.2.0`
 - Rust: `1.89.0`
-- Unpatched result on both revisions: deterministic assertion failure; the
-  minimized case reproduced in 100/100 consecutive runs
-- Patched result on both revisions: valid basis with the missing fourth
-  polynomial; every input generator reduces to zero. Patched public `dev`
-  passed 100/100 consecutive runs
-- Deterministic randomized verification on the vendored snapshot: 96/96 small
-  systems over `GF(3)`, `GF(5)`, `GF(7)`, `GF(11)`, `GF(101)`, and `GF(65521)`
+- Pristine `dev_poly`: the native regression and unchanged standalone MRE both
+  pass, returning the missing fourth polynomial and preserving the input ideal
+- Hyperbolica with direct `GroebnerBasis::new`: all Euler-system tests pass

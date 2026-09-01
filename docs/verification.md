@@ -66,7 +66,12 @@ within each workload, workload order is deterministically shuffled between
 rounds, and the monotonic interval includes process startup. A CAS-independent
 helper uses `perf_counter_ns` plus POSIX `wait4` to record elapsed, user,
 system, and peak-RSS values. The child starts with an empty environment
-containing only the four recorded thread/banner settings.
+containing only the four recorded thread/banner settings. For Rust invocations
+only, when `SYMBOLICA_LICENSE` is set, the helper selectively inherits that one
+named variable so licensed measurements can still use the sanitized
+environment. The external C++ oracle never receives the credential, and the
+value is neither placed in argv nor written to any evidence artifact. Metadata
+records only two booleans describing credential inheritance, never the value.
 
 Each run writes:
 

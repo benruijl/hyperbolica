@@ -161,6 +161,18 @@ fn constructor_delegates_content_and_polynomial_cancellation_to_symbolica() {
 }
 
 #[test]
+fn constructor_removes_scalar_content_from_disjoint_variables() {
+    let ctx = context();
+    let numerator = Poly::parse(ctx.clone(), "21+63*x^2+21*x^20").unwrap();
+    let denominator = Poly::parse(ctx.clone(), "21+21*y").unwrap();
+
+    assert_eq!(
+        Rat::new(numerator, denominator).unwrap(),
+        Rat::parse(ctx, "(1+3*x^2+x^20)/(1+y)").unwrap()
+    );
+}
+
+#[test]
 fn every_arithmetic_kernel_matches_exact_symbolica_normalization() {
     let ctx = context();
     let left = Rat::parse(ctx.clone(), "(x^3+2*x*y-y)/(x^2-y^2)").unwrap();

@@ -2,11 +2,13 @@
 
 Hyperbolica-authored code is licensed under the MIT License in `LICENSE`.
 
-This source tree also contains and built artifacts statically embed Symbolica.
-Symbolica is not covered by Hyperbolica's MIT license. Its bundled
-`vendor/symbolica-src/License.md` states that copying or distributing any part
-of the Symbolica code requires express prior permission, with separate terms
-for hobbyist/student, professional non-commercial, and commercial use.
+This working tree also contains, and built artifacts statically embed,
+Symbolica. Symbolica is not covered by Hyperbolica's MIT license. The selected
+checkout's `vendor/symbolica/License.md` states that copying or distributing
+any part of the Symbolica code requires express prior permission, with
+separate terms for hobbyist/student, professional non-commercial, and
+commercial use. The archived `vendor/symbolica-src` copy is covered by the
+same separate licensing requirement.
 
 Therefore the repository and Hyperbolica wheels must not be published,
 redistributed, or pushed to a remote repository containing the vendored

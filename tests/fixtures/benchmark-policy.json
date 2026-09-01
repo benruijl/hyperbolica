@@ -39,7 +39,8 @@
       "OMP_NUM_THREADS",
       "OPENBLAS_NUM_THREADS",
       "RAYON_NUM_THREADS",
-      "SYMBOLICA_HIDE_BANNER"
+      "SYMBOLICA_HIDE_BANNER",
+      "SYMBOLICA_LICENSE"
     ],
     "performance_environment": {
       "OMP_NUM_THREADS": "1",
