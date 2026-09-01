@@ -27,7 +27,7 @@ fn run_integration(
     let options = options_or_default(options);
     py.detach(move || integrate_atom(&input, &variables, &options))
         .map(PythonIntegrationResult::new)
-        .map_err(exceptions::integration_error)
+        .map_err(|error| exceptions::integration_error(py, error))
 }
 
 /// Integrate a Symbolica expression over `[0, infinity)` in variable order.
@@ -35,7 +35,8 @@ fn run_integration(
 /// Parameters
 /// ----------
 /// expression:
-///     A native `symbolica.Expression`. It is never converted to text.
+///     A native `hyperbolica.Expression` from the shipped Symbolica kernel.
+///     It is never converted to text.
 /// variables:
 ///     Plain Symbolica symbols in integration order.
 /// options:
@@ -43,20 +44,42 @@ fn run_integration(
 ///
 /// Returns
 /// -------
-/// symbolica.Expression
+/// hyperbolica.Expression
 ///     The normalized exact result.
-#[pyfunction(signature = (expression, variables, options = None))]
+#[pyfunction(
+    signature = (expression, variables, options = None),
+    text_signature = "(expression, variables, options=None)"
+)]
 fn integrate(
     py: Python<'_>,
     expression: &PythonExpression,
     variables: Vec<PythonExpression>,
     options: Option<&PythonIntegrationOptions>,
 ) -> PyResult<PythonExpression> {
-    run_integration(py, expression, &variables, options)?.into_expression()
+    run_integration(py, expression, &variables, options)?.into_expression(py)
 }
 
-/// Integrate and return an inspectable `IntegrationResult`.
-#[pyfunction(signature = (expression, variables, options = None))]
+/// Integrate and return an inspectable exact result.
+///
+/// Parameters
+/// ----------
+/// expression:
+///     A native `hyperbolica.Expression` from the shipped Symbolica kernel.
+/// variables:
+///     Plain shipped Symbolica symbols in integration order.
+/// options:
+///     Optional `IntegrationOptions`.
+///
+/// Returns
+/// -------
+/// IntegrationResult
+///     The returned
+/// `IntegrationResult` retains variables, indeterminates, algebraic-letter
+/// metadata, and the collected term count in addition to its expression.
+#[pyfunction(
+    signature = (expression, variables, options = None),
+    text_signature = "(expression, variables, options=None)"
+)]
 fn integrate_detailed(
     py: Python<'_>,
     expression: &PythonExpression,
@@ -66,9 +89,29 @@ fn integrate_detailed(
     run_integration(py, expression, &variables, options)
 }
 
-/// Lower a Symbolica expression once for repeated integrations or option
-/// sweeps. Mathematical input remains an Atom throughout preparation.
-#[pyfunction(signature = (expression, variables, options = None))]
+/// Lower a Symbolica expression once for repeated integrations or option sweeps.
+///
+/// The returned immutable `PreparedIntegral` owns the lowered input and an
+/// independent copy of `options`. Mathematical input remains a native
+/// Symbolica expression throughout preparation.
+///
+/// Parameters
+/// ----------
+/// expression:
+///     A native `hyperbolica.Expression` from the shipped Symbolica kernel.
+/// variables:
+///     Plain shipped Symbolica symbols in integration order.
+/// options:
+///     Options captured as the prepared object's default integration options.
+///
+/// Returns
+/// -------
+/// PreparedIntegral
+///     Reusable immutable lowered input.
+#[pyfunction(
+    signature = (expression, variables, options = None),
+    text_signature = "(expression, variables, options=None)"
+)]
 fn prepare(
     py: Python<'_>,
     expression: &PythonExpression,
@@ -81,7 +124,7 @@ fn prepare(
     let preparation_options = options.clone();
     py.detach(move || prepare_atom_with_options(&input, &variables, &options))
         .map(|prepared| PythonPreparedIntegral::new(prepared, preparation_options))
-        .map_err(exceptions::integration_error)
+        .map_err(|error| exceptions::integration_error(py, error))
 }
 
 pub(crate) fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {

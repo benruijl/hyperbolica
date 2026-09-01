@@ -1,7 +1,7 @@
 use pyo3::{
-    Bound, PyErr, PyResult, create_exception,
+    Bound, PyErr, PyResult, Python, create_exception,
     exceptions::PyException,
-    types::{PyModule, PyModuleMethods},
+    types::{PyAnyMethods, PyModule, PyModuleMethods},
 };
 
 use crate::{api::AtomIntegrationError, error::Error};
@@ -83,16 +83,47 @@ fn exception_kind(error: &AtomIntegrationError) -> ExceptionKind {
     }
 }
 
-pub(crate) fn integration_error(error: AtomIntegrationError) -> PyErr {
+pub(crate) fn integration_error(py: Python<'_>, error: AtomIntegrationError) -> PyErr {
     let kind = exception_kind(&error);
     let message = error.to_string();
-    match kind {
+    let python_error = match kind {
         ExceptionKind::Input => InputError::new_err(message),
         ExceptionKind::DuplicateVariable => DuplicateVariableError::new_err(message),
         ExceptionKind::Algebra => AlgebraError::new_err(message),
         ExceptionKind::Divergent => DivergentIntegralError::new_err(message),
         ExceptionKind::Context => ContextError::new_err(message),
+    };
+
+    // Preserve structured fields for callers that need programmatic error
+    // handling while keeping the original human-readable message in args[0].
+    let attributes = (|| -> PyResult<()> {
+        match &error {
+            AtomIntegrationError::DuplicateIntegrationVariable { variable } => {
+                python_error.value(py).setattr("variable", variable)?;
+            }
+            AtomIntegrationError::Divergent {
+                boundary,
+                variable,
+                log_power,
+                power,
+            } => {
+                let value = python_error.value(py);
+                value.setattr("boundary", boundary.to_string())?;
+                value.setattr("variable", variable)?;
+                value.setattr("log_power", *log_power)?;
+                value.setattr("power", *power)?;
+            }
+            AtomIntegrationError::SymbolicVariableOutsideContext { variable } => {
+                python_error.value(py).setattr("variable", variable)?;
+            }
+            AtomIntegrationError::Algebra(_) => {}
+        }
+        Ok(())
+    })();
+    if let Err(attribute_error) = attributes {
+        return attribute_error;
     }
+    python_error
 }
 
 pub(crate) fn invalid_variable(index: usize, expression: &str) -> PyErr {

@@ -100,7 +100,7 @@ reparsing across the boundary.
 ```sh
 python -m pip install maturin
 maturin develop --release
-python tests/python_smoke.py
+scripts/test-python-installed.sh
 ```
 
 ```python
@@ -114,13 +114,18 @@ result = prepared.integrate(options)
 ```
 
 The root `pyproject.toml` selects the `python-extension` feature for maturin
-wheel builds. The lower-level `python` feature is suitable for embedded Rust
-tests and combined distributions. Such a distribution can register
-`hyperbolica::python::CommunityModule` into its already compiled Symbolica
-module; that path deliberately registers only Hyperbolica and reuses the
-host's expression class. Do not pass objects from a separately compiled
-`symbolica` wheel into the standalone `hyperbolica` extension, because PyO3
-class identity is specific to the compiled module.
+wheel builds. The lower-level `python` feature supports Rust-side binding
+tests without PyO3's extension-module linker mode. The supported packaged API
+is currently the standalone wheel. A future Symbolica community package needs
+separate wrappers whose declared module paths follow
+`symbolica.community.hyperbolica`; the top-level standalone classes are not
+silently reused for that incompatible layout. Do not pass objects from a
+separately compiled `symbolica` wheel into the standalone `hyperbolica`
+extension, because PyO3 class identity is specific to the compiled module.
+
+The wheel is PEP 561 typed. See [`docs/python-api.md`](docs/python-api.md) for
+the complete object model, exception data, packaging checks, and the explicitly
+opt-in licensed test suite.
 
 ## Compatibility CLI
 
@@ -144,6 +149,9 @@ Microbenchmarks cover hot exact-algebra kernels:
 
 ```sh
 cargo bench --bench core_algebra
+cargo bench --bench lr_structural_keys
+cargo bench --bench semantic_keys
+cargo bench --bench euler
 ```
 
 End-to-end comparisons consume identical JSONL fixtures and compare the Rust
@@ -178,5 +186,9 @@ review and retain/wrap/replace decisions are in
 
 ## License
 
-Hyperbolica is MIT licensed. Symbolica is vendored under its own license; see
+Hyperbolica-authored code is MIT licensed. Symbolica is vendored under
+separate terms that require express prior permission to copy or distribute
+its code. Do not publish this repository or a built wheel until that
+permission is obtained and recorded. See
+[`DISTRIBUTION-LICENSE.md`](DISTRIBUTION-LICENSE.md) and
 [`vendor/symbolica-src/License.md`](vendor/symbolica-src/License.md).

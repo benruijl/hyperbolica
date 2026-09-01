@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use pyo3::{PyResult, Python, pyclass, pymethods};
 use symbolica::api::python::PythonExpression;
 
@@ -7,6 +9,10 @@ use super::{exceptions, options::PythonIntegrationOptions, result::PythonIntegra
 
 /// A lowered Atom input that can be integrated repeatedly without repeating
 /// Symbolica-to-ring and Hlog conversion.
+///
+/// Create instances with `hyperbolica.prepare`. The object is
+/// immutable; `copy.copy` and `copy.deepcopy` return independent Python
+/// handles that share its immutable backing storage.
 #[pyclass(
     frozen,
     skip_from_py_object,
@@ -15,14 +21,14 @@ use super::{exceptions, options::PythonIntegrationOptions, result::PythonIntegra
 )]
 #[derive(Clone, Debug)]
 pub struct PythonPreparedIntegral {
-    inner: PreparedAtomInput,
+    inner: Arc<PreparedAtomInput>,
     default_options: AtomIntegrationOptions,
 }
 
 impl PythonPreparedIntegral {
     pub(crate) fn new(inner: PreparedAtomInput, default_options: AtomIntegrationOptions) -> Self {
         Self {
-            inner,
+            inner: Arc::new(inner),
             default_options,
         }
     }
@@ -32,14 +38,14 @@ impl PythonPreparedIntegral {
         py: Python<'_>,
         options: Option<&PythonIntegrationOptions>,
     ) -> PyResult<PythonIntegrationResult> {
-        let prepared = self.inner.clone();
+        let prepared = Arc::clone(&self.inner);
         let options = options.map_or_else(
             || self.default_options.clone(),
             PythonIntegrationOptions::to_rust,
         );
         py.detach(move || integrate_prepared_atom(&prepared, &options))
             .map(PythonIntegrationResult::new)
-            .map_err(exceptions::integration_error)
+            .map_err(|error| exceptions::integration_error(py, error))
     }
 }
 
@@ -72,24 +78,61 @@ impl PythonPreparedIntegral {
         self.inner.shuffle_list().len()
     }
 
+    /// Number of requested integration variables.
+    #[getter]
+    fn variable_count(&self) -> usize {
+        self.inner.integration_variables().len()
+    }
+
+    /// Number of exact Symbolica indeterminates in the prepared context.
+    #[getter]
+    fn indeterminate_count(&self) -> usize {
+        self.inner.indeterminates().len()
+    }
+
+    /// Independent copy of the options captured during preparation.
+    #[getter]
+    fn options(&self) -> PythonIntegrationOptions {
+        PythonIntegrationOptions::from_rust(self.default_options.clone())
+    }
+
     /// Integrate and return a native Symbolica expression.
-    #[pyo3(signature = (options = None))]
+    #[pyo3(
+        signature = (options = None),
+        text_signature = "($self, options=None)"
+    )]
     fn integrate(
         &self,
         py: Python<'_>,
         options: Option<&PythonIntegrationOptions>,
     ) -> PyResult<PythonExpression> {
-        self.run(py, options)?.into_expression()
+        self.run(py, options)?.into_expression(py)
     }
 
     /// Integrate and retain metadata about the collected exact result.
-    #[pyo3(signature = (options = None))]
+    #[pyo3(
+        signature = (options = None),
+        text_signature = "($self, options=None)"
+    )]
     fn integrate_detailed(
         &self,
         py: Python<'_>,
         options: Option<&PythonIntegrationOptions>,
     ) -> PyResult<PythonIntegrationResult> {
         self.run(py, options)
+    }
+
+    /// Return the number of prepared shuffle entries.
+    fn __len__(&self) -> usize {
+        self.inner.shuffle_list().len()
+    }
+
+    fn __copy__(&self) -> Self {
+        self.clone()
+    }
+
+    fn __deepcopy__(&self, _memo: &pyo3::Bound<'_, pyo3::PyAny>) -> Self {
+        self.clone()
     }
 
     fn __repr__(&self) -> String {
