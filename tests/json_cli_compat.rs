@@ -213,6 +213,118 @@ fn representative_json_cli_schemas_are_stable() {
     order.sort_unstable();
     assert_eq!(order, ["x", "y"]);
 
+    // All six rows of the public strategy truth table must survive the JSON
+    // boundary. The method hint matters only on the NOLR fallback path.
+    for (request, expected) in [
+        (
+            json!({
+                "op": "find_lr_orders",
+                "xvars": ["x1", "x2"],
+                "polys": ["x1", "x2", "x1+x2"],
+            }),
+            "LR_NoOpt",
+        ),
+        (
+            json!({
+                "op": "find_lr_orders",
+                "xvars": ["x1", "x2"],
+                "polys": ["x1", "x2", "x1+x2"],
+                "method_lr_hint": "Espresso",
+            }),
+            "LR_NoOpt",
+        ),
+        (
+            json!({
+                "op": "find_lr_orders",
+                "xvars": ["x1", "x2"],
+                "polys": ["x1", "x2", "x1+x2"],
+                "algebraic_letters": true,
+            }),
+            "LR_OptOrdered",
+        ),
+        (
+            json!({
+                "op": "find_lr_orders",
+                "xvars": ["x1", "x2"],
+                "polys": ["x1", "x2", "x1+x2"],
+                "algebraic_letters": true,
+                "method_lr_hint": "Espresso",
+            }),
+            "LR_OptOrdered",
+        ),
+        (
+            json!({
+                "op": "find_lr_orders",
+                "xvars": ["x1", "x2"],
+                "polys": ["1+x1^2+x2^2"],
+            }),
+            "Fubini_Lungo",
+        ),
+        (
+            json!({
+                "op": "find_lr_orders",
+                "xvars": ["x1", "x2"],
+                "polys": ["1+x1^2+x2^2"],
+                "method_lr_hint": "Espresso",
+            }),
+            "Fubini_Espresso",
+        ),
+    ] {
+        assert_eq!(eval(&request)["strategy"], expected, "request: {request}");
+    }
+
+    // Carry-discharge is default-off and flips this independently derived
+    // two-variable Cheng--Wu face from NOLR to an exact one-root order.
+    let carry_base = json!({
+        "op": "find_lr_orders",
+        "xvars": ["x1", "x2"],
+        "coeff_vars": ["s"],
+        "polys": ["x1+x2+1", "x1^2+x2^2+x1*x2+s"],
+        "algebraic_letters": true,
+    });
+    let carry_default = eval(&carry_base);
+    let mut carry_off_request = carry_base.clone();
+    carry_off_request["carry_discharge"] = Value::Bool(false);
+    let carry_off = eval(&carry_off_request);
+    assert_eq!(carry_default["nolr"], true);
+    assert_eq!(carry_off["nolr"], true);
+    assert_eq!(carry_default["best_order"], carry_off["best_order"]);
+    assert_eq!(carry_default["strategy"], carry_off["strategy"]);
+
+    let mut carry_on_request = carry_base;
+    carry_on_request["carry_discharge"] = Value::Bool(true);
+    let carry_on = eval(&carry_on_request);
+    assert_eq!(carry_on["nolr"], false);
+    assert_eq!(carry_on["best_order"], json!(["x1", "x2"]));
+    assert_eq!(carry_on["carried_sqrts"], 1);
+
+    // Selection is lexicographic in carried-root count before score, and a
+    // cubic in every possible first pivot must never be over-accepted.
+    let uncarried_wins = eval(&json!({
+        "op": "find_lr_orders",
+        "xvars": ["x", "y"],
+        "coeff_vars": ["s"],
+        "polys": [
+            "x+y+1",
+            "x^2+x*y+y+1",
+            "y+(s^4+s^3+s^2+s+1)"
+        ],
+        "algebraic_letters": true,
+        "carry_discharge": true,
+    }));
+    assert_eq!(uncarried_wins["nolr"], false);
+    assert_eq!(uncarried_wins["carried_sqrts"], 0);
+
+    let cubic = eval(&json!({
+        "op": "find_lr_orders",
+        "xvars": ["x", "y"],
+        "coeff_vars": ["s"],
+        "polys": ["x^3*y^3+x^3+y^3+s"],
+        "algebraic_letters": true,
+        "carry_discharge": true,
+    }));
+    assert_eq!(cubic["nolr"], true);
+
     // Specific-order LR certification is search-free on the common linear
     // path and retains HyperFLINT's inert search envelope.
     let verified = eval(&json!({
@@ -323,4 +435,16 @@ fn representative_json_cli_schemas_are_stable() {
     assert_ne!(integrated["divergent"], true);
     assert_eq!(integrated["result"], json!([{"coef": "1", "key": []}]));
     assert!(integrated["timing_compute_s"].as_f64().is_some());
+
+    let integrated_parallel = eval(&json!({
+        "op": "hyperflint",
+        "vars": ["x", "y"],
+        "vars_int": ["x", "y"],
+        "f": "1/((1+x)^2*(1+y)^2)",
+        "parallel": true,
+        "check_divergences": true,
+    }));
+    assert_eq!(integrated_parallel["failed"], integrated["failed"]);
+    assert_eq!(integrated_parallel["divergent"], integrated["divergent"]);
+    assert_eq!(integrated_parallel["result"], integrated["result"]);
 }

@@ -1,0 +1,3 @@
+# Preserve byte-identical upstream Mathematica fixtures, including the spaces
+# that precede their physical line breaks.
+tests/data/smirnov/*.txt -whitespace
