@@ -38,11 +38,7 @@ pub fn projective_input(
     }
     let n = i64::try_from(xvar_indices.len())
         .map_err(|_| Error::InvalidInput("too many integration variables".into()))?;
-    let reference_variables = group_polys
-        .iter()
-        .flatten()
-        .next()
-        .map(|polynomial| polynomial.ctx().vars());
+    let reference_context = group_polys.iter().flatten().next().map(Poly::ctx);
     for (group, powers) in group_polys.iter().zip(exponents) {
         if group.len() != powers.len() {
             return Ok(false);
@@ -50,7 +46,7 @@ pub fn projective_input(
         let mut sum_a = 0_i64;
         let mut sum_b = 0_i64;
         for (polynomial, exponent) in group.iter().zip(powers) {
-            if reference_variables.is_some_and(|vars| polynomial.ctx().vars() != vars) {
+            if reference_context.is_some_and(|ctx| !polynomial.ctx().is_compatible_with(ctx)) {
                 return Err(Error::ContextMismatch);
             }
             for &variable in xvar_indices {

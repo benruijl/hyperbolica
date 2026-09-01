@@ -1,8 +1,11 @@
 //! Formatting, equality, and operator traits.
 
+use std::cmp::Ordering;
 use std::fmt::{Display, Formatter};
 use std::hash::{Hash, Hasher};
 use std::ops::{Add, Div, Mul, Neg, Sub};
+
+use symbolica::domains::InternalOrdering;
 
 use super::Rat;
 
@@ -68,12 +71,39 @@ impl Hash for Rat {
     fn hash<H: Hasher>(&self, state: &mut H) {
         // Native `RationalPolynomial` equality and hashing are structural,
         // but constant polynomials intentionally ignore their variable maps.
-        // `Rat::Eq` is stricter: it also requires the complete Hyperbolica
-        // context (diagnostic names and structural PolyVariables). Prefix the
-        // exact fields used by `same_context` so Hash and Eq stay consistent.
-        self.ctx.vars().hash(state);
-        self.ctx.variable_map().hash(state);
-        self.native.as_ref().hash(state);
+        // `Rat::Eq` is stricter: it also requires the complete ordered native
+        // PolyVariable map. Diagnostic names are presentation-only. Prefix
+        // the exact field used by `same_context` so Hash and Eq stay
+        // consistent.
+        self.ctx.native_variables().hash(state);
+        self.hash_canonical_payload(state);
+    }
+}
+
+impl Rat {
+    /// Hash only the canonical numerator/denominator sparse payloads.
+    ///
+    /// A complete rational-function hash must prefix the ordered native
+    /// context once. Composite keys that already did so can use this helper
+    /// without rehashing the same variable map for every coefficient.
+    pub(crate) fn hash_canonical_payload<H: Hasher>(&self, state: &mut H) {
+        self.native.numerator.coefficients.hash(state);
+        self.native.numerator.exponents.hash(state);
+        self.native.denominator.coefficients.hash(state);
+        self.native.denominator.exponents.hash(state);
+    }
+
+    /// Total structural order for internal canonicalization.
+    ///
+    /// This is not a mathematical magnitude order or a wire-format order. It
+    /// compares the complete ordered Symbolica variable map first and then
+    /// Symbolica's native canonical rational-polynomial representation. Equal
+    /// values compare equal exactly when [`Rat::eq`] does.
+    pub(crate) fn structural_cmp(&self, other: &Self) -> Ordering {
+        self.ctx
+            .native_variables()
+            .cmp(other.ctx.native_variables())
+            .then_with(|| self.native.internal_cmp(&other.native))
     }
 }
 

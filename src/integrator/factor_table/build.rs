@@ -48,7 +48,7 @@ pub fn factor_table(
             }
         }
         for polynomial in group_polys.iter().flatten() {
-            if polynomial.ctx().vars() != reference.ctx().vars() {
+            if !polynomial.ctx().is_compatible_with(reference.ctx()) {
                 return Err(Error::ContextMismatch);
             }
         }

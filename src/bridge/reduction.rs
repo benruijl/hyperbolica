@@ -7,17 +7,17 @@ use super::symcoef::symcoef_string;
 use super::wire::{
     WireValue, array_field, mzv_context, optional_bool, parse_regulator, parse_wire_rat,
     parse_word, parse_wordlist, regulator_sym_value, regulator_value, result_response,
-    string_array_field, string_field, wire_context_variables, wire_rat,
+    string_array_field, string_field, unique_diagnostic_variable_index, wire_context_variables,
+    wire_regkey,
 };
 use crate::core::SymCoef;
 use crate::error::{Error, Result};
-use crate::integrator::RegTermSym;
+use crate::integrator::{RegKey, RegTermSym, regkey_structural_cmp};
 use crate::reduce::{
     OnAxisEntry, OnAxisSymEntry, apply_mzv_reductions, break_up_contour, break_up_contour_sym,
     evaluate_periods, fibration_basis, fibration_basis_sym, test_zero_function, to_wordlist_sym,
     zero_inf_period, zero_one_period,
 };
-use crate::symbols::Word;
 
 pub(super) fn evaluate(request: &Value, op: &str) -> Option<Result<Value>> {
     matches!(
@@ -102,7 +102,7 @@ fn evaluate_supported(request: &Value, op: &str) -> Result<Value> {
                         "op": op,
                         "variant": "sym",
                         "vars_int": result.vars,
-                        "terms": result.terms.iter().map(|(key, coefficient)| {
+                        "terms": fibration_terms_for_wire(&result.terms).into_iter().map(|(key, coefficient)| {
                             fibration_term_value(key, symcoef_string(coefficient))
                         }).collect::<Vec<_>>(),
                         "vars": wire_context_variables(&ctx),
@@ -120,7 +120,7 @@ fn evaluate_supported(request: &Value, op: &str) -> Result<Value> {
                 Ok(result) => Ok(json!({
                     "op": op,
                     "vars_int": result.vars,
-                    "terms": result.terms.iter().map(|(key, coefficient)| {
+                    "terms": fibration_terms_for_wire(&result.terms).into_iter().map(|(key, coefficient)| {
                         fibration_term_value(key, coefficient)
                     }).collect::<Vec<_>>(),
                     "vars": wire_context_variables(&ctx),
@@ -158,7 +158,10 @@ fn evaluate_supported(request: &Value, op: &str) -> Result<Value> {
                     let imaginary_variable = string_field(entry, "im_var")?;
                     Ok(OnAxisSymEntry {
                         letter,
-                        im_part: SymCoef::delta_factor(ctx.clone(), imaginary_variable),
+                        im_part: SymCoef::delta_factor(
+                            ctx.clone(),
+                            unique_diagnostic_variable_index(&ctx, imaginary_variable)?,
+                        )?,
                     })
                 })
                 .collect::<Result<Vec<_>>>()?;
@@ -173,11 +176,25 @@ fn evaluate_supported(request: &Value, op: &str) -> Result<Value> {
     }
 }
 
-fn fibration_term_value(key: &[Word], coefficient: impl WireValue) -> Value {
+fn fibration_terms_for_wire<T>(terms: &[(RegKey, T)]) -> Vec<(Vec<Vec<String>>, &T)> {
+    let mut decorated = terms
+        .iter()
+        .map(|(key, coefficient)| (wire_regkey(key), key, coefficient))
+        .collect::<Vec<_>>();
+    decorated.sort_unstable_by(|(left_wire, left_key, _), (right_wire, right_key, _)| {
+        left_wire
+            .cmp(right_wire)
+            .then_with(|| regkey_structural_cmp(left_key, right_key))
+    });
+    decorated
+        .into_iter()
+        .map(|(wire, _, coefficient)| (wire, coefficient))
+        .collect()
+}
+
+fn fibration_term_value(key: Vec<Vec<String>>, coefficient: impl WireValue) -> Value {
     json!({
-        "key": key.iter().map(|word| {
-            word.letters.iter().map(wire_rat).collect::<Vec<_>>()
-        }).collect::<Vec<_>>(),
+        "key": key,
         "coef": coefficient.wire_value(),
     })
 }

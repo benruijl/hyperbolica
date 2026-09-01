@@ -1,9 +1,10 @@
 use std::collections::HashMap;
+use std::hash::Hash;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use symbolica::prelude::Rational;
+use symbolica::prelude::{AtomCore, Rational};
 
-use crate::core::Poly;
+use crate::core::{Poly, structural_bucket_digest_by};
 
 use super::random::DeterministicRng;
 use super::staircase::{ChiCount, ChiStatus};
@@ -21,10 +22,28 @@ pub struct ChiFilterCache {
 ///
 /// The stable FNV digest remains useful for deterministic seed derivation, but
 /// a digest is never used as an equality proof for memoized mathematics.
-#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 struct MarginalKey {
-    canonical_factors: Vec<String>,
+    canonical_factors: Vec<Poly>,
     propagators: Vec<usize>,
+    generic_seed: u64,
+}
+
+impl std::hash::Hash for MarginalKey {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.canonical_factors.len().hash(state);
+        if let Some(first) = self.canonical_factors.first() {
+            first.ctx().native_variables().hash(state);
+        }
+        for factor in &self.canonical_factors {
+            // Marginals normally share one context. Full derived equality
+            // still resolves a benign hash collision in a malformed mixed
+            // slice whose later factor uses another context.
+            factor.hash_canonical_payload(state);
+        }
+        self.propagators.hash(state);
+        self.generic_seed.hash(state);
+    }
 }
 
 /// Per-request utility counters for the optional Euler filter.
@@ -82,12 +101,39 @@ fn counted_chi(
     )
 }
 
-fn fnv1a(bytes: &[u8], mut hash: u64) -> u64 {
-    for byte in bytes {
-        hash ^= u64::from(*byte);
-        hash = hash.wrapping_mul(1_099_511_628_211);
-    }
-    hash
+/// Namespace-complete, process-stable digest for deterministic sampling only.
+///
+/// This value is never a cache identity or an equality proof. Mathematical
+/// memoization uses the complete [`MarginalKey`] and therefore confirms full
+/// context-sensitive polynomial equality. Symbolica's canonical Atom string
+/// is namespace-complete and independent of symbol registration order, so it
+/// avoids both presentation aliases from [`crate::core::PolyCtx::vars`] and
+/// process-local symbol ids. Serialization is confined to seed construction;
+/// no lookup or CAS operation reparses it.
+fn sampling_digest(domain: u64, factors: &[Poly], indices: &[usize]) -> u64 {
+    structural_bucket_digest_by(domain, |state| {
+        factors.len().hash(state);
+        if let Some(first) = factors.first() {
+            first.ctx().len().hash(state);
+            for variable in 0..first.ctx().len() {
+                let atom = first
+                    .ctx()
+                    .variable_atom(variable)
+                    .expect("a context index below its length must exist");
+                atom.to_canonical_string().hash(state);
+            }
+        }
+        for factor in factors {
+            debug_assert!(
+                factors
+                    .first()
+                    .is_none_or(|first| factor.ctx().is_compatible_with(first.ctx()))
+            );
+            factor.inner().coefficients.hash(state);
+            factor.inner().exponents.hash(state);
+        }
+        indices.hash(state);
+    })
 }
 
 fn homogeneous_in(polynomial: &Poly, variables: &[usize]) -> bool {
@@ -176,7 +222,7 @@ pub fn chi_letter_genuine(
     }
     if augmented_group
         .iter()
-        .any(|factor| factor.ctx().vars() != letter.ctx().vars())
+        .any(|factor| !factor.ctx().is_compatible_with(letter.ctx()))
         || subset_variable_indices
             .iter()
             .any(|variable| *variable >= letter.ctx().len())
@@ -206,23 +252,18 @@ pub fn chi_letter_genuine(
         factors = charted;
     }
 
-    let mut face_hash = 1_469_598_103_934_665_603_u64;
     let mut canonical_factors = Vec::with_capacity(factors.len());
     for factor in &mut factors {
         *factor = factor.canonical_proportional_form();
-        let canonical = factor.to_string();
-        face_hash = fnv1a(canonical.as_bytes(), face_hash);
-        canonical_factors.push(canonical);
+        canonical_factors.push(factor.clone());
     }
-    let mask_hash = propagators
-        .iter()
-        .fold(0_u64, |mask, variable| mask | (1_u64 << (variable % 63)));
-    let seed_digest = face_hash ^ mask_hash.wrapping_mul(0x9e37_79b9_7f4a_7c15);
+    let seed_digest = sampling_digest(0x4555_4c45_5246_4143, &canonical_factors, &propagators);
+    let twist_seed = base_seed ^ seed_digest;
     let marginal_key = MarginalKey {
         canonical_factors,
         propagators: propagators.clone(),
+        generic_seed: twist_seed,
     };
-    let twist_seed = base_seed ^ seed_digest;
     let Some(exponents) = twist_exponents(factors.len(), twist_seed) else {
         FAILURE_ABSTENTIONS.fetch_add(1, Ordering::Relaxed);
         return true;
@@ -264,8 +305,12 @@ pub fn chi_letter_genuine(
     };
 
     let constraint = letter.canonical_proportional_form();
-    let draw_seed =
-        twist_seed ^ fnv1a(constraint.to_string().as_bytes(), 1_469_598_103_934_665_603);
+    let draw_seed = twist_seed
+        ^ sampling_digest(
+            0x4555_4c45_5243_4f4e,
+            std::slice::from_ref(&constraint),
+            &[],
+        );
     let first = counted_chi(
         &factors,
         &exponents,
@@ -332,8 +377,14 @@ pub fn chi_filter_letters(
 }
 
 #[cfg(test)]
+#[path = "filter/seed_tests.rs"]
+mod seed_tests;
+
+#[cfg(test)]
 mod tests {
     use std::sync::Arc;
+
+    use symbolica::prelude::Symbol;
 
     use crate::core::PolyCtx;
 
@@ -446,13 +497,16 @@ mod tests {
 
     #[test]
     fn marginal_cache_never_uses_a_folded_mask_as_identity() {
+        let context = PolyCtx::new(["f"]).unwrap();
         let left = MarginalKey {
-            canonical_factors: vec!["f".into()],
+            canonical_factors: vec![parse(&context, "f")],
             propagators: vec![0],
+            generic_seed: 17,
         };
         let right = MarginalKey {
-            canonical_factors: vec!["f".into()],
+            canonical_factors: vec![parse(&context, "f")],
             propagators: vec![63],
+            generic_seed: 17,
         };
         // These positions collide in the legacy seed mask, but must remain
         // distinct mathematical marginals in the cache.
@@ -463,6 +517,52 @@ mod tests {
         cache.insert(left, Some(1));
         cache.insert(right, Some(2));
         assert_eq!(cache.len(), 2);
+    }
+
+    #[test]
+    fn marginal_identity_preserves_symbol_namespaces() {
+        let left_symbol = Symbol::parse("x", "euler_key_left").unwrap();
+        let right_symbol = Symbol::parse("x", "euler_key_right").unwrap();
+        let left_context = PolyCtx::from_symbols([left_symbol]).unwrap();
+        let right_context = PolyCtx::from_symbols([right_symbol]).unwrap();
+        let left = MarginalKey {
+            canonical_factors: vec![Poly::generator(left_context, 0).unwrap()],
+            propagators: vec![0],
+            generic_seed: 17,
+        };
+        let right = MarginalKey {
+            canonical_factors: vec![Poly::generator(right_context, 0).unwrap()],
+            propagators: vec![0],
+            generic_seed: 17,
+        };
+
+        assert_ne!(left, right);
+        let mut cache = HashMap::new();
+        cache.insert(left, Some(1));
+        cache.insert(right, Some(2));
+        assert_eq!(cache.len(), 2);
+    }
+
+    #[test]
+    fn sampling_seed_uses_native_identity_not_diagnostic_aliases() {
+        let left_symbol = Symbol::parse("x", "euler_seed_left").unwrap();
+        let right_symbol = Symbol::parse("x", "euler_seed_right").unwrap();
+        let left_context = PolyCtx::from_symbols([left_symbol]).unwrap();
+        let equivalent_context = PolyCtx::from_indeterminates([left_symbol.to_atom()]).unwrap();
+        let right_context = PolyCtx::from_symbols([right_symbol]).unwrap();
+
+        let left = Poly::generator(left_context, 0).unwrap();
+        let equivalent = Poly::generator(equivalent_context, 0).unwrap();
+        let right = Poly::generator(right_context, 0).unwrap();
+
+        assert_eq!(
+            sampling_digest(17, std::slice::from_ref(&left), &[0]),
+            sampling_digest(17, std::slice::from_ref(&equivalent), &[0])
+        );
+        assert_ne!(
+            sampling_digest(17, std::slice::from_ref(&left), &[0]),
+            sampling_digest(17, std::slice::from_ref(&right), &[0])
+        );
     }
 
     #[test]

@@ -28,6 +28,7 @@ pub use integration_step::{
 pub use lr_verify::{OrderVerifyResult, verify_order_is_lr};
 pub use primitive::{IntegrateIiOptions, integrate_ii, integrate_ii_with_options};
 pub use regularize::{reg_head, reg_tail, reg0, regzero_word, regzero_word_in_ctx};
+pub(crate) use transform::regkey_structural_cmp;
 pub use transform::{
     RegKey, RegTerm, RegTermSym, Regulator, RegulatorSym, TransformPair, TransformResult,
     canonicalize_regkey, canonicalize_regulator, canonicalize_regulator_sym, collect_regulator,

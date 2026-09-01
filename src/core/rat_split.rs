@@ -1,6 +1,6 @@
 //! Wide rational function to narrow-polynomial/W-side-handle adapter.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use symbolica::prelude::*;
@@ -8,7 +8,7 @@ use symbolica::prelude::*;
 use super::{Poly, PolyCtx, Rat, ZwHandle, ZwIntent, ZwTable};
 use crate::error::{Error, Result};
 
-/// Name-derived maps for a decomposition `wide = narrow + W-side`.
+/// Native-variable maps for a decomposition `wide = narrow + W-side`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FnIndexMaps {
     pub wide_to_narrow: Vec<Option<usize>>,
@@ -16,20 +16,24 @@ pub struct FnIndexMaps {
 }
 
 pub fn build_fn_index_maps(wide: &PolyCtx, narrow: &PolyCtx) -> Result<FnIndexMaps> {
-    let mut narrow_names = BTreeSet::new();
     let mut narrow_to_wide = Vec::with_capacity(narrow.len());
     let mut wide_to_narrow = vec![None; wide.len()];
-    for (narrow_index, name) in narrow.vars().iter().enumerate() {
-        if !narrow_names.insert(name) {
-            return Err(Error::InvalidInput(format!(
-                "duplicate narrow variable `{name}`"
-            )));
-        }
-        let wide_index = wide.index_of(name).ok_or_else(|| {
-            Error::InvalidInput(format!(
-                "narrow variable `{name}` is absent from the wide context"
-            ))
-        })?;
+    let wide_variables = wide.variable_map();
+    let narrow_variables = narrow.variable_map();
+    for (narrow_index, (name, variable)) in narrow
+        .vars()
+        .iter()
+        .zip(narrow_variables.iter())
+        .enumerate()
+    {
+        let wide_index = wide_variables
+            .iter()
+            .position(|candidate| candidate == variable)
+            .ok_or_else(|| {
+                Error::InvalidInput(format!(
+                    "narrow Symbolica variable `{name}` is absent from the wide context"
+                ))
+            })?;
         narrow_to_wide.push(wide_index);
         wide_to_narrow[wide_index] = Some(narrow_index);
     }
@@ -51,7 +55,8 @@ pub struct SymMonomialSplit {
     pub pi_power: i32,
     pub i_power: i32,
     pub log_powers: BTreeMap<i64, i32>,
-    pub delta_powers: BTreeMap<String, i32>,
+    /// Powers of formal delta generators keyed by the wide-context index.
+    pub delta_powers: BTreeMap<usize, i32>,
     pub period_powers: BTreeMap<u32, i32>,
 }
 
@@ -82,7 +87,7 @@ pub fn split_rat_by_w_monomial(
     maps: &FnIndexMaps,
 ) -> Result<Vec<SymMonomialSplit>> {
     let wide = rational.ctx();
-    if table.ctx().vars() != wide.vars() || maps.wide_to_narrow.len() != wide.len() {
+    if !table.ctx().is_compatible_with(wide) || maps.wide_to_narrow.len() != wide.len() {
         return Err(Error::ContextMismatch);
     }
     if maps.narrow_to_wide.len() != narrow.len() {
@@ -90,10 +95,12 @@ pub fn split_rat_by_w_monomial(
             "narrow-to-wide index map length mismatch".into(),
         ));
     }
+    let wide_variables = wide.variable_map();
+    let narrow_variables = narrow.variable_map();
     for (narrow_index, &wide_index) in maps.narrow_to_wide.iter().enumerate() {
         if wide_index >= wide.len()
             || maps.wide_to_narrow[wide_index] != Some(narrow_index)
-            || wide.vars()[wide_index] != narrow.vars()[narrow_index]
+            || wide_variables[wide_index] != narrow_variables[narrow_index]
         {
             return Err(Error::InvalidInput(
                 "inconsistent wide/narrow variable index maps".into(),
@@ -181,6 +188,8 @@ pub type RatScalar = Rat;
 
 #[cfg(test)]
 mod tests {
+    use symbolica::prelude::Symbol;
+
     use super::*;
 
     #[test]
@@ -216,5 +225,29 @@ mod tests {
         let wide = PolyCtx::new(["x", "s"]).unwrap();
         let invalid = PolyCtx::new(["x", "missing"]).unwrap();
         assert!(build_fn_index_maps(&wide, &invalid).is_err());
+    }
+
+    #[test]
+    fn narrow_mapping_uses_symbolica_identity_not_stripped_names() {
+        let wide_symbol = Symbol::parse("x", "split_wide").unwrap();
+        let narrow_symbol = Symbol::parse("x", "split_narrow").unwrap();
+        let wide = PolyCtx::from_indeterminates([wide_symbol.to_atom()]).unwrap();
+        let narrow = PolyCtx::from_indeterminates([narrow_symbol.to_atom()]).unwrap();
+        assert_eq!(wide.vars(), narrow.vars());
+        assert!(build_fn_index_maps(&wide, &narrow).is_err());
+    }
+
+    #[test]
+    fn narrow_mapping_allows_distinct_variables_with_the_same_display_name() {
+        let left = Symbol::parse("x", "split_collision_left").unwrap();
+        let right = Symbol::parse("x", "split_collision_right").unwrap();
+        let wide = PolyCtx::from_indeterminates([left.to_atom(), right.to_atom()]).unwrap();
+        let narrow = PolyCtx::from_indeterminates([right.to_atom(), left.to_atom()]).unwrap();
+        assert_eq!(wide.vars(), &["x", "x"]);
+        assert_eq!(narrow.vars(), &["x", "x"]);
+
+        let maps = build_fn_index_maps(&wide, &narrow).unwrap();
+        assert_eq!(maps.narrow_to_wide, vec![1, 0]);
+        assert_eq!(maps.wide_to_narrow, vec![Some(1), Some(0)]);
     }
 }

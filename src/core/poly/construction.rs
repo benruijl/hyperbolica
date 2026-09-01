@@ -23,6 +23,14 @@ impl Poly {
         Self { ctx, inner }
     }
 
+    /// Construct a constant polynomial without formatting or reparsing its
+    /// exact Symbolica rational coefficient.
+    pub fn from_rational(ctx: Arc<PolyCtx>, value: Rational) -> Self {
+        let template = SymbolicaPoly::new(&Q, Some(1), ctx.variable_map());
+        let inner = template.constant(value);
+        Self { ctx, inner }
+    }
+
     pub fn generator(ctx: Arc<PolyCtx>, variable: usize) -> Result<Self> {
         let symbol = ctx
             .variables
@@ -108,7 +116,7 @@ impl Poly {
     }
 
     pub fn equal(&self, other: &Self) -> bool {
-        self.ctx.compatible_with(&other.ctx) && self.inner == other.inner
+        self.ctx.is_compatible_with(&other.ctx) && self.inner == other.inner
     }
 
     pub fn leading_coefficient_is_negative(&self) -> bool {

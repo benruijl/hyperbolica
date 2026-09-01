@@ -3,8 +3,6 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use symbolica::domains::InternalOrdering;
-
 use super::canonical_signature::poly_bucket_digest;
 use super::{Poly, PolyCtx};
 use crate::error::{Error, Result};
@@ -225,23 +223,19 @@ impl ZwTable {
 
     /// Deterministically import another table and return its handle remap.
     pub fn merge_from(&mut self, secondary: &Self) -> Result<HashMap<ZwHandle, ZwHandle>> {
-        if self.ctx.vars() != secondary.ctx.vars() {
+        if !self.ctx.is_compatible_with(&secondary.ctx) {
             return Err(Error::ContextMismatch);
         }
-        let mut order = (1..secondary.entries.len())
-            .map(|index| (poly_bucket_digest(&secondary.entries[index]), index))
-            .collect::<Vec<_>>();
-        order.sort_unstable_by(|left, right| {
-            left.0.cmp(&right.0).then_with(|| {
-                secondary.entries[left.1]
-                    .inner()
-                    .internal_cmp(secondary.entries[right.1].inner())
-            })
+        let mut order = (1..secondary.entries.len()).collect::<Vec<_>>();
+        order.sort_unstable_by(|&left, &right| {
+            secondary.entries[left]
+                .structural_cmp(&secondary.entries[right])
+                .then_with(|| left.cmp(&right))
         });
 
         let mut remap = HashMap::with_capacity(secondary.entries.len());
         remap.insert(ZW_ONE, ZW_ONE);
-        for (_, index) in order {
+        for index in order {
             let destination = self.intern(secondary.entries[index].clone(), ZwIntent::Numerator)?;
             remap.insert(index as ZwHandle, destination);
         }
@@ -249,7 +243,7 @@ impl ZwTable {
     }
 
     fn require_context(&self, polynomial: &Poly) -> Result<()> {
-        if self.ctx.vars() == polynomial.ctx().vars() {
+        if self.ctx.is_compatible_with(polynomial.ctx()) {
             Ok(())
         } else {
             Err(Error::ContextMismatch)
@@ -268,6 +262,7 @@ fn sorted_pair(left: ZwHandle, right: ZwHandle) -> (ZwHandle, ZwHandle) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use symbolica::prelude::Symbol;
 
     fn context() -> Arc<PolyCtx> {
         PolyCtx::new(["x", "s"]).unwrap()
@@ -328,5 +323,72 @@ mod tests {
         assert_eq!(repeated_x, x_handle);
         assert_eq!(table.get(x_handle).unwrap(), &x);
         assert_eq!(table.get(s_handle).unwrap(), &s);
+    }
+
+    #[test]
+    fn merge_order_is_structural_across_constructor_and_insertion_order() {
+        let x = Symbol::parse("x", "zw_merge_structural").unwrap();
+        let s = Symbol::parse("s", "zw_merge_structural").unwrap();
+        let qualified_ctx = PolyCtx::from_symbols([x, s]).unwrap();
+        let atom_ctx = PolyCtx::from_indeterminates([x.to_atom(), s.to_atom()]).unwrap();
+        assert!(qualified_ctx.is_compatible_with(&atom_ctx));
+        assert_ne!(qualified_ctx.vars(), atom_ctx.vars());
+
+        let qualified_x = Poly::generator(qualified_ctx.clone(), 0).unwrap();
+        let qualified_s = Poly::generator(qualified_ctx.clone(), 1).unwrap();
+        let atom_x = Poly::generator(atom_ctx.clone(), 0).unwrap();
+        let atom_s = Poly::generator(atom_ctx.clone(), 1).unwrap();
+
+        let mut first_source = ZwTable::new(qualified_ctx.clone());
+        let first_x = first_source
+            .intern(qualified_x.clone(), ZwIntent::Numerator)
+            .unwrap();
+        let first_s = first_source
+            .intern(qualified_s.clone(), ZwIntent::Numerator)
+            .unwrap();
+        let mut second_source = ZwTable::new(atom_ctx.clone());
+        let second_s = second_source
+            .intern(atom_s.clone(), ZwIntent::Numerator)
+            .unwrap();
+        let second_x = second_source
+            .intern(atom_x.clone(), ZwIntent::Numerator)
+            .unwrap();
+
+        let mut first_destination = ZwTable::new(atom_ctx);
+        let first_remap = first_destination.merge_from(&first_source).unwrap();
+        let mut second_destination = ZwTable::new(qualified_ctx);
+        let second_remap = second_destination.merge_from(&second_source).unwrap();
+
+        assert_eq!(first_remap[&first_x], second_remap[&second_x]);
+        assert_eq!(first_remap[&first_s], second_remap[&second_s]);
+        assert_eq!(first_destination.size(), second_destination.size());
+        for handle in 0..first_destination.size() as ZwHandle {
+            assert_eq!(
+                first_destination.get(handle).unwrap(),
+                second_destination.get(handle).unwrap()
+            );
+        }
+    }
+
+    #[test]
+    fn merge_order_ignores_adversarial_digest_buckets() {
+        let ctx = context();
+        let x = Poly::parse(ctx.clone(), "x+2").unwrap();
+        let s = Poly::parse(ctx.clone(), "s+10").unwrap();
+        let mut source = ZwTable::new(ctx.clone());
+        source
+            .intern_with_forced_digest(s.clone(), ZwIntent::Numerator, 0)
+            .unwrap();
+        source
+            .intern_with_forced_digest(x.clone(), ZwIntent::Numerator, 0)
+            .unwrap();
+
+        let mut expected = [x, s];
+        expected.sort_unstable_by(Poly::structural_cmp);
+
+        let mut destination = ZwTable::new(ctx);
+        destination.merge_from(&source).unwrap();
+        assert_eq!(destination.get(1).unwrap(), &expected[0]);
+        assert_eq!(destination.get(2).unwrap(), &expected[1]);
     }
 }

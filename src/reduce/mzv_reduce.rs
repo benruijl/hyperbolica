@@ -55,7 +55,7 @@ pub fn load_mzv_reductions(path: impl AsRef<Path>) -> Result<MzvReductionTable> 
 /// variable, which avoids textual replacement and therefore preserves unary
 /// minus, powers, and operator precedence exactly.
 pub fn substitute_var_rat(rational: &Rat, variable: usize, replacement: &Rat) -> Result<Rat> {
-    if rational.ctx().vars() != replacement.ctx().vars() {
+    if !rational.ctx().is_compatible_with(replacement.ctx()) {
         return Err(Error::ContextMismatch);
     }
     if variable >= rational.ctx().len() {

@@ -6,9 +6,9 @@
 //! native structural equality inside every matching bucket.
 
 use std::collections::HashMap;
-use std::hash::{DefaultHasher, Hash, Hasher};
+use std::hash::Hash;
 
-use crate::core::{Poly, poly_bucket_digest};
+use crate::core::{Poly, poly_bucket_digest, structural_bucket_digest_by};
 
 /// An append-only, collision-safe index into an external polynomial vector.
 ///
@@ -128,18 +128,21 @@ impl<V> PolySliceCache<V> {
 }
 
 fn poly_slice_bucket_digest(variable: usize, input: &[Poly]) -> u64 {
-    let mut state = DefaultHasher::new();
-    0x4859_5045_4c52_5354_u64.hash(&mut state);
-    variable.hash(&mut state);
-    input.len().hash(&mut state);
-    // Every polynomial in an LR slice normally shares one context. Hashing
-    // each wrapper would revisit that variable map for every entry. The
-    // canonical Symbolica payload is sufficient for a bucket digest; full
-    // `Poly` equality (including context) is still checked on every hit.
-    for polynomial in input {
-        polynomial.inner().hash(&mut state);
-    }
-    state.finish()
+    structural_bucket_digest_by(0x4859_5045_4c52_5354_u64, |state| {
+        variable.hash(state);
+        input.len().hash(state);
+        // Every polynomial in an LR slice normally shares one context.
+        // Hash it once instead of revisiting that variable map for every
+        // entry, then hash only the canonical Symbolica payloads. Full `Poly`
+        // equality (including every context in a malformed mixed slice) is
+        // still checked on every hit.
+        if let Some(first) = input.first() {
+            first.ctx().native_variables().hash(state);
+        }
+        for polynomial in input {
+            polynomial.hash_canonical_payload(state);
+        }
+    })
 }
 
 #[cfg(test)]

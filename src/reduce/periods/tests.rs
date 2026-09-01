@@ -2,13 +2,15 @@ use std::sync::Arc;
 
 use symbolica::prelude::Symbol;
 
+use super::conversion::integer_letter;
+use super::fibration::{FibBasisAcc, FibBasisAccSym};
 use super::{
     evaluate_periods, fibration_basis, fibration_basis_sym, test_zero_function_sym,
     zero_inf_period, zero_one_period,
 };
 use crate::core::{Poly, PolyCtx, Rat, SymCoef};
 use crate::error::Error;
-use crate::integrator::{RegKey, RegTerm, RegTermSym, Regulator};
+use crate::integrator::{RegKey, RegTerm, RegTermSym, Regulator, canonicalize_regkey};
 use crate::reduce::{MzvReductionRule, MzvReductionTable, build_mzv_atom_list};
 use crate::symbols::{SYMBOL_NAMESPACE, Word, mzv_atom};
 
@@ -209,4 +211,265 @@ fn fibration_basis_validates_variable_indices_before_recursing() {
     let (ctx, table) = setup();
     let error = fibration_basis(&ctx, &Regulator::new(), &[ctx.len()], &table).unwrap_err();
     assert!(matches!(error, Error::UnknownVariable(_)));
+}
+
+#[test]
+fn fibration_accumulators_resolve_forced_collisions_structurally() {
+    let (ctx, _) = setup();
+    let first_key = vec![word(&ctx, &[1])];
+    let second_key = vec![word(&ctx, &[2])];
+    let forced_digest = 0;
+
+    let mut rational = FibBasisAcc::default();
+    rational
+        .add_with_digest(
+            first_key.clone(),
+            Rat::from_int(ctx.clone(), 2),
+            forced_digest,
+        )
+        .unwrap();
+    rational
+        .add_with_digest(
+            second_key.clone(),
+            Rat::from_int(ctx.clone(), 3),
+            forced_digest,
+        )
+        .unwrap();
+    rational
+        .add_with_digest(
+            first_key.clone(),
+            Rat::from_int(ctx.clone(), 5),
+            forced_digest,
+        )
+        .unwrap();
+    let rational_terms = rational.into_terms();
+    assert_eq!(rational_terms.len(), 2);
+    assert_eq!(
+        rational_terms[0],
+        (first_key.clone(), Rat::from_int(ctx.clone(), 7))
+    );
+    assert_eq!(
+        rational_terms[1],
+        (second_key.clone(), Rat::from_int(ctx.clone(), 3))
+    );
+
+    let mut symbolic = FibBasisAccSym::default();
+    symbolic
+        .add_with_digest(
+            first_key.clone(),
+            SymCoef::from_rat(&Rat::from_int(ctx.clone(), 2)),
+            forced_digest,
+        )
+        .unwrap();
+    symbolic
+        .add_with_digest(
+            second_key.clone(),
+            SymCoef::from_rat(&Rat::from_int(ctx.clone(), 3)),
+            forced_digest,
+        )
+        .unwrap();
+    symbolic
+        .add_with_digest(
+            first_key,
+            SymCoef::from_rat(&Rat::from_int(ctx.clone(), 5)),
+            forced_digest,
+        )
+        .unwrap();
+    let symbolic_terms = symbolic.into_terms();
+    assert_eq!(symbolic_terms.len(), 2);
+    assert_eq!(
+        symbolic_terms[0].1,
+        SymCoef::from_rat(&Rat::from_int(ctx.clone(), 7))
+    );
+    assert_eq!(
+        symbolic_terms[1].1,
+        SymCoef::from_rat(&Rat::from_int(ctx, 3))
+    );
+}
+
+#[test]
+fn rational_fibration_accumulator_merges_and_cancels_reversed_products() {
+    let (ctx, _) = setup();
+    let forward = vec![word(&ctx, &[2]), word(&ctx, &[10])];
+    let mut reversed = forward.clone();
+    reversed.reverse();
+    let canonical = canonicalize_regkey(&forward);
+
+    let mut merged = FibBasisAcc::default();
+    merged
+        .add(forward.clone(), Rat::from_int(ctx.clone(), 2))
+        .unwrap();
+    merged
+        .add(reversed.clone(), Rat::from_int(ctx.clone(), 3))
+        .unwrap();
+    assert_eq!(
+        merged.into_terms(),
+        vec![(canonical, Rat::from_int(ctx.clone(), 5))]
+    );
+
+    let mut cancelled = FibBasisAcc::default();
+    cancelled
+        .add_with_digest(forward, Rat::from_int(ctx.clone(), 7), 0)
+        .unwrap();
+    cancelled
+        .add_with_digest(reversed, Rat::from_int(ctx, -7), 0)
+        .unwrap();
+    assert!(cancelled.into_terms().is_empty());
+}
+
+#[test]
+fn symbolic_fibration_accumulator_merges_and_cancels_reversed_products() {
+    let (ctx, _) = setup();
+    let forward = vec![word(&ctx, &[2]), word(&ctx, &[10])];
+    let mut reversed = forward.clone();
+    reversed.reverse();
+    let canonical = canonicalize_regkey(&forward);
+
+    let mut merged = FibBasisAccSym::default();
+    merged
+        .add(
+            forward.clone(),
+            SymCoef::from_rat(&Rat::from_int(ctx.clone(), 2)),
+        )
+        .unwrap();
+    merged
+        .add(
+            reversed.clone(),
+            SymCoef::from_rat(&Rat::from_int(ctx.clone(), 3)),
+        )
+        .unwrap();
+    assert_eq!(
+        merged.into_terms(),
+        vec![(canonical, SymCoef::from_rat(&Rat::from_int(ctx.clone(), 5)))]
+    );
+
+    let mut cancelled = FibBasisAccSym::default();
+    cancelled
+        .add_with_digest(
+            forward,
+            SymCoef::from_rat(&Rat::from_int(ctx.clone(), 7)),
+            0,
+        )
+        .unwrap();
+    cancelled
+        .add_with_digest(reversed, SymCoef::from_rat(&Rat::from_int(ctx, -7)), 0)
+        .unwrap();
+    assert!(cancelled.into_terms().is_empty());
+}
+
+#[test]
+fn fibration_accumulators_reuse_cancelled_slots() {
+    let (ctx, _) = setup();
+    let forward = vec![word(&ctx, &[2]), word(&ctx, &[10])];
+    let mut reversed = forward.clone();
+    reversed.reverse();
+    let forced_digest = 0;
+
+    let mut rational = FibBasisAcc::default();
+    let mut symbolic = FibBasisAccSym::default();
+    for _ in 0..64 {
+        rational
+            .add_with_digest(forward.clone(), Rat::one(ctx.clone()), forced_digest)
+            .unwrap();
+        rational
+            .add_with_digest(
+                reversed.clone(),
+                Rat::from_int(ctx.clone(), -1),
+                forced_digest,
+            )
+            .unwrap();
+        symbolic
+            .add_with_digest(forward.clone(), SymCoef::one(ctx.clone()), forced_digest)
+            .unwrap();
+        symbolic
+            .add_with_digest(
+                reversed.clone(),
+                SymCoef::from_rat(&Rat::from_int(ctx.clone(), -1)),
+                forced_digest,
+            )
+            .unwrap();
+    }
+
+    assert_eq!(rational.storage_shape(forced_digest), (1, 1));
+    assert_eq!(symbolic.storage_shape(forced_digest), (1, 1));
+    assert!(rational.into_terms().is_empty());
+    assert!(symbolic.into_terms().is_empty());
+}
+
+#[test]
+fn fibration_bucket_namespace_is_part_of_complete_key_equality() {
+    let left_symbol = Symbol::parse("x", "fibration_bucket_left").unwrap();
+    let right_symbol = Symbol::parse("x", "fibration_bucket_right").unwrap();
+    let left_ctx = PolyCtx::from_indeterminates([left_symbol.to_atom()]).unwrap();
+    let right_ctx = PolyCtx::from_indeterminates([right_symbol.to_atom()]).unwrap();
+    assert_eq!(left_ctx.vars(), right_ctx.vars());
+    assert!(!left_ctx.is_compatible_with(&right_ctx));
+
+    let left_key = vec![Word::from(vec![Rat::from_poly(
+        Poly::generator(left_ctx.clone(), 0).unwrap(),
+    )])];
+    let right_key = vec![Word::from(vec![Rat::from_poly(
+        Poly::generator(right_ctx.clone(), 0).unwrap(),
+    )])];
+    assert_eq!(left_key[0].to_string(), right_key[0].to_string());
+    assert_ne!(left_key, right_key);
+
+    let mut accumulator = FibBasisAcc::default();
+    accumulator
+        .add_with_digest(left_key.clone(), Rat::one(left_ctx), 0)
+        .unwrap();
+    accumulator
+        .add_with_digest(right_key.clone(), Rat::one(right_ctx), 0)
+        .unwrap();
+    let terms = accumulator.into_terms();
+    assert_eq!(terms.len(), 2);
+    assert_eq!(terms[0].0, left_key);
+    assert_eq!(terms[1].0, right_key);
+}
+
+#[test]
+fn fibration_presentation_collisions_have_input_independent_structural_order() {
+    let left_symbol = Symbol::parse("x", "fibration_order_left").unwrap();
+    let right_symbol = Symbol::parse("x", "fibration_order_right").unwrap();
+    let ctx =
+        PolyCtx::from_indeterminates([left_symbol.to_atom(), right_symbol.to_atom()]).unwrap();
+    let left_key = vec![Word::new(vec![Rat::from_poly(
+        Poly::generator(ctx.clone(), 0).unwrap(),
+    )])];
+    let right_key = vec![Word::new(vec![Rat::from_poly(
+        Poly::generator(ctx.clone(), 1).unwrap(),
+    )])];
+    assert_eq!(left_key[0].content_key(), right_key[0].content_key());
+    assert_ne!(left_key, right_key);
+
+    let build = |reverse: bool| {
+        let mut accumulator = FibBasisAcc::default();
+        let entries = if reverse {
+            [right_key.clone(), left_key.clone()]
+        } else {
+            [left_key.clone(), right_key.clone()]
+        };
+        for key in entries {
+            accumulator
+                .add_with_digest(key, Rat::one(ctx.clone()), 0)
+                .unwrap();
+        }
+        accumulator.into_terms()
+    };
+    assert_eq!(build(false), build(true));
+}
+
+#[test]
+fn integer_letter_detection_uses_exact_symbolica_constants() {
+    let (ctx, _) = setup();
+    assert_eq!(
+        integer_letter(&Rat::from_int(ctx.clone(), 7), "test").unwrap(),
+        7
+    );
+    assert_eq!(
+        integer_letter(&Rat::from_int(ctx.clone(), -2), "test").unwrap(),
+        -2
+    );
+    assert!(integer_letter(&Rat::parse(ctx.clone(), "3/2").unwrap(), "test").is_err());
+    assert!(integer_letter(&Rat::parse(ctx, "x").unwrap(), "test").is_err());
 }

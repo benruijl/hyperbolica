@@ -1,6 +1,7 @@
-use std::collections::HashMap;
-
+use crate::core::{DigestBuckets, structural_bucket_digest};
 use crate::symbols::{Letter, Word, Wordlist, WordlistTerm};
+
+const WORD_COLLECTION_DOMAIN: u64 = 0x5348_5546_464c_4557;
 
 /// Shuffle two words, collecting identical interleavings.
 ///
@@ -120,15 +121,15 @@ pub fn scalar_mul_wordlist(wordlist: &Wordlist, scalar: &crate::core::Rat) -> Wo
 
 /// Merge identical words, preserving their first-occurrence order.
 pub fn collect_words(wordlist: &Wordlist) -> Wordlist {
-    let mut indices = HashMap::<String, usize>::new();
+    let mut indices = DigestBuckets::default();
     let mut kept = Vec::<WordlistTerm>::new();
 
     for term in &wordlist.terms {
-        let key = term.word.content_key();
-        if let Some(&index) = indices.get(&key) {
+        let digest = structural_bucket_digest(WORD_COLLECTION_DOMAIN, &term.word);
+        if let Some(index) = indices.find(digest, |index| kept[index].word == term.word) {
             kept[index].coef = &kept[index].coef + &term.coef;
         } else {
-            indices.insert(key, kept.len());
+            indices.insert(digest, kept.len());
             kept.push(term.clone());
         }
     }
@@ -140,22 +141,22 @@ pub fn collect_words(wordlist: &Wordlist) -> Wordlist {
     )
 }
 
-/// Strip consecutive leading letters whose canonical string is `reg_letter`.
-pub fn reg_head(word: &Word, reg_letter: &str) -> Word {
+/// Strip consecutive leading letters equal to `reg_letter`.
+pub fn reg_head(word: &Word, reg_letter: &Letter) -> Word {
     let first_kept = word
         .letters
         .iter()
-        .position(|letter| letter.to_string() != reg_letter)
+        .position(|letter| letter != reg_letter)
         .unwrap_or(word.len());
     Word::from(word.letters[first_kept..].to_vec())
 }
 
-/// Strip consecutive trailing letters whose canonical string is `reg_letter`.
-pub fn reg_tail(word: &Word, reg_letter: &str) -> Word {
+/// Strip consecutive trailing letters equal to `reg_letter`.
+pub fn reg_tail(word: &Word, reg_letter: &Letter) -> Word {
     let kept_len = word
         .letters
         .iter()
-        .rposition(|letter| letter.to_string() != reg_letter)
+        .rposition(|letter| letter != reg_letter)
         .map_or(0, |index| index + 1);
     Word::from(word.letters[..kept_len].to_vec())
 }
@@ -164,7 +165,9 @@ pub fn reg_tail(word: &Word, reg_letter: &str) -> Word {
 mod tests {
     use std::sync::Arc;
 
-    use crate::core::{PolyCtx, Rat};
+    use symbolica::prelude::Symbol;
+
+    use crate::core::{Poly, PolyCtx, Rat};
 
     use super::*;
 
@@ -287,6 +290,24 @@ mod tests {
     }
 
     #[test]
+    fn collection_never_aliases_equal_spellings_from_distinct_contexts() {
+        let x_ctx = PolyCtx::new(["x"]).unwrap();
+        let y_ctx = PolyCtx::new(["y"]).unwrap();
+        let x_word = Word::new(vec![Rat::one(x_ctx.clone())]);
+        let y_word = Word::new(vec![Rat::one(y_ctx.clone())]);
+        assert_eq!(x_word.content_key(), y_word.content_key());
+        assert_ne!(x_word, y_word);
+
+        let collected = collect_words(&Wordlist::new(vec![
+            WordlistTerm::new(Rat::one(x_ctx), x_word.clone()),
+            WordlistTerm::new(Rat::one(y_ctx), y_word.clone()),
+        ]));
+        assert_eq!(collected.terms.len(), 2);
+        assert_eq!(collected.terms[0].word, x_word);
+        assert_eq!(collected.terms[1].word, y_word);
+    }
+
+    #[test]
     fn scalar_multiplication_defers_zero_elimination() {
         let ctx = context();
         let input = Wordlist::from(vec![term(4, word(&ctx, &[0]), &ctx)]);
@@ -301,10 +322,27 @@ mod tests {
     fn regularizer_stripping_only_removes_the_selected_edge_run() {
         let ctx = context();
         let input = word(&ctx, &[0, 0, 1, 0]);
+        let zero = integer(&ctx, 0);
 
-        assert_eq!(reg_head(&input, "0"), word(&ctx, &[1, 0]));
-        assert_eq!(reg_tail(&input, "0"), word(&ctx, &[0, 0, 1]));
-        assert_eq!(reg_head(&word(&ctx, &[0, 0]), "0"), Word::default());
-        assert_eq!(reg_tail(&Word::default(), "0"), Word::default());
+        assert_eq!(reg_head(&input, &zero), word(&ctx, &[1, 0]));
+        assert_eq!(reg_tail(&input, &zero), word(&ctx, &[0, 0, 1]));
+        assert_eq!(reg_head(&word(&ctx, &[0, 0]), &zero), Word::default());
+        assert_eq!(reg_tail(&Word::default(), &zero), Word::default());
+    }
+
+    #[test]
+    fn regularizer_does_not_match_equal_spelling_from_another_namespace() {
+        let left_symbol = Symbol::parse("x", "shuffle_reg_left").unwrap();
+        let right_symbol = Symbol::parse("x", "shuffle_reg_right").unwrap();
+        let left_ctx = PolyCtx::from_symbols([left_symbol]).unwrap();
+        let right_ctx = PolyCtx::from_symbols([right_symbol]).unwrap();
+        let left = Rat::from_poly(Poly::generator(left_ctx, 0).unwrap());
+        let right = Rat::from_poly(Poly::generator(right_ctx, 0).unwrap());
+        assert_eq!(left.to_string(), right.to_string());
+        assert_ne!(left, right);
+
+        let word = Word::new(vec![left.clone()]);
+        assert_eq!(reg_head(&word, &right), word);
+        assert_eq!(reg_tail(&word, &right), Word::new(vec![left]));
     }
 }

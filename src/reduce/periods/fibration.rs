@@ -1,17 +1,18 @@
-use std::collections::{BTreeMap, btree_map::Entry};
 use std::sync::Arc;
 
 use super::evaluation::zero_inf_period;
 use super::{FibrationBasisResult, FibrationBasisResultSym};
-use crate::core::{PolyCtx, Rat, SymCoef};
+use crate::core::{DigestBuckets, PolyCtx, Rat, SymCoef, structural_bucket_digest};
 use crate::error::{Error, Result};
 use crate::integrator::{
     RegKey, RegTerm, Regulator, RegulatorSym, canonicalize_regkey, regkey_content_key,
-    transform_shuffle,
+    regkey_structural_cmp, transform_shuffle,
 };
 use crate::symbols::Wordlist;
 
 use crate::reduce::mzv_reduce::MzvReductionTable;
+
+const FIBRATION_REGKEY_BUCKET_DOMAIN: u64 = 0x4649_4252_4547_0001;
 
 fn fibration_vars(ctx: &Arc<PolyCtx>, var_indices: &[usize]) -> Result<Vec<String>> {
     var_indices
@@ -37,59 +38,148 @@ fn advance_cartesian(counter: &mut [usize], sizes: &[usize]) -> bool {
     false
 }
 
+fn sort_entries_for_presentation<V>(entries: Vec<(RegKey, V)>) -> Vec<(RegKey, V)> {
+    let mut decorated = entries
+        .into_iter()
+        .map(|entry| (regkey_content_key(&entry.0), entry))
+        .collect::<Vec<_>>();
+    decorated.sort_unstable_by(|(left_key, left), (right_key, right)| {
+        left_key
+            .cmp(right_key)
+            .then_with(|| regkey_structural_cmp(&left.0, &right.0))
+    });
+    decorated.into_iter().map(|(_, entry)| entry).collect()
+}
+
 #[derive(Default)]
-struct FibBasisAcc {
-    entries: BTreeMap<String, (RegKey, Rat)>,
+pub(super) struct FibBasisAcc {
+    buckets: DigestBuckets,
+    entries: Vec<(RegKey, Rat)>,
 }
 
 impl FibBasisAcc {
-    fn add(&mut self, key: RegKey, coefficient: Rat) -> Result<()> {
+    pub(super) fn add(&mut self, key: RegKey, coefficient: Rat) -> Result<()> {
+        let key = canonicalize_regkey(&key);
+        let digest = structural_bucket_digest(FIBRATION_REGKEY_BUCKET_DOMAIN, &key);
+        self.add_canonical_with_digest(key, coefficient, digest)
+    }
+
+    #[cfg(test)]
+    pub(super) fn add_with_digest(
+        &mut self,
+        key: RegKey,
+        coefficient: Rat,
+        digest: u64,
+    ) -> Result<()> {
+        let key = canonicalize_regkey(&key);
+        self.add_canonical_with_digest(key, coefficient, digest)
+    }
+
+    fn add_canonical_with_digest(
+        &mut self,
+        key: RegKey,
+        coefficient: Rat,
+        digest: u64,
+    ) -> Result<()> {
         if coefficient.is_zero() {
             return Ok(());
         }
-        let content_key = regkey_content_key(&key);
-        match self.entries.entry(content_key) {
-            Entry::Vacant(entry) => {
-                entry.insert((key, coefficient));
-            }
-            Entry::Occupied(mut entry) => {
-                let sum = entry.get().1.try_add(&coefficient)?;
-                if sum.is_zero() {
-                    entry.remove();
-                } else {
-                    entry.get_mut().1 = sum;
-                }
-            }
+        if let Some(index) = self.buckets.find(digest, |index| {
+            self.entries
+                .get(index)
+                .is_some_and(|(candidate, _)| candidate == &key)
+        }) {
+            let entry = &mut self.entries[index];
+            entry.1 = entry.1.try_add(&coefficient)?;
+        } else {
+            let index = self.entries.len();
+            self.entries.push((key, coefficient));
+            self.buckets.insert(digest, index);
         }
         Ok(())
+    }
+
+    #[cfg(test)]
+    pub(super) fn storage_shape(&self, digest: u64) -> (usize, usize) {
+        (self.entries.len(), self.buckets.bucket_len(digest))
+    }
+
+    pub(super) fn into_terms(self) -> Vec<(RegKey, Rat)> {
+        // Retain the established lexical wire/presentation ordering after all
+        // semantic collection has completed structurally. Full structural
+        // order resolves equal-spelling presentation collisions.
+        sort_entries_for_presentation(
+            self.entries
+                .into_iter()
+                .filter(|(_, coefficient)| !coefficient.is_zero())
+                .collect(),
+        )
     }
 }
 
 #[derive(Default)]
-struct FibBasisAccSym {
-    entries: BTreeMap<String, (RegKey, SymCoef)>,
+pub(super) struct FibBasisAccSym {
+    buckets: DigestBuckets,
+    entries: Vec<(RegKey, SymCoef)>,
 }
 
 impl FibBasisAccSym {
-    fn add(&mut self, key: RegKey, coefficient: SymCoef) -> Result<()> {
+    pub(super) fn add(&mut self, key: RegKey, coefficient: SymCoef) -> Result<()> {
+        let key = canonicalize_regkey(&key);
+        let digest = structural_bucket_digest(FIBRATION_REGKEY_BUCKET_DOMAIN, &key);
+        self.add_canonical_with_digest(key, coefficient, digest)
+    }
+
+    #[cfg(test)]
+    pub(super) fn add_with_digest(
+        &mut self,
+        key: RegKey,
+        coefficient: SymCoef,
+        digest: u64,
+    ) -> Result<()> {
+        let key = canonicalize_regkey(&key);
+        self.add_canonical_with_digest(key, coefficient, digest)
+    }
+
+    fn add_canonical_with_digest(
+        &mut self,
+        key: RegKey,
+        coefficient: SymCoef,
+        digest: u64,
+    ) -> Result<()> {
         if coefficient.is_zero() {
             return Ok(());
         }
-        let content_key = regkey_content_key(&key);
-        match self.entries.entry(content_key) {
-            Entry::Vacant(entry) => {
-                entry.insert((key, coefficient));
-            }
-            Entry::Occupied(mut entry) => {
-                let sum = entry.get().1.try_add(&coefficient)?;
-                if sum.is_zero() {
-                    entry.remove();
-                } else {
-                    entry.get_mut().1 = sum;
-                }
-            }
+        if let Some(index) = self.buckets.find(digest, |index| {
+            self.entries
+                .get(index)
+                .is_some_and(|(candidate, _)| candidate == &key)
+        }) {
+            let entry = &mut self.entries[index];
+            entry.1 = entry.1.try_add(&coefficient)?;
+        } else {
+            let index = self.entries.len();
+            self.entries.push((key, coefficient));
+            self.buckets.insert(digest, index);
         }
         Ok(())
+    }
+
+    #[cfg(test)]
+    pub(super) fn storage_shape(&self, digest: u64) -> (usize, usize) {
+        (self.entries.len(), self.buckets.bucket_len(digest))
+    }
+
+    pub(super) fn into_terms(self) -> Vec<(RegKey, SymCoef)> {
+        // Retain the established lexical wire/presentation ordering after all
+        // semantic collection has completed structurally. Full structural
+        // order resolves equal-spelling presentation collisions.
+        sort_entries_for_presentation(
+            self.entries
+                .into_iter()
+                .filter(|(_, coefficient)| !coefficient.is_zero())
+                .collect(),
+        )
     }
 }
 
@@ -308,7 +398,7 @@ pub(super) fn fibration_basis(
     )?;
     Ok(FibrationBasisResult {
         vars,
-        terms: worker.accumulator.entries.into_values().collect(),
+        terms: worker.accumulator.into_terms(),
     })
 }
 
@@ -332,7 +422,7 @@ pub(super) fn fibration_basis_sym(
     )?;
     Ok(FibrationBasisResultSym {
         vars,
-        terms: worker.accumulator.entries.into_values().collect(),
+        terms: worker.accumulator.into_terms(),
     })
 }
 

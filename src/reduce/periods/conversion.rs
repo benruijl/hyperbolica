@@ -8,9 +8,9 @@ use crate::reduce::mzv_expansion::{MzvExpansionTable, cross_ctx_transfer_rat};
 
 pub(super) fn integer_letter(letter: &Rat, site: &str) -> Result<i64> {
     letter
-        .to_string()
-        .parse::<i64>()
-        .map_err(|_| Error::InvalidInput(format!("{site}: non-integer letter `{letter}`")))
+        .integer_constant()
+        .and_then(|value| value.to_i64())
+        .ok_or_else(|| Error::InvalidInput(format!("{site}: non-integer letter `{letter}`")))
 }
 
 fn mzv_name(indices: &[i64]) -> String {
@@ -37,7 +37,7 @@ fn to_mzv_one_word(
     if word.is_empty() {
         return Ok(coefficient.clone());
     }
-    if word[0].to_string() == "1" || word[word.len() - 1].is_zero() {
+    if word[0].is_one() || word[word.len() - 1].is_zero() {
         // The period entry points regularize these cases before conversion.
         return Ok(Rat::zero(ctx.clone()));
     }

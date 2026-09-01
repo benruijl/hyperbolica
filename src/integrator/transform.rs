@@ -11,6 +11,7 @@ mod word;
 #[cfg(test)]
 mod tests;
 
+pub(crate) use collection::regkey_structural_cmp;
 pub use collection::{
     canonicalize_regkey, canonicalize_regulator, canonicalize_regulator_sym, collect_regulator,
     collect_regulator_sym, regkey_content_key, regulator_content_key, regulator_sym_content_key,

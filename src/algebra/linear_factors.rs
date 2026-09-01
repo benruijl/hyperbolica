@@ -39,11 +39,11 @@ pub struct NonlinearFactor {
 ///
 /// `constant * product((x - pole)^multiplicity) * product(nonlinear^multiplicity)`.
 ///
-/// The constant is stored as a canonical polynomial string because, just as
+/// The constant remains an exact Symbolica-backed polynomial because, just as
 /// in HyperFLINT, it can depend on variables other than `x`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LinearFactorization {
-    pub constant: String,
+    pub constant: Poly,
     pub linear: Vec<LinearFactor>,
     pub nonlinear: Vec<NonlinearFactor>,
 }
@@ -73,7 +73,7 @@ pub fn linear_factors_with_options(
     polynomial.degree(variable)?;
 
     let factorization = polynomial.factor();
-    let mut constant = Poly::parse(polynomial.ctx().clone(), &factorization.constant)?;
+    let mut constant = Poly::from_rational(polynomial.ctx().clone(), factorization.constant);
     let mut linear = Vec::new();
     let mut nonlinear = Vec::new();
 
@@ -129,7 +129,7 @@ pub fn linear_factors_with_options(
     }
 
     Ok(LinearFactorization {
-        constant: constant.to_string(),
+        constant,
         linear,
         nonlinear,
     })
@@ -152,7 +152,7 @@ mod tests {
 
     fn reconstruct(factors: &LinearFactorization, variable: usize, ctx: Arc<PolyCtx>) -> Rat {
         let x = Rat::from_poly(Poly::generator(ctx.clone(), variable).unwrap());
-        let mut value = Rat::parse(ctx, &factors.constant).unwrap();
+        let mut value = Rat::from_poly(factors.constant.clone());
 
         for factor in &factors.linear {
             let base = x.try_sub(&factor.pole).unwrap();
@@ -238,7 +238,10 @@ mod tests {
 
         assert!(factors.nonlinear.is_empty());
         assert_eq!(factors.linear.len(), 2);
-        assert_eq!(factors.constant, "lf_alg_z");
+        assert_eq!(
+            factors.constant,
+            Poly::parse(ctx.clone(), "lf_alg_z").unwrap()
+        );
         assert!(factors.linear.iter().all(|factor| {
             factor.pole.to_atom().as_fun_view().is_some_and(|call| {
                 let heads = crate::symbols::heads();

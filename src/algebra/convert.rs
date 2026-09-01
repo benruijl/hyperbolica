@@ -42,14 +42,15 @@ pub fn convert_zero_one(wordlist: &Wordlist) -> Result<Wordlist> {
     };
     let ctx = first.coef.ctx().clone();
     let zero = Rat::zero(ctx.clone());
-    let one = Rat::one(ctx);
+    let one = Rat::one(ctx.clone());
+    let minus_one = Rat::from_int(ctx, -1);
     let mut output = Wordlist::default();
 
     for term in &wordlist.terms {
         let mut partial =
             Wordlist::new(vec![WordlistTerm::new(term.coef.clone(), Word::default())]);
         for letter in &term.word.letters {
-            if letter.to_string() == "-1" {
+            if letter == &minus_one {
                 partial = prepend_letter(&partial, &zero);
             } else {
                 let transformed = one.try_div(&one.try_add(letter)?)?;

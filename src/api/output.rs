@@ -7,7 +7,7 @@ use crate::core::{PolyCtx, SymCoef, SymMonomial};
 use crate::integrator::RegulatorSym;
 use crate::symbols::{Word, heads};
 
-use super::{AtomIntegrationError, AtomIntegrationResult};
+use super::AtomIntegrationResult;
 
 /// One collected term in an Atom-native integration result.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -114,17 +114,6 @@ fn power(base: Atom, exponent: i32) -> Atom {
     }
 }
 
-fn context_variable(ctx: &PolyCtx, name: &str) -> AtomIntegrationResult<Atom> {
-    ctx.vars()
-        .iter()
-        .position(|candidate| candidate == name)
-        .map(|index| ctx.variable_atom(index))
-        .transpose()?
-        .ok_or_else(|| AtomIntegrationError::SymbolicVariableOutsideContext {
-            variable: name.to_owned(),
-        })
-}
-
 fn monomial_to_atom(ctx: &PolyCtx, monomial: &SymMonomial) -> AtomIntegrationResult<Atom> {
     let mut factors = Vec::with_capacity(
         3 + monomial.log_powers.len() + monomial.delta_powers.len() + monomial.period_powers.len(),
@@ -140,7 +129,7 @@ fn monomial_to_atom(ctx: &PolyCtx, monomial: &SymMonomial) -> AtomIntegrationRes
         factors.push(power(Symbol::LOG.call(argument), exponent));
     }
     for (variable, &exponent) in &monomial.delta_powers {
-        let variable = context_variable(ctx, variable)?;
+        let variable = ctx.variable_atom(*variable)?;
         factors.push(power(heads().delta.call(variable), exponent));
     }
     for (&period, &exponent) in &monomial.period_powers {
@@ -191,7 +180,7 @@ mod tests {
         monomial.pi_power = 2;
         monomial.i_power = 1;
         monomial.log_powers = BTreeMap::from([(2, 1)]);
-        monomial.delta_powers.insert(x.get_name().to_owned(), 1);
+        monomial.delta_powers.insert(0, 1);
         monomial.period_powers = BTreeMap::from([(7, 2)]);
         let coefficient = SymCoef::from_monomials(ctx, vec![monomial]);
         let atom = symcoef_to_atom(&coefficient).unwrap();
@@ -226,12 +215,27 @@ mod tests {
     }
 
     #[test]
-    fn unknown_delta_variables_fail_structurally() {
+    fn unknown_delta_variables_fail_at_construction() {
         let ctx = PolyCtx::from_symbols([symbol!("api_output_delta_x")]).unwrap();
-        let coefficient = SymCoef::delta_factor(ctx, "not_in_context");
         assert!(matches!(
-            symcoef_to_atom(&coefficient),
-            Err(AtomIntegrationError::SymbolicVariableOutsideContext { .. })
+            SymCoef::delta_factor(ctx.clone(), ctx.len()),
+            Err(crate::error::Error::UnknownVariable(_))
         ));
+    }
+
+    #[test]
+    fn delta_atom_output_preserves_namespaced_variable_identity() {
+        let left = Symbol::parse("x", "api_delta_left").unwrap();
+        let right = Symbol::parse("x", "api_delta_right").unwrap();
+        let ctx = PolyCtx::from_indeterminates([left.to_atom(), right.to_atom()]).unwrap();
+        assert_eq!(ctx.vars(), &["x", "x"]);
+
+        let coefficient = SymCoef::delta_factor(ctx, 1).unwrap();
+        let atom = symcoef_to_atom(&coefficient).unwrap();
+        let delta = atom.as_fun_view().expect("one delta factor is a function");
+        assert_eq!(delta.get_symbol(), heads().delta);
+        assert_eq!(delta.get_nargs(), 1);
+        assert_eq!(delta.get(0), right.to_atom().as_view());
+        assert_ne!(delta.get(0), left.to_atom().as_view());
     }
 }

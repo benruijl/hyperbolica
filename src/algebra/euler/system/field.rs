@@ -53,8 +53,8 @@ pub(super) fn validate_indices(
     };
     if factors
         .iter()
-        .any(|factor| factor.ctx().vars() != first.ctx().vars())
-        || constraint.is_some_and(|value| value.ctx().vars() != first.ctx().vars())
+        .any(|factor| !factor.ctx().is_compatible_with(first.ctx()))
+        || constraint.is_some_and(|value| !value.ctx().is_compatible_with(first.ctx()))
     {
         return false;
     }

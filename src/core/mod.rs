@@ -5,6 +5,7 @@ mod period_table;
 mod poly;
 mod rat;
 mod rat_split;
+mod structural_digest;
 mod sym_coef_split;
 mod symcoef;
 mod zw_table;
@@ -19,6 +20,9 @@ pub use rat::Rat;
 pub use rat_split::{
     FnIndexMaps, RatScalar, SymMonomialSplit, build_fn_index_maps, recombine_rat_split,
     split_rat_by_w_monomial,
+};
+pub(crate) use structural_digest::{
+    DigestBuckets, StableFnv1aHasher, structural_bucket_digest, structural_bucket_digest_by,
 };
 pub use sym_coef_split::{SharedZwTable, SymCoefSplit};
 pub use symcoef::{SymCoef, SymMonomial, reduce_to_rat, simplify_symcoef};

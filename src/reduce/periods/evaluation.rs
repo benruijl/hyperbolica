@@ -47,7 +47,7 @@ pub(super) fn zero_one_period_with_expansion(
         return Ok(result);
     }
 
-    if word[0].to_string() == "1" {
+    if word[0].is_one() {
         let seed = Wordlist::new(vec![WordlistTerm::new(Rat::one(ctx.clone()), word.clone())]);
         let regularized = reg_head(&seed, &Rat::one(ctx.clone()), &Rat::zero(ctx.clone()))?;
         let mut result = Rat::zero(ctx.clone());

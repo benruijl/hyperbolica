@@ -25,8 +25,8 @@ impl SymMonomial {
             let _ = write!(key, "{argument}:{exponent},");
         }
         key.push_str("|D");
-        for (name, exponent) in &self.delta_powers {
-            let _ = write!(key, "{name}:{exponent},");
+        for (variable, exponent) in &self.delta_powers {
+            let _ = write!(key, "{variable}:{exponent},");
         }
         key.push_str("|Q");
         for (period, exponent) in &self.period_powers {
@@ -94,7 +94,14 @@ impl Display for SymMonomial {
                 write!(formatter, "^{exponent}")?;
             }
         }
-        for (name, exponent) in &self.delta_powers {
+        for (variable, exponent) in &self.delta_powers {
+            let name = self
+                .prefactor
+                .ctx()
+                .vars()
+                .get(*variable)
+                .map(String::as_str)
+                .unwrap_or("<invalid>");
             write!(formatter, "*delta[{name}]")?;
             if *exponent != 1 {
                 write!(formatter, "^{exponent}")?;

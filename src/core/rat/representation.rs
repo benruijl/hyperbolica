@@ -12,9 +12,7 @@ use crate::symbols::SYMBOL_NAMESPACE;
 
 impl Rat {
     pub fn new(numerator: Poly, denominator: Poly) -> Result<Self> {
-        if numerator.ctx().vars() != denominator.ctx().vars()
-            || numerator.ctx().variable_map() != denominator.ctx().variable_map()
-        {
+        if !numerator.ctx().is_compatible_with(denominator.ctx()) {
             return Err(Error::ContextMismatch);
         }
         if denominator.is_zero() {
@@ -96,6 +94,28 @@ impl Rat {
         self.native.numerator.is_one() && self.native.denominator.is_one()
     }
 
+    /// Return the exact Symbolica scalar when this rational function is
+    /// constant in every polynomial variable.
+    ///
+    /// This reads the canonical integer numerator and denominator directly;
+    /// it does not materialize the compatibility [`Poly`] views or round-trip
+    /// through expression formatting.
+    pub fn rational_constant(&self) -> Option<Rational> {
+        self.native.is_constant().then(|| {
+            Rational::from((
+                self.native.numerator.get_constant(),
+                self.native.denominator.get_constant(),
+            ))
+        })
+    }
+
+    /// Return the exact Symbolica integer when this rational function is an
+    /// integer constant.
+    pub fn integer_constant(&self) -> Option<Integer> {
+        let value = self.rational_constant()?;
+        value.is_integer().then(|| value.numerator_ref().clone())
+    }
+
     pub fn equal(&self, other: &Self) -> bool {
         self.same_context(other) && self.native == other.native
     }
@@ -152,7 +172,7 @@ impl Rat {
     }
 
     pub(super) fn same_context(&self, other: &Self) -> bool {
-        self.ctx.vars() == other.ctx.vars() && self.ctx.variable_map() == other.ctx.variable_map()
+        self.ctx.is_compatible_with(&other.ctx)
     }
 
     pub(super) fn require_same_context(&self, other: &Self) -> Result<()> {

@@ -31,7 +31,7 @@ impl SymCoefSplit {
     ) -> Result<Self> {
         {
             let guard = lock_table(&table)?;
-            if guard.ctx().vars() != wide_ctx.vars() {
+            if !guard.ctx().is_compatible_with(&wide_ctx) {
                 return Err(Error::ContextMismatch);
             }
         }
@@ -110,9 +110,16 @@ impl SymCoefSplit {
         let mut result = Self::new(wide_ctx, narrow_ctx, table)?;
         if terms
             .iter()
-            .any(|term| term.num_n.ctx().vars() != result.narrow_ctx.vars())
+            .any(|term| !term.num_n.ctx().is_compatible_with(&result.narrow_ctx))
         {
             return Err(Error::ContextMismatch);
+        }
+        if let Some(variable) = terms
+            .iter()
+            .flat_map(|term| term.delta_powers.keys().copied())
+            .find(|&variable| variable >= result.wide_ctx.len())
+        {
+            return Err(Error::UnknownVariable(variable.to_string()));
         }
         result.terms = terms;
         result.canonicalize()
@@ -281,7 +288,7 @@ impl SymCoefSplit {
     }
 
     pub fn try_mul_rat(&self, rational: &Rat) -> Result<Self> {
-        if self.wide_ctx.vars() != rational.ctx().vars() {
+        if !self.wide_ctx.is_compatible_with(rational.ctx()) {
             return Err(Error::ContextMismatch);
         }
         if self.is_zero() || rational.is_zero() {
@@ -312,15 +319,15 @@ impl SymCoefSplit {
     }
 
     pub fn equals_canonical(&self, other: &Self) -> bool {
-        self.wide_ctx.vars() == other.wide_ctx.vars()
-            && self.narrow_ctx.vars() == other.narrow_ctx.vars()
+        self.wide_ctx.is_compatible_with(&other.wide_ctx)
+            && self.narrow_ctx.is_compatible_with(&other.narrow_ctx)
             && Arc::ptr_eq(&self.table, &other.table)
             && self.terms == other.terms
     }
 
     fn require_compatible(&self, other: &Self) -> Result<()> {
-        if self.wide_ctx.vars() == other.wide_ctx.vars()
-            && self.narrow_ctx.vars() == other.narrow_ctx.vars()
+        if self.wide_ctx.is_compatible_with(&other.wide_ctx)
+            && self.narrow_ctx.is_compatible_with(&other.narrow_ctx)
             && Arc::ptr_eq(&self.table, &other.table)
         {
             Ok(())
@@ -435,7 +442,7 @@ mod tests {
         first.pi_power = 2;
         first.i_power = 1;
         first.log_powers.insert(2, 3);
-        first.delta_powers.insert("x".into(), 1);
+        first.delta_powers.insert(0, 1);
         first.period_powers.insert(7, 2);
         let source = SymCoef::from_monomials(wide, vec![first]);
         let split = SymCoefSplit::from_symcoef(&source, narrow, table).unwrap();
@@ -467,7 +474,7 @@ mod tests {
         let (wide, narrow, table) = contexts();
         let mut ma = SymMonomial::new(Rat::parse(wide.clone(), "s*x/(t+1)").unwrap());
         ma.i_power = 1;
-        ma.delta_powers.insert("x".into(), 1);
+        ma.delta_powers.insert(0, 1);
         ma.period_powers.insert(3, 1);
         let a = SymCoef::from_monomials(wide.clone(), vec![ma]);
         let split = SymCoefSplit::from_symcoef(&a, narrow, table).unwrap();

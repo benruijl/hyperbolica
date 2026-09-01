@@ -158,7 +158,7 @@ the weight-one logarithmic singularity, malformed arity, first-only MPL zero,
 and argument-pole deferral. Runtime execution remains part of the pending
 licensed serial gate; all hook tests are included in the compile/no-run gate.
 
-### Structural equality, hashing, and LR cache keys
+### Structural equality, hashing, and cache keys
 
 The P2/P3 key migration was re-audited against the complete public equality and
 ordering surface before changing the LR caches. `AtomView` compares its
@@ -186,8 +186,12 @@ perform the legacy lexical ordering only after formatting at the JSON boundary.
 
 Current status: **P2/P3 implemented for LR search, LR scan, and factor-table
 hot paths.** `Poly` now implements `Hash` consistently with its existing
-context-sensitive `Eq`: it prefixes both context names and structural
-`PolyVariable`s before delegating to Symbolica's canonical polynomial hash.
+context-sensitive `Eq`: it hashes the ordered structural `PolyVariable` map
+exactly once, followed by Symbolica's canonical coefficient and exponent
+arrays. `Rat` applies the same rule to its canonical numerator and denominator
+payloads, and composite Word/SymCoef/slice hashes reuse payload-only helpers so
+they do not revisit one large context for every entry. Diagnostic
+`PolyCtx::vars()` spellings are presentation metadata, not ring identity.
 The reduction step cache stores full `(variable, Vec<Poly>)` keys in collision
 buckets; its `u64` digest only selects a bucket. The proportional dedup,
 intersection, carry/minted ledgers, factor cache, singularity collector, and
@@ -205,11 +209,14 @@ lexical wire comparison is performed.
 An audit of every root export and call site also found two unused public
 wrappers, `RatAddKey` and `ReduceKey`, whose derived `Eq + Hash` compared only
 digest fields. They have been deleted together with the public
-`context_signature`, `poly_signature`, and `rat_signature` exports. The sole
-remaining helper is named `poly_bucket_digest`, is crate-private, and is
-consumed only by structures that compare complete `Poly` values inside every
-matching bucket. Namespaced-context and forced-collision regressions cover
-this invariant.
+`context_signature`, `poly_signature`, and `rat_signature` exports.
+`poly_bucket_digest` and the general `structural_bucket_digest[_by]` machinery
+are crate-private, explicitly described as bucket accelerators rather than
+semantic keys, and consumed only by structures that compare complete typed
+values inside every matching bucket. Their `StableFnv1aHasher` has a fixed
+FNV-1a definition and fixed-width little-endian integer events, so bucket and
+seed behavior does not inherit randomized or standard-library hasher changes.
+Namespaced-context and forced-collision regressions cover this invariant.
 
 The word/primitive key path has now received the same structural treatment.
 The complete relevant public surface was checked again: `PolyVariable`
@@ -220,8 +227,8 @@ and denominator (`domains/rational_polynomial.rs:91-96`). Those polynomials in
 turn use the coefficient/exponent arrays plus the structural variable map for
 nonconstants (`poly/polynomial.rs:1647-1687`); constants intentionally compare
 without a variable map. Hyperbolica's `Rat::Eq` is stricter because it also
-requires context names and `PolyVariable`s, so `Rat::Hash` prefixes those exact
-context fields before hashing the native rational polynomial
+requires the complete ordered `PolyVariable` map, so `Rat::Hash` prefixes that
+exact structural context before hashing the native rational polynomial
 (`src/core/rat/traits.rs`). `Word` consequently derives full ordered
 structural `Eq + Hash` (`src/symbols/word.rs`). Because `Rat` also owns lazy
 compatibility views, the primitive accumulator does not place `Word` directly
@@ -231,17 +238,51 @@ source value stored in that row (`src/integrator/primitive.rs`). Hash digests ar
 therefore never treated as equality. Forced-collision, canonical-value,
 cross-context, and first-encounter-order regressions cover the contract.
 
-`Word::content_key` remains temporarily as an explicitly legacy formatted
-compatibility/ordering spelling for transform, period, and wire-adjacent
-callers scheduled for a later scoped migration. It is no longer used by the
-primitive cache and must not be introduced into new semantic lookup paths.
+The transform, period-fibration, and integration-step hot paths received the
+same audit before their formatted keys were removed. The decisive public
+Symbolica contracts remain `AtomView` canonical-byte `Eq + Hash + Ord`
+(`atom.rs:2408-2435,2655-2672`), owned `Atom` delegation
+(`atom.rs:3213-3225`), structural `PolyVariable` equality and hashing across
+symbol/function/power variants (`poly.rs:745-760`), canonical polynomial
+`Eq + Hash` (`poly/polynomial.rs:1647-1687`), and rational-polynomial
+`Eq + Hash` (`domains/rational_polynomial.rs:91-96`). There is still no safe
+public cross-context polynomial `Ord`; `InternalOrdering` retains its
+different-variable-map TODO (`poly/polynomial.rs:1689-1695`). Verdict:
+**REPLACE formatted semantic keys with collision buckets, RETAIN formatting
+only for legacy presentation order.**
+
+Transform collection now resolves a digest bucket with complete canonical
+`RegKey` equality; result rows retain and compare complete `RegulatorSym` and
+`Word` values; recursive and integration-step caches retain and compare the
+full `(variable, Word)` and `(variable, Vec<Word>)` inputs. Repeated-log
+grouping compares the complete `Rat` letter. Fibration accumulators retain and
+compare complete `RegKey` values. Symbolic regulator equality additionally
+checks the ordered structural `PolyVariable` map before comparing every
+symbolic monomial. Diagnostic names never enter identity. No `u64` is an
+equality proof. Injected-collision tests cover each bucket family; namespaced
+equal-spelling contexts prove context identity is decisive; reversed-input
+regressions preserve canonical output. Criterion cases exercise regulator
+collection, period accumulation, and shared integration-step spines in
+`benches/semantic_keys.rs`.
+
+`Word::content_key` remains only as an explicitly legacy
+compatibility/presentation spelling. Its letters are rendered from native
+`Rat::to_atom()` values, so compatible contexts built through different
+constructors agree without consulting diagnostic names. Commutative `RegKey`
+products canonicalize directly with a total structural comparator and do no
+formatting on that hot path. Final regulator/fibration row ordering still uses
+the established lexical presentation key with structural collision ties, and
+the JSON bridge rebuilds lexical factor/term order from the strings it
+actually emits. The key is no longer used by the primitive, transform,
+period, or integration-step semantic caches and must not be introduced into
+new lookup paths.
 
 Context and algebraic-letter interning now follow the same rule. The context
-interner hashes both diagnostic names and the ordered structural
-`PolyVariable` list, retains weak contexts in digest buckets, and confirms both
-fields before reusing an allocation. Its Atom-native `intern_context` entry
-point therefore distinguishes equal-looking symbols and function/power atoms
-from different namespaces. The algebraic-letter registry hashes the complete
+interner hashes the ordered structural `PolyVariable` list, retains weak
+contexts in digest buckets, and confirms that complete map before reusing an
+allocation. Diagnostic names do not split the same mathematical ring across
+the symbol and Atom-indeterminate constructors, while structural namespaces
+remain decisive. The algebraic-letter registry hashes the complete
 context-sensitive `Poly` value together with `var_idx`, retains only entry IDs
 in each bucket, and confirms `(var_idx, Poly::Eq)` before deduplication. Neither
 path uses a digest as identity, and first-seen context allocations and
@@ -249,6 +290,20 @@ one-based algebraic-letter IDs remain stable. Namespace-alias and injected
 digest-collision regressions cover both paths
 (`src/core/context_interner.rs`,
 `src/algebra/algebraic_letters/registry.rs`).
+
+Formal delta generators now follow the same context rule. `SymMonomial` and
+its split representation store `BTreeMap<usize, i32>` indices into the ordered
+native context instead of diagnostic variable strings. Public construction
+validates every index, and Atom output calls `PolyCtx::variable_atom` directly,
+so two namespaced variables that both print as `x` remain distinct. The legacy
+JSON adapter translates registered legacy names to native Atoms, compares the
+actual emitted wire spellings, and rejects unknown or ambiguous aliases. It
+maps validated indices back through `PolyCtx::variable_atom` plus the legacy
+special-name adapter only when producing historical wire text. Delta factors
+and symbolic monomial summands recover upstream lexical string ordering at
+that boundary, independent of context-index order. Cross-namespace Atom-output,
+registered-special, reversed-context, and ambiguous-wire regressions cover
+both sides of that boundary.
 
 This design deliberately wraps Symbolica's public contracts instead of
 inventing a parallel key representation: owned `Atom` delegates `Eq + Hash`
@@ -484,7 +539,16 @@ The migration above is implemented in `src/algebra/euler/{staircase,system,filte
 - the public finite-field `Factorize` implementation for lex-order multivariate polynomials (`poly/factor.rs:4560-4698`), restricted here to the specialized univariate constraint; all degree-one factors are inspected and the least residue root is selected, so an internal randomized factor ordering cannot affect the chosen root;
 - `reorder::<GrevLexOrder>` (`poly/polynomial.rs:1986-2004`), `GroebnerBasis::new` (`poly/groebner.rs:729-754`), and public `max_exp` (`poly/polynomial.rs:2081-2088`).
 
-The remaining code is HyperFLINT domain policy, not a replacement CAS: sector enumeration, cleared-dlog system assembly, homogeneous C-star charting, staircase enumeration, and conservative voting. `SplitMix64` supplies a fully specified caller-seeded specialization stream; the 32 descending primes, matched-prime constraint-root retry, twist seed, stable FNV seed digests, max-of-two generic counts, and two independent destructive votes are deterministic. The per-marginal generic memo uses the full canonical factor strings plus the exact propagator-index vector as its equality key—its folded FNV/mask digest is seed material only and is never an equality proof. Any invalid input, finite-field factorization/F4 panic, positive-dimensional constrained ideal, or exhausted retry keeps the candidate letter. Process-global atomic stats separately expose system construction and F4 wall time, chi calls, judgments, drops, boundary exemptions, and failure abstentions.
+The remaining code is HyperFLINT domain policy, not a replacement CAS: sector enumeration, cleared-dlog system assembly, homogeneous C-star charting, staircase enumeration, and conservative voting. `SplitMix64` supplies a fully specified caller-seeded specialization stream; the 32 descending primes, matched-prime constraint-root retry, twist seed, stable FNV seed digests, max-of-two generic counts, and two independent destructive votes are deterministic. The per-marginal generic memo uses complete typed `Poly` factors, the exact propagator-index vector, and the derived generic sampling seed as its equality key, so reusing a public cache with another base seed cannot reuse a sampled value or failure. Its manual hash visits the common native context once and then each canonical polynomial payload. The separate digest is seed material only and is never an equality proof: coefficients and exponents are hashed natively, while `AtomCore::to_canonical_string()` supplies a namespace-complete, symbol-registration-order-independent spelling of each native variable. Diagnostic `PolyCtx::vars()` aliases never enter either identity or seed construction. Any invalid input, finite-field factorization/F4 panic, positive-dimensional constrained ideal, or exhausted retry keeps the candidate letter. Process-global atomic stats separately expose system construction and F4 wall time, chi calls, judgments, drops, boundary exemptions, and failure abstentions.
+
+Polynomial factorization likewise keeps Symbolica values typed end to end. The
+public rational-field `Factorize::factor` implementation
+(`poly/factor.rs:4386-4432`) returns exact polynomial factors and a constant
+factor; Hyperbolica folds the latter into a native `Rational`, constructs
+constant polynomials with `MultivariatePolynomial::constant`
+(`poly/polynomial.rs:956-974`), and carries the target-independent leading
+coefficient of a linear factorization as `Poly`. String conversion occurs only
+when emitting the legacy JSON protocol.
 
 There is intentionally no `msolve` path, subprocess, temporary-file serializer/parser, spawn breaker, or FLINT-backed fallback in this implementation. Legacy `HF_EULER_FILTER` interpretation is confined to the JSON bridge, which maps it into explicit `LrSearchOptions`/`ScanOptions`; the native typed API itself uses only the explicit option field.
 
@@ -530,19 +594,19 @@ This table is deliberately exhaustive at module granularity. “Native primitive
 | `core/rat.rs` | canonical rational arithmetic | native `RationalPolynomial<Z,u16>` | **REPLACE, P1 complete** storage/arithmetic/substitution/evaluation; retain checked signed `pow` and lazy compatibility projections. |
 | `core/factored_rat.rs` | factor-preserving arithmetic/derivative/peeling | incomplete native factorized RP | selective **ORACLE/WRAP**; retain robust specialized behavior. |
 | `core/canonical_signature.rs` | bucket acceleration | native Atom/poly/RP `Hash` | **WRAP, corrected**: only the crate-private `poly_bucket_digest` remains; digest-only `RatAddKey`/`ReduceKey` and all public digest exports were removed. Every consumer retains full values in collision buckets. |
-| `core/context_interner.rs` | weak context interning | Symbolica globally interns variable lists internally (`state.rs:266-273`), but exposes no public weak context-interner contract | **RETAIN, corrected**: full names + ordered `PolyVariable` identity is confirmed inside collision buckets; Atom-native contexts cannot alias by display spelling. |
+| `core/context_interner.rs` | weak context interning | Symbolica globally interns variable lists internally (`state.rs:266-273`), but exposes no public weak context-interner contract | **RETAIN, corrected**: ordered `PolyVariable` identity is confirmed inside collision buckets; diagnostic spellings are presentation-only and structural namespaces cannot alias. |
 | `core/period_table.rs`, `core/zw_table.rs` | domain-specific handle interning | native structural `Eq + Hash`; no matching handle table | **RETAIN**, change canonical strings to typed keys where possible. |
 | `core/rat_split.rs`, `core/sym_coef_split.rs` | split wide/narrow coefficient contexts and ZW handles | polynomial rearrange/map, native RP arithmetic; no equivalent split | **RETAIN**, move storage to native RP and typed context maps. |
 | `core/symcoef.rs` | sparse products of pi/i/log/delta/period/MZV factors | Atom can represent all factors; no MPL/MZV canonicalizer | **RETAIN hot representation**, use fixed heads and Atom conversion; benchmark against `Atom::add_many/mul_many` before any replacement. |
 | `integrator/differentiate.rs` | wordlist derivative | expression callback exists, no wordlist result API | **RETAIN** and differential-test against native head derivative. |
 | `integrator/factor_table.rs` | factor-stage cache/policies | native factor/GCD/resultant; no stage table | **RETAIN** policy; structural collision-safe interning is implemented and strings are emitted only by the bridge. |
 | `integrator/primitive.rs` | polynomial/simple-pole hyperlog primitive | native polynomial `.integrate`; RP `.integrate` has different output/caveat | **REPLACE** polynomial loop only; retain word/log construction. |
-| `integrator/integration_step.rs`, `hyper_int.rs` | recursive hyperlog integration | no native hyperlog integrator | **RETAIN**, consume native typed CAS core. |
-| `integrator/regularize.rs`, `transform.rs` | shuffle regularization/regulators/word transforms | no native hyperlog operation; general `Transformer` is not the same algebra | **RETAIN**, replace formatted content keys with typed keys. |
+| `integrator/integration_step.rs`, `hyper_int.rs` | recursive hyperlog integration | no native hyperlog integrator | **RETAIN**; step-local transform reuse now uses collision-safe full `(variable, Vec<Word>)` identity. |
+| `integrator/regularize.rs`, `transform.rs` | shuffle regularization/regulators/word transforms | no native hyperlog operation; general `Transformer` is not the same algebra | **RETAIN, P3 complete for transform**; formatted strings remain only for legacy presentation/compatibility ordering. |
 | `integrator/lr_search.rs`, `lr_scan.rs` | linear reducibility/Fubini search/conic heuristics | native resultant/discriminant/factor/GCD/Groebner; no LR search | **RETAIN** search and native CAS substeps; collision-safe structural caches/ledgers and the pure-Symbolica Euler backend are implemented. |
 | `reduce/break_up_contour.rs` | contour decomposition | no native API found | **RETAIN**, use fixed delta head. |
 | `reduce/mzv_reduce.rs`, `mzv_expansion.rs` | table parsing, rational substitution, MZV basis | no native MZV reduction; native patterns/poly substitution available | **RETAIN** data algorithm; replace encoded symbol names with `MZV(...)`; retain typed Horner rational substitution if benchmarks beat Atom replacement. |
-| `reduce/periods.rs` | period-to-MZV, fibration, exact zero test | no native MPL/MZV/fibration; native `zero_test` is heuristic | **RETAIN**. Never replace exact test with `zero_test`. |
+| `reduce/periods.rs` | period-to-MZV, fibration, exact zero test | no native MPL/MZV/fibration; native `zero_test` is heuristic | **RETAIN**; fibration accumulation uses collision-safe full `RegKey` identity. Never replace exact test with `zero_test`. |
 | `series/laurent.rs` | exact rational Laurent recurrence/reciprocal/constant | native `AtomCore::series`/`Series<AtomField>` | **RETAIN + ORACLE**, benchmark. |
 | `series/expansions.rs`, `hlog_series.rs`, `mpl_series.rs`, `mpl_sum.rs` | Hlog/MPL series and finite sums | no native MPL/Hlog API | **RETAIN**, exposed through conservative head callbacks in valid regimes. |
 | `symbols.rs`, `symbols/hooks/**`, `symbols/hlog.rs`, `symbols/mpl.rs`, `symbols/word.rs` | fixed heads, expression hooks, and typed domain objects | `initialize!`, derivative/series callbacks, function `PolyVariable`s | **WRAP, P2 complete**; retain typed word/Hlog/MPL objects and structural identities. |
@@ -564,7 +628,7 @@ This table is deliberately exhaustive at module granularity. “Native primitive
 | P2 | general Atom tree rewrite/scanning | `Pattern`, `Replacement`, `replace_map`, `Transformer` | Correctness/maintainability gain; benchmark hot rewrites before using patterns inside polynomial loops. |
 | P2 | manual general-expression derivative | `AtomCore::derivative` plus registered callbacks | Consistent chain rule; typed structured derivative remains. |
 | P2 | exact Laurent recurrence | `AtomCore::series` | Do not delete yet: broader native functionality versus likely Atom overhead. Differential oracle first. |
-| P3 | string canonical signatures/content keys | native structural hashes | **Implemented for LR search/scan/factor-table.** Full values remain in collision buckets; `u64` digests are accelerators only. Other domain tables remain separately tracked. |
+| P3 | string canonical signatures/content keys | native structural hashes | **Implemented for LR search/scan/factor-table, primitive, transform, period fibration, and integration-step caches.** Full typed values remain in collision buckets; `u64` digests are accelerators only. Remaining domain tables are separately tracked. |
 
 ## Correctness and performance gates
 

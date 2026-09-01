@@ -5,18 +5,9 @@
 //! accelerator. Every consumer must retain and compare complete canonical
 //! [`Poly`] values inside a matching bucket.
 
-use std::hash::{DefaultHasher, Hash, Hasher};
+use std::hash::Hash;
 
-use super::{Poly, PolyCtx};
-
-/// Hash the ordered variable set defining a polynomial ring for bucket
-/// selection only.
-fn context_bucket_digest(ctx: &PolyCtx) -> u64 {
-    let mut state = DefaultHasher::new();
-    0x4859_5045_5243_5458_u64.hash(&mut state);
-    ctx.vars().hash(&mut state);
-    state.finish()
-}
+use super::{Poly, structural_digest::structural_bucket_digest_by};
 
 /// Hash Symbolica's canonical coefficient and exponent arrays directly.
 ///
@@ -25,14 +16,10 @@ fn context_bucket_digest(ctx: &PolyCtx) -> u64 {
 /// digests. The inverse is deliberately not promised: callers must compare
 /// the complete `Poly` values within the selected bucket.
 pub(crate) fn poly_bucket_digest(poly: &Poly) -> u64 {
-    let mut state = DefaultHasher::new();
-    0x4859_5045_5250_4f4c_u64.hash(&mut state);
-    context_bucket_digest(poly.ctx()).hash(&mut state);
-    // Symbolica defines `Hash` over its canonical coefficients, exponents and
-    // (for non-constants) variable map. Delegate that representation detail
-    // instead of maintaining a parallel polynomial hashing algorithm here.
-    poly.inner().hash(&mut state);
-    state.finish()
+    structural_bucket_digest_by(0x4859_5045_5250_4f4c_u64, |state| {
+        poly.ctx().native_variables().hash(state);
+        poly.hash_canonical_payload(state);
+    })
 }
 
 #[cfg(test)]
@@ -42,6 +29,7 @@ mod tests {
     use symbolica::prelude::Symbol;
 
     use super::*;
+    use crate::core::PolyCtx;
 
     fn context() -> Arc<PolyCtx> {
         PolyCtx::new(["x", "y"]).unwrap()
@@ -82,6 +70,22 @@ mod tests {
                 .iter()
                 .filter(|(digest, _)| *digest == forced_digest)
                 .all(|(_, candidate)| candidate != &right)
+        );
+    }
+
+    #[test]
+    fn constructor_specific_diagnostics_do_not_change_the_bucket_digest() {
+        let symbol = Symbol::parse("x", "digest_shared_variable").unwrap();
+        let qualified_ctx = PolyCtx::from_symbols([symbol]).unwrap();
+        let stripped_ctx = PolyCtx::from_indeterminates([symbol.to_atom()]).unwrap();
+        let qualified = Poly::generator(qualified_ctx, 0).unwrap();
+        let stripped = Poly::generator(stripped_ctx, 0).unwrap();
+
+        assert_ne!(qualified.ctx().vars(), stripped.ctx().vars());
+        assert_eq!(qualified, stripped);
+        assert_eq!(
+            poly_bucket_digest(&qualified),
+            poly_bucket_digest(&stripped)
         );
     }
 }

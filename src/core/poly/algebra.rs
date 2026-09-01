@@ -1,3 +1,4 @@
+use symbolica::domains::InternalOrdering;
 use symbolica::prelude::*;
 
 use super::{Factored, Poly, SymbolicaPoly};
@@ -5,7 +6,7 @@ use crate::error::{Error, Result};
 
 impl Poly {
     fn require_same_context(&self, other: &Self) -> Result<()> {
-        if self.ctx.compatible_with(&other.ctx) {
+        if self.ctx.is_compatible_with(&other.ctx) {
             Ok(())
         } else {
             Err(Error::ContextMismatch)
@@ -250,7 +251,7 @@ impl Poly {
     pub fn factor(&self) -> Factored {
         if self.is_zero() {
             return Factored {
-                constant: "0".into(),
+                constant: Q.zero(),
                 factors: Vec::new(),
             };
         }
@@ -267,11 +268,8 @@ impl Poly {
         factors.sort_by(|(left, _), (right, _)| {
             left.total_degree()
                 .cmp(&right.total_degree())
-                .then_with(|| left.to_string().cmp(&right.to_string()))
+                .then_with(|| left.inner.internal_cmp(&right.inner))
         });
-        Factored {
-            constant: constant.to_string(),
-            factors,
-        }
+        Factored { constant, factors }
     }
 }

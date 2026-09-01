@@ -45,9 +45,16 @@ impl SymCoef {
     pub fn try_from_monomials(ctx: Arc<PolyCtx>, monomials: Vec<SymMonomial>) -> Result<Self> {
         if monomials
             .iter()
-            .any(|monomial| monomial.prefactor.ctx().vars() != ctx.vars())
+            .any(|monomial| !monomial.prefactor.ctx().is_compatible_with(&ctx))
         {
             return Err(Error::ContextMismatch);
+        }
+        if let Some(variable) = monomials
+            .iter()
+            .flat_map(|monomial| monomial.delta_powers.keys().copied())
+            .find(|&variable| variable >= ctx.len())
+        {
+            return Err(Error::UnknownVariable(variable.to_string()));
         }
         Self::canonicalize_owned(ctx, monomials)
     }
@@ -84,13 +91,17 @@ impl SymCoef {
         })
     }
 
-    pub fn delta_factor(ctx: Arc<PolyCtx>, variable: impl Into<String>) -> Self {
+    /// Construct one formal delta factor for a native context variable.
+    pub fn delta_factor(ctx: Arc<PolyCtx>, variable: usize) -> Result<Self> {
+        if variable >= ctx.len() {
+            return Err(Error::UnknownVariable(variable.to_string()));
+        }
         let mut monomial = SymMonomial::new(Rat::one(ctx.clone()));
-        monomial.delta_powers.insert(variable.into(), 1);
-        Self {
+        monomial.delta_powers.insert(variable, 1);
+        Ok(Self {
             ctx,
             terms: vec![monomial],
-        }
+        })
     }
 
     pub fn period_factor(ctx: Arc<PolyCtx>, period: u32) -> Self {
@@ -178,7 +189,7 @@ impl SymCoef {
     }
 
     pub(super) fn require_same_context(&self, other: &Self) -> Result<()> {
-        if self.ctx.vars() == other.ctx.vars() {
+        if self.ctx.is_compatible_with(&other.ctx) {
             Ok(())
         } else {
             Err(Error::ContextMismatch)

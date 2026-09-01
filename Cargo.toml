@@ -3,9 +3,8 @@ name = "hyperbolica"
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.89"
-license = "MIT"
+license-file = "DISTRIBUTION-LICENSE.md"
 description = "A Rust port of HyperFLINT backed by Symbolica"
-repository = "https://github.com/SubTropica/SubTropica"
 
 [lib]
 name = "hyperbolica"
@@ -49,6 +48,10 @@ harness = false
 
 [[bench]]
 name = "lr_structural_keys"
+harness = false
+
+[[bench]]
+name = "semantic_keys"
 harness = false
 
 [profile.release]

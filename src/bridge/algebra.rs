@@ -17,7 +17,7 @@ use crate::algebra::algebraic_letters::{
 };
 use crate::algebra::linear_factors::{LinearFactorOptions, linear_factors_with_options};
 use crate::algebra::partial_fractions::{PartialFractionOptions, partial_fractions_with_options};
-use crate::core::{PolyCtx, Rat};
+use crate::core::{Poly, PolyCtx, Rat};
 use crate::error::{Error, Result};
 
 pub(super) fn evaluate(request: &Value, op: &str) -> Option<Result<Value>> {
@@ -72,8 +72,9 @@ fn evaluate_supported(request: &Value, op: &str) -> Result<Value> {
             let polynomial = string_field(request, "polynomial")?;
             let variable_name = string_field(request, "var")?;
             let ctx = algebraic_context(request, Some(variable_name))?;
+            let variable_atom = crate::symbols::legacy::atom_from_name(variable_name)?;
             let variable = ctx
-                .index_of(variable_name)
+                .index_of_indeterminate(variable_atom.as_view())
                 .ok_or_else(|| Error::UnknownVariable(variable_name.to_owned()))?;
             let index = algebraic_letters_allocate(&parse_wire_poly(&ctx, polynomial)?, variable)?;
             let entry = algebraic_letters_show()?
@@ -112,14 +113,24 @@ fn evaluate_supported(request: &Value, op: &str) -> Result<Value> {
             let expression = string_field(request, "expr")?;
             let ctx = context_for(request, &[expression])?;
             let factorization = parse_wire_poly(&ctx, expression)?.factor();
-            let factors = factorization
+            let mut factors = factorization
                 .factors
                 .into_iter()
-                .map(|(factor, exponent)| json!([wire_poly(&factor), exponent]))
+                .map(|(factor, exponent)| FactorWireEntry {
+                    wire: wire_poly(&factor),
+                    first_linear_pole: first_active_linear_pole(&factor),
+                    factor,
+                    exponent,
+                })
+                .collect::<Vec<_>>();
+            factors.sort_unstable_by(factor_wire_cmp);
+            let factors = factors
+                .into_iter()
+                .map(|entry| json!([entry.wire, entry.exponent]))
                 .collect::<Vec<_>>();
             Ok(json!({
                 "op": op,
-                "constant": factorization.constant,
+                "constant": factorization.constant.to_string(),
                 "factors": factors,
                 "vars": wire_context_variables(&ctx),
             }))
@@ -273,19 +284,53 @@ fn evaluate_supported(request: &Value, op: &str) -> Result<Value> {
                     forbidden_variables: &[],
                 },
             )?;
+            let mut linear = factors
+                .linear
+                .iter()
+                .map(|factor| {
+                    (
+                        wire_poly(factor.pole.numerator()),
+                        wire_poly(factor.pole.denominator()),
+                        factor,
+                    )
+                })
+                .collect::<Vec<_>>();
+            // FLINT's observed linear-factor order agrees with the complete
+            // native rational-polynomial order of the normalized poles. Wire
+            // lexical order does not: it reverses positive integers and the
+            // parameterized `-b/a, -a/b` oracle.
+            linear.sort_unstable_by(|(_, _, left), (_, _, right)| {
+                left.multiplicity
+                    .cmp(&right.multiplicity)
+                    .then_with(|| left.pole.structural_cmp(&right.pole))
+            });
+            let linear = linear
+                .into_iter()
+                .map(|(numerator, denominator, factor)| {
+                    json!([factor.multiplicity, numerator, denominator])
+                })
+                .collect::<Vec<_>>();
+            let mut nonlinear = factors
+                .nonlinear
+                .iter()
+                .map(|factor| (wire_poly(&factor.polynomial), factor))
+                .collect::<Vec<_>>();
+            nonlinear.sort_unstable_by(|(left_wire, left), (right_wire, right)| {
+                left.multiplicity
+                    .cmp(&right.multiplicity)
+                    .then_with(|| left.polynomial.structural_cmp(&right.polynomial))
+                    .then_with(|| left.degree_in_var.cmp(&right.degree_in_var))
+                    .then_with(|| left_wire.cmp(right_wire))
+            });
+            let nonlinear = nonlinear
+                .into_iter()
+                .map(|(wire, factor)| json!([factor.multiplicity, wire, factor.degree_in_var]))
+                .collect::<Vec<_>>();
             let mut response = json!({
                 "op": op,
-                "constant": factors.constant,
-                "linear": factors.linear.iter().map(|factor| json!([
-                    factor.multiplicity,
-                    wire_poly(factor.pole.numerator()),
-                    wire_poly(factor.pole.denominator()),
-                ])).collect::<Vec<_>>(),
-                "nonlinear": factors.nonlinear.iter().map(|factor| json!([
-                    factor.multiplicity,
-                    wire_poly(&factor.polynomial),
-                    factor.degree_in_var,
-                ])).collect::<Vec<_>>(),
+                "constant": wire_poly(&factors.constant),
+                "linear": linear,
+                "nonlinear": nonlinear,
                 "vars": wire_context_variables(&ctx),
             });
             if introduce_algebraic_letters {
@@ -317,11 +362,20 @@ fn evaluate_supported(request: &Value, op: &str) -> Result<Value> {
                     forbidden_variables: &[],
                 },
             )?;
+            // Symbolica intentionally does not specify denominator-factor
+            // order. HyperFLINT's public wire contract orders distinct poles
+            // by multiplicity and then by the normalized pole itself.
+            let mut poles = fractions.poles.iter().collect::<Vec<_>>();
+            poles.sort_unstable_by(|left, right| {
+                left.multiplicity
+                    .cmp(&right.multiplicity)
+                    .then_with(|| left.pole.structural_cmp(&right.pole))
+            });
             let mut response = json!({
                 "op": op,
                 "var": wire_context_variables(&ctx)[variable],
                 "polynomial_part": wire_rat(&fractions.polynomial_part),
-                "poles": fractions.poles.iter().map(|pole| json!({
+                "poles": poles.into_iter().map(|pole| json!({
                     "pole": wire_rat(&pole.pole),
                     "multiplicity": pole.multiplicity,
                     "coefs": pole.coefs.iter().map(wire_rat).collect::<Vec<_>>(),
@@ -351,6 +405,44 @@ fn introduction_requested(request: &Value) -> Result<bool> {
     } else {
         optional_bool(request, "algebraic_letters", false)
     }
+}
+
+struct FactorWireEntry {
+    wire: String,
+    factor: Poly,
+    exponent: usize,
+    first_linear_pole: Option<Rat>,
+}
+
+fn first_active_linear_pole(factor: &Poly) -> Option<Rat> {
+    let variable = factor.used_variable_indices().into_iter().next()?;
+    (factor.degree(variable).ok()? == 1).then_some(())?;
+    let constant = factor.coefficient_of(variable, 0).ok()?;
+    let leading = factor.coefficient_of(variable, 1).ok()?;
+    Rat::new(-&constant, leading).ok()
+}
+
+fn factor_wire_cmp(left: &FactorWireEntry, right: &FactorWireEntry) -> std::cmp::Ordering {
+    left.exponent.cmp(&right.exponent).then_with(|| {
+        let native_order = left.factor.structural_cmp(&right.factor);
+        let same_native_shape = left.factor.ctx().is_compatible_with(right.factor.ctx())
+            && left.factor.inner().exponents == right.factor.inner().exponents;
+
+        // Symbolica's native polynomial order compares the canonical
+        // exponent array before coefficients. Equal exponent arrays are
+        // therefore one convex equivalence class. Only inside that fixed
+        // affine shape may the FLINT-compatible pole order replace the
+        // coefficient comparison without breaking transitivity. Across
+        // all different shapes, retain the complete native Poly order.
+        if same_native_shape
+            && let (Some(left_pole), Some(right_pole)) =
+                (&left.first_linear_pole, &right.first_linear_pole)
+        {
+            left_pole.structural_cmp(right_pole).then(native_order)
+        } else {
+            native_order
+        }
+    })
 }
 
 fn factor_context(
@@ -425,3 +517,6 @@ pub(super) fn algebraic_entry_value(entry: &crate::algebra::AlgebraicLetterEntry
         "wm_over_wp": crate::symbols::legacy::special_name_from_atom(atoms.ratio.as_view()),
     })
 }
+
+#[cfg(test)]
+mod tests;

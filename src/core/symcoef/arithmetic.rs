@@ -118,7 +118,7 @@ impl SymCoef {
     }
 
     pub fn try_mul_rat(&self, rational: &Rat) -> Result<Self> {
-        if self.ctx.vars() != rational.ctx().vars() {
+        if !self.ctx.is_compatible_with(rational.ctx()) {
             return Err(Error::ContextMismatch);
         }
         if self.is_zero() || rational.is_zero() {
@@ -136,7 +136,7 @@ impl SymCoef {
     }
 
     pub fn try_div_rat(&self, rational: &Rat) -> Result<Self> {
-        if self.ctx.vars() != rational.ctx().vars() {
+        if !self.ctx.is_compatible_with(rational.ctx()) {
             return Err(Error::ContextMismatch);
         }
         if rational.is_zero() {

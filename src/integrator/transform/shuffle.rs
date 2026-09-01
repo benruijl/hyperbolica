@@ -1,13 +1,14 @@
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use super::collection::{require_word_context, shuffle_symbolic_sym};
 use super::word::{identity_transform, transform_word};
 use super::{RegTermSym, RegulatorSym, TransformPair, TransformResult};
 use crate::algebra::shuffle::shuffle_product;
-use crate::core::{PolyCtx, Rat};
+use crate::core::{DigestBuckets, PolyCtx, Rat, structural_bucket_digest};
 use crate::error::{Error, Result};
 use crate::symbols::Word;
+
+const LOG_LETTER_BUCKET_DOMAIN: u64 = 0x5452_4c4f_474c_0001;
 
 fn is_log_power(word: &Word) -> bool {
     let Some(first) = word.letters.first() else {
@@ -38,6 +39,59 @@ fn scale_regulator(regulator: &RegulatorSym, scalar: &Rat) -> Result<RegulatorSy
         .collect()
 }
 
+pub(super) struct LogPowerGrouping {
+    pub(super) combined: Vec<Word>,
+    pub(super) groups: Vec<(Rat, usize)>,
+    pub(super) combinatorial_factor: Rat,
+    pub(super) repeated: bool,
+}
+
+pub(super) fn group_log_powers_with_digest(
+    ctx: &Arc<PolyCtx>,
+    words: &[Word],
+    mut digest_letter: impl FnMut(&Rat) -> u64,
+) -> Result<LogPowerGrouping> {
+    let mut buckets = DigestBuckets::default();
+    let mut groups = Vec::<(Rat, usize)>::new();
+    let mut combined = Vec::<Word>::new();
+    let mut combinatorial_factor = Rat::one(ctx.clone());
+    let mut repeated = false;
+
+    for word in words {
+        if word.is_empty() {
+            continue;
+        }
+        if is_log_power(word) {
+            combinatorial_factor =
+                combinatorial_factor.try_div(&factorial_rat(ctx, word.len())?)?;
+            let letter = &word[0];
+            let digest = digest_letter(letter);
+            if let Some(index) = buckets.find(digest, |index| {
+                groups
+                    .get(index)
+                    .is_some_and(|(candidate, _)| candidate == letter)
+            }) {
+                groups[index].1 = groups[index].1.checked_add(word.len()).ok_or_else(|| {
+                    Error::InvalidInput("combined logarithm depth overflowed usize".into())
+                })?;
+                repeated = true;
+            } else {
+                buckets.insert(digest, groups.len());
+                groups.push((letter.clone(), word.len()));
+            }
+        } else {
+            combined.push(word.clone());
+        }
+    }
+
+    Ok(LogPowerGrouping {
+        combined,
+        groups,
+        combinatorial_factor,
+        repeated,
+    })
+}
+
 /// Transform a shuffle product of words.
 pub fn transform_shuffle(
     ctx: &Arc<PolyCtx>,
@@ -54,43 +108,19 @@ pub fn transform_shuffle(
         return Ok(identity_transform(ctx));
     }
 
-    let mut letters = HashMap::<String, Rat>::new();
-    let mut letter_order = Vec::<String>::new();
-    let mut log_counts = HashMap::<String, usize>::new();
-    let mut combined = Vec::<Word>::new();
-    let mut combinatorial_factor = Rat::one(ctx.clone());
-    let mut repeated = false;
-
-    for word in words {
-        if word.is_empty() {
-            continue;
-        }
-        if is_log_power(word) {
-            combinatorial_factor =
-                combinatorial_factor.try_div(&factorial_rat(ctx, word.len())?)?;
-            let key = word[0].to_string();
-            if let Some(count) = log_counts.get_mut(&key) {
-                *count = count.checked_add(word.len()).ok_or_else(|| {
-                    Error::InvalidInput("combined logarithm depth overflowed usize".into())
-                })?;
-                repeated = true;
-            } else {
-                log_counts.insert(key.clone(), word.len());
-                letters.insert(key.clone(), word[0].clone());
-                letter_order.push(key);
-            }
-        } else {
-            combined.push(word.clone());
-        }
-    }
+    let LogPowerGrouping {
+        mut combined,
+        groups: log_groups,
+        mut combinatorial_factor,
+        repeated,
+    } = group_log_powers_with_digest(ctx, words, |letter| {
+        structural_bucket_digest(LOG_LETTER_BUCKET_DOMAIN, letter)
+    })?;
 
     if repeated {
-        for key in letter_order {
-            let count = log_counts[&key];
-            combined.push(Word::from(vec![letters[&key].clone(); count]));
-        }
-        for count in log_counts.values() {
-            combinatorial_factor = combinatorial_factor.try_mul(&factorial_rat(ctx, *count)?)?;
+        for (letter, count) in log_groups {
+            combined.push(Word::from(vec![letter; count]));
+            combinatorial_factor = combinatorial_factor.try_mul(&factorial_rat(ctx, count)?)?;
         }
         let transformed = transform_shuffle(ctx, &combined, variable)?;
         return transformed

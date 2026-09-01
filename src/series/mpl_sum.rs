@@ -27,7 +27,7 @@ fn validate_contexts(zs: &[Rat]) -> Result<Arc<PolyCtx>> {
         .ok_or_else(|| Error::InvalidInput("mpl_sum requires at least one argument".into()))?
         .ctx()
         .clone();
-    if zs.iter().skip(1).any(|z| z.ctx().vars() != ctx.vars()) {
+    if zs.iter().skip(1).any(|z| !z.ctx().is_compatible_with(&ctx)) {
         return Err(Error::ContextMismatch);
     }
     Ok(ctx)

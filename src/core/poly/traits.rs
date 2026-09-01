@@ -2,6 +2,8 @@ use std::fmt::{Display, Formatter};
 use std::hash::{Hash, Hasher};
 use std::ops::{Add, Mul, Neg, Sub};
 
+use symbolica::domains::InternalOrdering;
+
 use super::Poly;
 
 impl Display for Poly {
@@ -63,16 +65,35 @@ impl Eq for Poly {}
 
 impl Hash for Poly {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        // `Poly::eq` deliberately includes the complete Hyperbolica context,
+        // `Poly::eq` deliberately includes the complete native variable map,
         // not only Symbolica's polynomial payload. In particular, native
         // constant-polynomial equality ignores the variable map, while two
-        // `Poly` constants in incompatible contexts are not equal. Prefix the
-        // exact context components used by `PolyCtx::compatible_with` before
-        // delegating the canonical coefficient/exponent representation to
-        // Symbolica so `Hash` and `Eq` have identical semantics.
-        self.ctx.names.hash(state);
+        // `Poly` constants in incompatible rings are not equal. Diagnostic
+        // names are presentation-only and must not affect mathematical hash
+        // identity.
         self.ctx.variables.hash(state);
-        self.inner.hash(state);
+        self.hash_canonical_payload(state);
+    }
+}
+
+impl Poly {
+    /// Hash only Symbolica's canonical sparse polynomial payload.
+    ///
+    /// Callers that hash one complete [`Poly`] must prefix the ordered native
+    /// variable map exactly once. Collection keys that already share or hash
+    /// their context can use this helper to avoid revisiting that map for
+    /// every nonconstant polynomial.
+    pub(crate) fn hash_canonical_payload<H: Hasher>(&self, state: &mut H) {
+        self.inner.coefficients.hash(state);
+        self.inner.exponents.hash(state);
+    }
+
+    /// Total structural order for presentation collision tie-breaks.
+    pub(crate) fn structural_cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.ctx
+            .native_variables()
+            .cmp(other.ctx.native_variables())
+            .then_with(|| self.inner.internal_cmp(&other.inner))
     }
 }
 

@@ -6,7 +6,7 @@ use crate::error::{Error, Result};
 use crate::symbols::{Word, Wordlist, WordlistTerm};
 
 fn require_context(value: &Rat, ctx: &PolyCtx) -> Result<()> {
-    if value.ctx().vars() == ctx.vars() {
+    if value.ctx().is_compatible_with(ctx) {
         Ok(())
     } else {
         Err(Error::ContextMismatch)

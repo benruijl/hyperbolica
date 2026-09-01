@@ -2,10 +2,9 @@
 
 use std::cell::Cell;
 use std::collections::HashMap;
-use std::hash::{DefaultHasher, Hash, Hasher};
 use std::sync::{Mutex, MutexGuard, OnceLock};
 
-use crate::core::{Poly, Rat};
+use crate::core::{Poly, Rat, poly_bucket_digest};
 use crate::error::{Error, Result};
 
 use super::AlgebraicLetterEntry;
@@ -38,9 +37,7 @@ fn session_mutex() -> &'static Mutex<()> {
 }
 
 fn polynomial_digest(polynomial: &Poly) -> u64 {
-    let mut hasher = DefaultHasher::new();
-    polynomial.hash(&mut hasher);
-    hasher.finish()
+    poly_bucket_digest(polynomial)
 }
 
 /// A re-entrant guard that prevents algebraic-letter state from interleaving

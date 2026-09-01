@@ -1,10 +1,10 @@
 //! Reuse polynomial contexts by their full ordered structural identities.
 
 use std::collections::HashMap;
-use std::hash::{DefaultHasher, Hash, Hasher};
+use std::hash::Hash;
 use std::sync::{Arc, Mutex, OnceLock, Weak};
 
-use super::PolyCtx;
+use super::{PolyCtx, structural_digest::structural_bucket_digest_by};
 use crate::error::{Error, Result};
 
 /// Thread-safe weak interner for Symbolica polynomial contexts.
@@ -18,14 +18,13 @@ pub struct ContextInterner {
 }
 
 fn context_digest(context: &PolyCtx) -> u64 {
-    let mut hasher = DefaultHasher::new();
-    context.vars().hash(&mut hasher);
-    context.variable_map().hash(&mut hasher);
-    hasher.finish()
+    structural_bucket_digest_by(0x4859_5045_5243_5458, |state| {
+        context.native_variables().hash(state);
+    })
 }
 
 fn same_context(left: &PolyCtx, right: &PolyCtx) -> bool {
-    left.vars() == right.vars() && left.variable_map() == right.variable_map()
+    left.is_compatible_with(right)
 }
 
 impl ContextInterner {
@@ -44,9 +43,10 @@ impl ContextInterner {
 
     /// Intern an already constructed, potentially Atom-native context.
     ///
-    /// Both diagnostic names and structural Symbolica variables participate
-    /// in identity, so equal-looking symbols from different namespaces and
-    /// distinct function/power indeterminates cannot alias.
+    /// The complete ordered Symbolica variable map participates in identity,
+    /// so equal-looking symbols from different namespaces and distinct
+    /// function/power indeterminates cannot alias. Diagnostic spellings are
+    /// presentation-only and do not split one native ring into two contexts.
     pub fn intern_context(&self, context: Arc<PolyCtx>) -> Result<Arc<PolyCtx>> {
         self.intern_context_with_digest(context_digest(&context), context)
     }
@@ -167,6 +167,21 @@ mod tests {
         assert!(Arc::ptr_eq(&first, &repeated));
         assert!(!Arc::ptr_eq(&first, &namespaced));
         assert_eq!(interner.live_len().unwrap(), 2);
+    }
+
+    #[test]
+    fn one_native_ring_interns_across_diagnostic_constructor_spellings() {
+        let interner = ContextInterner::new();
+        let symbol = Symbol::parse("x", "context_interner_shared").unwrap();
+        let qualified = PolyCtx::from_symbols([symbol]).unwrap();
+        let stripped = PolyCtx::from_indeterminates([symbol.to_atom()]).unwrap();
+        assert_ne!(qualified.vars(), stripped.vars());
+        assert!(qualified.is_compatible_with(&stripped));
+
+        let first = interner.intern_context(qualified).unwrap();
+        let repeated = interner.intern_context(stripped).unwrap();
+        assert!(Arc::ptr_eq(&first, &repeated));
+        assert_eq!(interner.live_len().unwrap(), 1);
     }
 
     #[test]

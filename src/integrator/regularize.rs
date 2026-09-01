@@ -6,7 +6,7 @@ use crate::error::{Error, Result};
 use crate::symbols::{Letter, Word, Wordlist, WordlistTerm};
 
 fn require_rat_context(value: &Rat, ctx: &PolyCtx) -> Result<()> {
-    if value.ctx().vars() == ctx.vars() {
+    if value.ctx().is_compatible_with(ctx) {
         Ok(())
     } else {
         Err(Error::ContextMismatch)
@@ -175,7 +175,7 @@ fn regularize_side(
     substitute: &Letter,
     side: RegSide,
 ) -> Result<Wordlist> {
-    if letter.ctx().vars() != substitute.ctx().vars() {
+    if !letter.ctx().is_compatible_with(substitute.ctx()) {
         return Err(Error::ContextMismatch);
     }
     let ctx = letter.ctx().clone();

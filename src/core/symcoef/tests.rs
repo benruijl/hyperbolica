@@ -22,12 +22,12 @@ fn canonicalizes_i_and_delta_powers() {
     let ctx = context();
     let mut inverse_i = SymMonomial::new(Rat::from_int(ctx.clone(), 3));
     inverse_i.i_power = -1;
-    inverse_i.delta_powers.insert("x".into(), -3);
+    inverse_i.delta_powers.insert(0, -3);
     inverse_i.log_powers.insert(2, 0);
 
     let canonical = SymCoef::from_monomials(ctx.clone(), vec![inverse_i]);
     assert_eq!(canonical.terms()[0].i_power, 1);
-    assert_eq!(canonical.terms()[0].delta_powers["x"], 1);
+    assert_eq!(canonical.terms()[0].delta_powers[&0], 1);
     assert!(canonical.terms()[0].log_powers.is_empty());
     assert_eq!(
         canonical.terms()[0].prefactor,
@@ -38,7 +38,7 @@ fn canonicalizes_i_and_delta_powers() {
     assert_eq!((&i * &i).as_rat().unwrap(), Rat::from_int(ctx.clone(), -1));
     assert_eq!(&(&i * &i) * &(&i * &i), SymCoef::one(ctx.clone()));
 
-    let delta = SymCoef::delta_factor(ctx.clone(), "x");
+    let delta = SymCoef::delta_factor(ctx.clone(), 0).unwrap();
     assert_eq!((&delta * &delta).as_rat().unwrap(), Rat::one(ctx));
 }
 
@@ -72,7 +72,7 @@ fn multiplication_is_a_cartesian_product() {
     let pi = SymCoef::pi_factor(ctx.clone());
     let log = SymCoef::log_factor(ctx.clone(), 2).unwrap();
     let imaginary = SymCoef::im_factor(ctx.clone());
-    let delta = SymCoef::delta_factor(ctx.clone(), "x");
+    let delta = SymCoef::delta_factor(ctx.clone(), 0).unwrap();
 
     let product = &(&pi + &log) * &(&imaginary + &delta);
     assert_eq!(product.terms().len(), 4);
@@ -83,24 +83,26 @@ fn multiplication_is_a_cartesian_product() {
             .any(|term| term.pi_power == 1 && term.i_power == 1)
     );
     assert!(
-        product
-            .terms()
-            .iter()
-            .any(|term| term.log_powers.get(&2) == Some(&1)
-                && term.delta_powers.get("x") == Some(&1))
+        product.terms().iter().any(
+            |term| term.log_powers.get(&2) == Some(&1) && term.delta_powers.get(&0) == Some(&1)
+        )
     );
 }
 
 #[test]
 fn formatting_is_deterministic_and_matches_hyperflint() {
-    let ctx = context();
+    let x = Symbol::parse("x", SYMBOL_NAMESPACE).unwrap();
+    let z = Symbol::parse("z", SYMBOL_NAMESPACE).unwrap();
+    let ctx =
+        PolyCtx::from_indeterminates([x.to_atom(), z.to_atom(), mzv_atom(&[2]), mzv_atom(&[3])])
+            .unwrap();
     let mut symbolic = SymMonomial::new(rat(&ctx, "mzv_3/(x+1)"));
     symbolic.pi_power = 2;
     symbolic.i_power = 5;
     symbolic.log_powers.insert(7, 2);
     symbolic.log_powers.insert(2, 1);
-    symbolic.delta_powers.insert("z".into(), 1);
-    symbolic.delta_powers.insert("x".into(), 1);
+    symbolic.delta_powers.insert(1, 1);
+    symbolic.delta_powers.insert(0, 1);
     symbolic.period_powers.insert(12, 2);
     symbolic.period_powers.insert(3, 1);
 
@@ -108,10 +110,36 @@ fn formatting_is_deterministic_and_matches_hyperflint() {
     let formatted = coefficient.to_string();
     assert!(formatted.contains("MZV(3)"));
     assert!(formatted.contains("*Pi^2*I*Log[2]*Log[7]^2"));
+    assert!(formatted.contains("*delta[x]*delta[z]"));
     assert_eq!(
         coefficient.terms()[0].power_key(),
-        "P2|I1|L2:1,7:2,|Dx:1,z:1,|Q3:1,12:2,"
+        "P2|I1|L2:1,7:2,|D0:1,1:1,|Q3:1,12:2,"
     );
+}
+
+#[test]
+fn delta_identity_uses_context_indices_and_validates_bounds() {
+    let left = Symbol::parse("x", "delta_identity_left").unwrap();
+    let right = Symbol::parse("x", "delta_identity_right").unwrap();
+    let ctx = PolyCtx::from_indeterminates([left.to_atom(), right.to_atom()]).unwrap();
+    assert_eq!(ctx.vars(), &["x", "x"]);
+
+    let left_delta = SymCoef::delta_factor(ctx.clone(), 0).unwrap();
+    let right_delta = SymCoef::delta_factor(ctx.clone(), 1).unwrap();
+    assert_ne!(left_delta, right_delta);
+    assert!(left_delta.terms()[0].delta_powers.contains_key(&0));
+    assert!(right_delta.terms()[0].delta_powers.contains_key(&1));
+    assert!(matches!(
+        SymCoef::delta_factor(ctx.clone(), ctx.len()),
+        Err(crate::error::Error::UnknownVariable(_))
+    ));
+
+    let mut invalid = SymMonomial::new(Rat::one(ctx.clone()));
+    invalid.delta_powers.insert(ctx.len(), 1);
+    assert!(matches!(
+        SymCoef::try_from_monomials(ctx, vec![invalid]),
+        Err(crate::error::Error::UnknownVariable(_))
+    ));
 }
 
 #[test]
@@ -156,4 +184,36 @@ fn reduction_refuses_residual_symbolic_generators() {
     let table = MzvReductionTable::default();
     assert!(reduce_to_rat(&odd_pi, &table).is_err());
     assert!(reduce_to_rat(&logarithm, &table).is_err());
+}
+
+#[test]
+fn symbolic_coefficients_reject_equal_spellings_from_distinct_namespaces() {
+    let left_symbol = Symbol::parse("x", "symcoef_context_left").unwrap();
+    let right_symbol = Symbol::parse("x", "symcoef_context_right").unwrap();
+    let left_ctx = PolyCtx::from_indeterminates([left_symbol.to_atom()]).unwrap();
+    let right_ctx = PolyCtx::from_indeterminates([right_symbol.to_atom()]).unwrap();
+    assert_eq!(left_ctx.vars(), right_ctx.vars());
+    assert!(!left_ctx.is_compatible_with(&right_ctx));
+
+    let left = SymCoef::one(left_ctx);
+    let right = SymCoef::one(right_ctx);
+    assert_ne!(left, right);
+    assert!(matches!(
+        left.try_add(&right),
+        Err(crate::error::Error::ContextMismatch)
+    ));
+}
+
+#[test]
+fn symbolic_coefficients_accept_one_native_context_across_diagnostic_spellings() {
+    let symbol = Symbol::parse("x", "symcoef_context_shared").unwrap();
+    let qualified_ctx = PolyCtx::from_symbols([symbol]).unwrap();
+    let stripped_ctx = PolyCtx::from_indeterminates([symbol.to_atom()]).unwrap();
+    assert_ne!(qualified_ctx.vars(), stripped_ctx.vars());
+    assert!(qualified_ctx.is_compatible_with(&stripped_ctx));
+
+    let left = SymCoef::one(qualified_ctx);
+    let right = SymCoef::one(stripped_ctx);
+    assert_eq!(left, right);
+    assert!(left.try_add(&right).is_ok());
 }

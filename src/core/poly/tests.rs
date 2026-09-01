@@ -43,6 +43,41 @@ fn structural_hash_matches_polynomial_and_context_equality() {
 }
 
 #[test]
+fn context_compatibility_includes_namespaced_symbolica_variables() {
+    let left_symbol = Symbol::parse("x", "context_compatibility_left").unwrap();
+    let right_symbol = Symbol::parse("x", "context_compatibility_right").unwrap();
+    let left = PolyCtx::from_indeterminates([left_symbol.to_atom()]).unwrap();
+    let right = PolyCtx::from_indeterminates([right_symbol.to_atom()]).unwrap();
+
+    // PolyVariable's diagnostic spelling deliberately strips namespaces.
+    // Ring compatibility must still retain Symbolica's structural identity.
+    assert_eq!(left.vars(), right.vars());
+    assert!(!left.is_compatible_with(&right));
+    assert_ne!(Poly::one(left), Poly::one(right));
+}
+
+#[test]
+fn context_compatibility_ignores_constructor_specific_diagnostic_spelling() {
+    let symbol = Symbol::parse("x", "context_compatibility_shared").unwrap();
+    let qualified = PolyCtx::from_symbols([symbol]).unwrap();
+    let stripped = PolyCtx::from_indeterminates([symbol.to_atom()]).unwrap();
+
+    assert_ne!(qualified.vars(), stripped.vars());
+    assert!(qualified.is_compatible_with(&stripped));
+
+    let qualified_x = Poly::generator(qualified, 0).unwrap();
+    let stripped_x = Poly::generator(stripped, 0).unwrap();
+    assert_eq!(qualified_x, stripped_x);
+
+    let hash = |polynomial: &Poly| {
+        let mut state = DefaultHasher::new();
+        polynomial.hash(&mut state);
+        state.finish()
+    };
+    assert_eq!(hash(&qualified_x), hash(&stripped_x));
+}
+
+#[test]
 fn improved_symbolica_resultant_is_used() {
     let ctx = context();
     let left = Poly::parse(ctx.clone(), "x^2+y*x+1").unwrap();
@@ -133,6 +168,27 @@ fn typed_substitution_and_full_evaluation_are_exact() {
         Rational::zero()
     );
     assert!(zero.integrate(0).unwrap().is_zero());
+}
+
+#[test]
+fn rational_constants_and_factor_units_stay_typed() {
+    let ctx = context();
+    let value = Rational::new(-7, 12);
+    let constant = Poly::from_rational(ctx.clone(), value.clone());
+    assert_eq!(constant.rational_constant(), Some(value.clone()));
+    let constant_factorization = constant.factor();
+    assert_eq!(constant_factorization.constant, value);
+    assert!(constant_factorization.factors.is_empty());
+
+    let polynomial = Poly::parse(ctx.clone(), "-7/12*(x+y)^2*(x-1)").unwrap();
+    let factorization = polynomial.factor();
+    assert!(!factorization.constant.is_zero());
+
+    let mut reconstructed = Poly::from_rational(ctx, factorization.constant);
+    for (factor, multiplicity) in factorization.factors {
+        reconstructed = reconstructed.try_mul(&factor.pow(multiplicity)).unwrap();
+    }
+    assert_eq!(reconstructed, polynomial);
 }
 
 #[test]

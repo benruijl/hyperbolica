@@ -20,7 +20,7 @@ impl Display for SymCoef {
 
 impl PartialEq for SymCoef {
     fn eq(&self, other: &Self) -> bool {
-        self.ctx.vars() == other.ctx.vars() && self.terms == other.terms
+        self.ctx.is_compatible_with(&other.ctx) && self.terms == other.terms
     }
 }
 

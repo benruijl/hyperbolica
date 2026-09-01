@@ -3,7 +3,6 @@ use std::sync::Arc;
 use super::IntegrationResult;
 use super::entry::combine_keys;
 use crate::core::{PolyCtx, Rat, SymCoef};
-use crate::error::Error;
 use crate::integrator::{
     RegTermSym, RegulatorSym, canonicalize_regkey, canonicalize_regulator_sym,
 };
@@ -13,8 +12,8 @@ use crate::reduce::{
 };
 use crate::symbols::Word;
 
-fn positive_integer(letter: &Rat) -> Option<i64> {
-    let value = letter.to_string().parse::<i64>().ok()?;
+pub(super) fn positive_integer(letter: &Rat) -> Option<i64> {
+    let value = letter.integer_constant()?.to_i64()?;
     (value > 0).then_some(value)
 }
 
@@ -31,10 +30,7 @@ pub fn close_positive_letters(
     variable: usize,
     table: &MzvReductionTable,
 ) -> IntegrationResult<RegulatorSym> {
-    let variable_name = ctx
-        .vars()
-        .get(variable)
-        .ok_or_else(|| Error::UnknownVariable(variable.to_string()))?;
+    let delta = SymCoef::delta_factor(ctx.clone(), variable)?;
     let mut output = RegulatorSym::new();
 
     for term in regulator {
@@ -60,7 +56,7 @@ pub fn close_positive_letters(
             .into_iter()
             .map(|(_, letter)| OnAxisSymEntry {
                 letter,
-                im_part: SymCoef::delta_factor(ctx.clone(), variable_name.clone()),
+                im_part: delta.clone(),
             })
             .collect::<Vec<_>>();
         let seed = WordlistSym {

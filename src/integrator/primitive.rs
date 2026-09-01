@@ -138,12 +138,12 @@ pub fn integrate_ii_with_options(
     while queue_index < queue.len() {
         let term = queue[queue_index].clone();
         queue_index += 1;
-        if term.coef.ctx().vars() != ctx.vars()
+        if !term.coef.ctx().is_compatible_with(ctx)
             || term
                 .word
                 .letters
                 .iter()
-                .any(|letter| letter.ctx().vars() != ctx.vars())
+                .any(|letter| !letter.ctx().is_compatible_with(ctx))
         {
             return Err(Error::ContextMismatch);
         }

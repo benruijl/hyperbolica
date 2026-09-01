@@ -1,4 +1,6 @@
+use std::cmp::Ordering;
 use std::fmt::{Display, Formatter};
+use std::hash::{Hash, Hasher};
 use std::ops::{Index, IndexMut};
 
 use crate::core::Rat;
@@ -10,9 +12,26 @@ use crate::core::Rat;
 pub type Letter = Rat;
 
 /// An ordered list of hyperlogarithm singularities.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Word {
     pub letters: Vec<Letter>,
+}
+
+impl Hash for Word {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.letters.len().hash(state);
+        if let Some(first) = self.letters.first() {
+            // Integration words normally live in one polynomial context.
+            // Hash that ordered native map once, then hash only each native
+            // rational payload. A malformed mixed-context word can produce a
+            // benign collision when only a later context differs; `Word::Eq`
+            // remains the mandatory full bucket check.
+            first.ctx().native_variables().hash(state);
+            for letter in &self.letters {
+                letter.hash_canonical_payload(state);
+            }
+        }
+    }
 }
 
 impl Word {
@@ -43,10 +62,27 @@ impl Word {
     pub fn content_key(&self) -> String {
         let mut key = String::new();
         for letter in &self.letters {
-            key.push_str(&letter.to_string());
+            // Format the native Symbolica value, not the compatibility Poly
+            // views whose diagnostic context names can differ across two
+            // constructors for the same ordered PolyVariable map.
+            key.push_str(&letter.to_atom().to_string());
             key.push('\u{1}');
         }
         key
+    }
+
+    /// Total structural order used to canonicalize commutative word products.
+    ///
+    /// Presentation spellings are deliberately absent, so equally printed
+    /// letters from different Symbolica namespaces cannot compare equal.
+    pub(crate) fn structural_cmp(&self, other: &Self) -> Ordering {
+        for (left, right) in self.letters.iter().zip(&other.letters) {
+            let ordering = left.structural_cmp(right);
+            if ordering != Ordering::Equal {
+                return ordering;
+            }
+        }
+        self.letters.len().cmp(&other.letters.len())
     }
 }
 
@@ -143,6 +179,7 @@ impl Display for Wordlist {
 
 #[cfg(test)]
 mod tests {
+    use std::cmp::Ordering;
     use std::hash::{Hash, Hasher};
     use std::sync::Arc;
 
@@ -235,6 +272,33 @@ mod tests {
     }
 
     #[test]
+    fn word_hash_collisions_still_use_full_later_letter_context_equality() {
+        let first_ctx = PolyCtx::new(["first"]).unwrap();
+        let left_ctx = PolyCtx::new(["left"]).unwrap();
+        let right_ctx = PolyCtx::new(["right"]).unwrap();
+        let left = Word::new(vec![Rat::one(first_ctx.clone()), Rat::one(left_ctx)]);
+        let right = Word::new(vec![Rat::one(first_ctx), Rat::one(right_ctx)]);
+
+        assert_ne!(left, right);
+        assert_eq!(recorded_hash(&left), recorded_hash(&right));
+        let collision_bucket = [left.clone(), right.clone()];
+        assert_eq!(
+            collision_bucket
+                .iter()
+                .filter(|candidate| *candidate == &left)
+                .count(),
+            1
+        );
+        assert_eq!(
+            collision_bucket
+                .iter()
+                .filter(|candidate| *candidate == &right)
+                .count(),
+            1
+        );
+    }
+
+    #[test]
     fn structurally_distinct_words_can_have_identical_legacy_keys() {
         let x_ctx = PolyCtx::new(["x"]).unwrap();
         let y_ctx = PolyCtx::new(["y"]).unwrap();
@@ -243,5 +307,27 @@ mod tests {
         assert_eq!(x_word.to_string(), y_word.to_string());
         assert_eq!(x_word.content_key(), y_word.content_key());
         assert_ne!(x_word, y_word);
+        assert_ne!(x_word.structural_cmp(&y_word), Ordering::Equal);
+        assert_eq!(
+            x_word.structural_cmp(&y_word),
+            y_word.structural_cmp(&x_word).reverse()
+        );
+    }
+
+    #[test]
+    fn content_key_uses_native_values_across_context_constructors() {
+        let symbol = symbolica::prelude::Symbol::parse("x", "word_key_shared").unwrap();
+        let qualified_ctx = PolyCtx::from_symbols([symbol]).unwrap();
+        let stripped_ctx = PolyCtx::from_indeterminates([symbol.to_atom()]).unwrap();
+        assert_ne!(qualified_ctx.vars(), stripped_ctx.vars());
+
+        let qualified = Word::new(vec![Rat::from_poly(
+            crate::core::Poly::generator(qualified_ctx, 0).unwrap(),
+        )]);
+        let stripped = Word::new(vec![Rat::from_poly(
+            crate::core::Poly::generator(stripped_ctx, 0).unwrap(),
+        )]);
+        assert_eq!(qualified, stripped);
+        assert_eq!(qualified.content_key(), stripped.content_key());
     }
 }

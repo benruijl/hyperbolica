@@ -136,8 +136,7 @@ mod tests {
         let numerator = &(&lc_g * f) - &(&lc_f * g);
         let numerator_product = product(table, &entry.difference, true);
         let denominator_product = product(table, &entry.difference, false);
-        let constant =
-            Poly::parse(f.ctx().clone(), &entry.difference.constant.to_string()).unwrap();
+        let constant = Poly::from_rational(f.ctx().clone(), entry.difference.constant.clone());
         assert_eq!(
             &numerator * &denominator_product,
             &(&(&constant * &numerator_product) * &lc_f) * &lc_g

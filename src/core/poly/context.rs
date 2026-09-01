@@ -103,6 +103,13 @@ impl PolyCtx {
         }))
     }
 
+    /// Diagnostic/presentation spellings in context order.
+    ///
+    /// These strings are not mathematical identities: distinct namespaced
+    /// variables may share one spelling, and one native variable can have a
+    /// different qualified spelling depending on its construction path. Use
+    /// [`Self::index_of_symbol`] or [`Self::index_of_indeterminate`] for
+    /// semantic lookup.
     pub fn vars(&self) -> &[String] {
         self.names.as_slice()
     }
@@ -115,6 +122,10 @@ impl PolyCtx {
         self.names.is_empty()
     }
 
+    /// Find the first variable with this diagnostic spelling.
+    ///
+    /// This is a presentation/legacy-adapter helper and may be ambiguous.
+    /// Mathematical code must use a structural lookup method instead.
     pub fn index_of(&self, name: &str) -> Option<usize> {
         self.names.iter().position(|candidate| candidate == name)
     }
@@ -145,6 +156,11 @@ impl PolyCtx {
         self.variables.clone()
     }
 
+    /// Ordered native variable identity without cloning the shared map.
+    pub(crate) fn native_variables(&self) -> &[PolyVariable] {
+        self.variables.as_slice()
+    }
+
     /// Return the context variables as Symbolica symbols.
     pub fn symbol_variables(&self) -> Result<Vec<Symbol>> {
         self.variables
@@ -158,7 +174,15 @@ impl PolyCtx {
             .collect()
     }
 
-    pub(super) fn compatible_with(&self, other: &Self) -> bool {
-        self.names == other.names && self.variables == other.variables
+    /// Whether both contexts describe the same ordered Symbolica polynomial
+    /// ring.
+    ///
+    /// The native [`PolyVariable`] sequence is the complete mathematical
+    /// identity. Diagnostic names are deliberately excluded: Symbolica's
+    /// display spelling strips namespaces for some indeterminates, and the
+    /// same variable can acquire a qualified or stripped diagnostic name
+    /// depending on which Atom-native constructor supplied it.
+    pub fn is_compatible_with(&self, other: &Self) -> bool {
+        self.variables == other.variables
     }
 }

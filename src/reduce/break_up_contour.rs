@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use crate::algebra::convert::convert_ab_to_zero_infinity;
 use crate::algebra::shuffle::shuffle_product;
-use crate::core::{PolyCtx, Rat, SymCoef};
+use crate::core::{DigestBuckets, PolyCtx, Rat, SymCoef, structural_bucket_digest};
 use crate::error::{Error, Result};
 use crate::integrator::{
     RegKey, RegTerm, RegTermSym, Regulator, RegulatorSym, canonicalize_regulator,
@@ -14,6 +14,8 @@ use crate::symbols::{Word, Wordlist, WordlistTerm};
 
 use super::mzv_reduce::MzvReductionTable;
 use super::periods::{zero_inf_period, zero_one_period};
+
+const SYMBOLIC_WORD_COLLECTION_DOMAIN: u64 = 0x434f_4e54_4f55_5257;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct OnAxisEntry {
@@ -52,9 +54,12 @@ pub fn to_wordlist_sym(wordlist: &Wordlist) -> WordlistSym {
 }
 
 fn period_word(word: &Word) -> bool {
-    word.letters
-        .iter()
-        .all(|letter| matches!(letter.to_string().as_str(), "-2" | "-1" | "0"))
+    word.letters.iter().all(|letter| {
+        letter
+            .integer_constant()
+            .and_then(|value| value.to_i64())
+            .is_some_and(|value| matches!(value, -2..=0))
+    })
 }
 
 /// Base contour split used when no positive singularity lies on the path.
@@ -98,13 +103,13 @@ pub fn break_up_contour(
 
 fn collect_wordlist_sym(wordlist: WordlistSym) -> Result<WordlistSym> {
     let mut output = Vec::<WordlistSymTerm>::new();
-    let mut keys = Vec::<String>::new();
+    let mut keys = DigestBuckets::default();
     for term in wordlist.terms {
-        let key = term.word.content_key();
-        if let Some(index) = keys.iter().position(|candidate| candidate == &key) {
+        let digest = structural_bucket_digest(SYMBOLIC_WORD_COLLECTION_DOMAIN, &term.word);
+        if let Some(index) = keys.find(digest, |index| output[index].word == term.word) {
             output[index].coef = output[index].coef.try_add(&term.coef)?;
         } else {
-            keys.push(key);
+            keys.insert(digest, output.len());
             output.push(term);
         }
     }
@@ -193,9 +198,9 @@ fn reg_tail_sym(
 }
 
 fn numeric_word(word: &Word) -> bool {
-    word.letters.iter().all(|letter| {
-        letter.numerator().is_rational_constant() && letter.denominator().is_rational_constant()
-    })
+    word.letters
+        .iter()
+        .all(|letter| letter.rational_constant().is_some())
 }
 
 /// Full SymCoef-valued recursive contour deformation.
@@ -233,11 +238,14 @@ pub fn break_up_contour_sym(
     }
 
     let smallest = &on_axis[0].letter;
-    let smallest_integer = smallest.to_string().parse::<i64>().map_err(|_| {
-        Error::InvalidInput(format!(
-            "break_up_contour_sym: symbolic or non-integral smallest letter `{smallest}`"
-        ))
-    })?;
+    let smallest_integer = smallest
+        .integer_constant()
+        .and_then(|value| value.to_i64())
+        .ok_or_else(|| {
+            Error::InvalidInput(format!(
+                "break_up_contour_sym: symbolic or non-integral smallest letter `{smallest}`"
+            ))
+        })?;
     if smallest_integer <= 0 {
         return Err(Error::InvalidInput(format!(
             "break_up_contour_sym: smallest letter must be positive, got {smallest_integer}"
@@ -379,5 +387,30 @@ mod tests {
         let result = break_up_contour_sym(&ctx, &to_wordlist_sym(&input), &[], &table).unwrap();
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].coef, SymCoef::one(ctx));
+    }
+
+    #[test]
+    fn symbolic_collection_keeps_equal_spellings_from_distinct_contexts() {
+        let x_ctx = PolyCtx::new(["x"]).unwrap();
+        let y_ctx = PolyCtx::new(["y"]).unwrap();
+        let x_word = Word::new(vec![Rat::one(x_ctx.clone())]);
+        let y_word = Word::new(vec![Rat::one(y_ctx.clone())]);
+        assert_eq!(x_word.content_key(), y_word.content_key());
+        assert_ne!(x_word, y_word);
+
+        let collected = collect_wordlist_sym(WordlistSym {
+            terms: vec![
+                WordlistSymTerm {
+                    coef: SymCoef::one(x_ctx),
+                    word: x_word,
+                },
+                WordlistSymTerm {
+                    coef: SymCoef::one(y_ctx),
+                    word: y_word,
+                },
+            ],
+        })
+        .unwrap();
+        assert_eq!(collected.terms.len(), 2);
     }
 }

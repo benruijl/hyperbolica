@@ -101,7 +101,7 @@ impl FactoredRat {
     }
 
     fn require_poly_context(&self, polynomial: &Poly) -> Result<()> {
-        if self.ctx().vars() == polynomial.ctx().vars() {
+        if self.ctx().is_compatible_with(polynomial.ctx()) {
             Ok(())
         } else {
             Err(Error::ContextMismatch)
@@ -109,7 +109,7 @@ impl FactoredRat {
     }
 
     pub(super) fn require_same_context(&self, other: &Self) -> Result<()> {
-        if self.ctx().vars() == other.ctx().vars() {
+        if self.ctx().is_compatible_with(other.ctx()) {
             Ok(())
         } else {
             Err(Error::ContextMismatch)

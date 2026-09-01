@@ -27,7 +27,8 @@ pub struct SymMonomial {
     pub pi_power: i32,
     pub i_power: i32,
     pub log_powers: BTreeMap<i64, i32>,
-    pub delta_powers: BTreeMap<String, i32>,
+    /// Powers of formal delta generators keyed by native context index.
+    pub delta_powers: BTreeMap<usize, i32>,
     pub period_powers: BTreeMap<u32, i32>,
 }
 

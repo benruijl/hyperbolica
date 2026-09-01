@@ -1,6 +1,8 @@
+use std::cmp::Ordering;
+use std::hash::{DefaultHasher, Hash, Hasher};
 use std::sync::Arc;
 
-use symbolica::prelude::{AtomCore, Integer, Rational};
+use symbolica::prelude::{AtomCore, Integer, Rational, Symbol};
 
 use super::Rat;
 use crate::core::{Poly, PolyCtx};
@@ -15,6 +17,47 @@ fn parse_and_cancel() {
     let ctx = context();
     let rational = Rat::parse(ctx.clone(), "(x^2-y^2)/(x-y)").unwrap();
     assert_eq!(rational, Rat::parse(ctx, "x+y").unwrap());
+}
+
+#[test]
+fn equality_and_hash_use_native_variables_not_diagnostic_context_names() {
+    let symbol = Symbol::parse("x", "rat_context_shared").unwrap();
+    let qualified_ctx = PolyCtx::from_symbols([symbol]).unwrap();
+    let stripped_ctx = PolyCtx::from_indeterminates([symbol.to_atom()]).unwrap();
+    let qualified = Rat::from_poly(Poly::generator(qualified_ctx, 0).unwrap());
+    let stripped = Rat::from_poly(Poly::generator(stripped_ctx, 0).unwrap());
+
+    assert_ne!(qualified.ctx().vars(), stripped.ctx().vars());
+    assert_eq!(qualified, stripped);
+    let digest = |value: &Rat| {
+        let mut state = DefaultHasher::new();
+        value.hash(&mut state);
+        state.finish()
+    };
+    assert_eq!(digest(&qualified), digest(&stripped));
+    assert_eq!(qualified.structural_cmp(&stripped), Ordering::Equal);
+}
+
+#[test]
+fn structural_order_is_total_across_values_and_namespaces() {
+    let left_symbol = Symbol::parse("x", "rat_order_left").unwrap();
+    let right_symbol = Symbol::parse("x", "rat_order_right").unwrap();
+    let left_ctx = PolyCtx::from_symbols([left_symbol]).unwrap();
+    let right_ctx = PolyCtx::from_symbols([right_symbol]).unwrap();
+    let left = Rat::from_poly(Poly::generator(left_ctx.clone(), 0).unwrap());
+    let right = Rat::from_poly(Poly::generator(right_ctx, 0).unwrap());
+    assert_eq!(left.to_string(), right.to_string());
+    assert_ne!(left, right);
+    assert_ne!(left.structural_cmp(&right), Ordering::Equal);
+    assert_eq!(
+        left.structural_cmp(&right),
+        right.structural_cmp(&left).reverse()
+    );
+
+    let expanded = Rat::parse(left_ctx.clone(), "(x^2-1)/(x-1)").unwrap();
+    let canonical = Rat::parse(left_ctx, "x+1").unwrap();
+    assert_eq!(expanded, canonical);
+    assert_eq!(expanded.structural_cmp(&canonical), Ordering::Equal);
 }
 
 #[test]
@@ -42,6 +85,23 @@ fn native_value_is_shared_and_q_views_are_lazy_and_monic() {
     );
     assert_eq!(rational.denominator(), &Poly::parse(ctx, "y+1").unwrap());
     assert!(cloned.views.get().is_some());
+}
+
+#[test]
+fn exact_constant_extraction_stays_on_the_native_symbolica_value() {
+    let ctx = context();
+    let rational = Rat::parse(ctx.clone(), "-42/35").unwrap();
+    let integer = Rat::parse(ctx.clone(), "-17").unwrap();
+    let nonconstant = Rat::parse(ctx, "(x+1)/(y+1)").unwrap();
+
+    assert_eq!(rational.rational_constant(), Some(Rational::new(-6, 5)));
+    assert_eq!(rational.integer_constant(), None);
+    assert_eq!(integer.integer_constant(), Some(Integer::from(-17)));
+    assert_eq!(nonconstant.rational_constant(), None);
+
+    assert!(rational.views.get().is_none());
+    assert!(integer.views.get().is_none());
+    assert!(nonconstant.views.get().is_none());
 }
 
 #[test]

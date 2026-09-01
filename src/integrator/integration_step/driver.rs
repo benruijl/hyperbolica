@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use rayon::prelude::*;
@@ -9,12 +9,80 @@ use super::{
     Boundary, IntegrationError, IntegrationResult, IntegrationStepOptions, ShuffleEntrySym,
     ShuffleList, ShuffleListSym,
 };
-use crate::core::{PolyCtx, SymCoef};
+use crate::core::{DigestBuckets, PolyCtx, SymCoef, structural_bucket_digest};
 use crate::error::Error;
 use crate::integrator::{
     RegulatorSym, TransformResult, canonicalize_regulator_sym, transform_shuffle,
 };
 use crate::reduce::MzvReductionTable;
+use crate::symbols::Word;
+
+const STEP_TRANSFORM_BUCKET_DOMAIN: u64 = 0x4953_5452_4348_0001;
+
+struct StepTransformCacheEntry {
+    variable: usize,
+    shuffle: Vec<Word>,
+    value: Arc<TransformResult>,
+}
+
+#[derive(Default)]
+pub(super) struct StepTransformCache {
+    buckets: DigestBuckets,
+    entries: Vec<StepTransformCacheEntry>,
+}
+
+impl StepTransformCache {
+    fn digest(shuffle: &[Word], variable: usize) -> u64 {
+        structural_bucket_digest(STEP_TRANSFORM_BUCKET_DOMAIN, &(variable, shuffle))
+    }
+
+    fn get(&self, shuffle: &[Word], variable: usize) -> Option<&Arc<TransformResult>> {
+        self.get_in_bucket(shuffle, variable, Self::digest(shuffle, variable))
+    }
+
+    pub(super) fn get_in_bucket(
+        &self,
+        shuffle: &[Word],
+        variable: usize,
+        digest: u64,
+    ) -> Option<&Arc<TransformResult>> {
+        self.buckets
+            .find(digest, |index| {
+                self.entries.get(index).is_some_and(|entry| {
+                    entry.variable == variable && entry.shuffle.as_slice() == shuffle
+                })
+            })
+            .map(|index| &self.entries[index].value)
+    }
+
+    fn insert(&mut self, shuffle: &[Word], variable: usize, value: Arc<TransformResult>) {
+        self.insert_in_bucket(shuffle, variable, value, Self::digest(shuffle, variable));
+    }
+
+    pub(super) fn insert_in_bucket(
+        &mut self,
+        shuffle: &[Word],
+        variable: usize,
+        value: Arc<TransformResult>,
+        digest: u64,
+    ) {
+        if let Some(index) = self.buckets.find(digest, |index| {
+            self.entries.get(index).is_some_and(|entry| {
+                entry.variable == variable && entry.shuffle.as_slice() == shuffle
+            })
+        }) {
+            self.entries[index].value = value;
+            return;
+        }
+        let index = self.entries.len();
+        self.entries.push(StepTransformCacheEntry {
+            variable,
+            shuffle: shuffle.to_vec(),
+            value,
+        });
+        self.buckets.insert(digest, index);
+    }
+}
 
 fn merge_contributions(
     ctx: &Arc<PolyCtx>,
@@ -154,19 +222,14 @@ pub(crate) fn integration_step_core_sym_with_options(
     // Transform only the shuffle spine, so equal spines across independently
     // weighted entries share one result. The cache is step-local: it cannot
     // retain context-owned Symbolica objects beyond their useful lifetime.
-    let mut transform_cache = HashMap::<String, Arc<TransformResult>>::new();
+    let mut transform_cache = StepTransformCache::default();
     let mut transformed = Vec::with_capacity(input.len());
     for entry in input {
-        let mut key = String::new();
-        for word in &entry.shuffle {
-            key.push_str(&word.content_key());
-            key.push('\u{2}');
-        }
-        let value = if let Some(value) = transform_cache.get(&key) {
+        let value = if let Some(value) = transform_cache.get(&entry.shuffle, variable) {
             value.clone()
         } else {
             let value = Arc::new(transform_shuffle(ctx, &entry.shuffle, variable)?);
-            transform_cache.insert(key, value.clone());
+            transform_cache.insert(&entry.shuffle, variable, value.clone());
             value
         };
         transformed.push(value);

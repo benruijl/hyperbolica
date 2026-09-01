@@ -14,7 +14,7 @@ mod tests;
 use std::sync::Arc;
 
 use symbolica::domains::rational::RationalField;
-use symbolica::prelude::{MultivariatePolynomial, PolyVariable};
+use symbolica::prelude::{MultivariatePolynomial, PolyVariable, Rational};
 
 type SymbolicaPoly = MultivariatePolynomial<RationalField, u16>;
 
@@ -36,8 +36,8 @@ pub struct Poly {
 }
 
 /// Factorization with a rational unit and irreducible polynomial bases.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Factored {
-    pub constant: String,
+    pub constant: Rational,
     pub factors: Vec<(Poly, usize)>,
 }

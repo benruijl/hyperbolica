@@ -27,7 +27,7 @@ fn conversion_error(message: impl Into<String>) -> Error {
 }
 
 fn require_rat_context(value: &Rat, ctx: &PolyCtx) -> Result<()> {
-    if value.ctx().vars() == ctx.vars() {
+    if value.ctx().is_compatible_with(ctx) {
         Ok(())
     } else {
         Err(Error::ContextMismatch)

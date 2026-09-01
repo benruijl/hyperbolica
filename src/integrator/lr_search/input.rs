@@ -43,7 +43,7 @@ pub(super) fn validate_inputs(groups: &[Vec<Poly>], variables: &[usize]) -> Resu
         }
     }
     for polynomial in groups.iter().flatten() {
-        if polynomial.ctx().vars() != reference.ctx().vars() {
+        if !polynomial.ctx().is_compatible_with(reference.ctx()) {
             return Err(Error::ContextMismatch);
         }
     }
