@@ -1,0 +1,51 @@
+{
+  "schema": 1,
+  "policy_id": "hyperbolica-cold-cli-parity-v2",
+  "locked": true,
+  "requirements": {
+    "minimum_pairs_per_workload": 12,
+    "warmup_runs": 2,
+    "threads": 1,
+    "bootstrap_samples": 10000,
+    "seed": 1729,
+    "cpuset": "0",
+    "thresholds": {
+      "global_upper_ci": 1.05,
+      "max_workload_ratio": 1.15,
+      "max_rss_ratio": 1.25
+    },
+    "clock": "perf_counter_ns",
+    "rusage": "wait4",
+    "order": "paired_interleaved",
+    "affinity_scope": "measurement_helper_and_backend",
+    "samples_include_process_startup": true,
+    "backend_profiles": {
+      "rust": "release-lto",
+      "cpp_oracle": "release-portable"
+    },
+    "required_cpp_revision": "adfd3af3be234cb43a2322bd9ec442caa26edd74",
+    "required_cpp_cmake": {
+      "build_type": "Release",
+      "mimalloc": "ON",
+      "openmp": "ON",
+      "generator": "Unix Makefiles",
+      "cxx_flags": "",
+      "cxx_flags_release": "-O3 -DNDEBUG",
+      "asan": "OFF",
+      "tsan": "OFF",
+      "cli_static_deps": "OFF"
+    },
+    "environment_allowlist": [
+      "OMP_NUM_THREADS",
+      "OPENBLAS_NUM_THREADS",
+      "RAYON_NUM_THREADS",
+      "SYMBOLICA_HIDE_BANNER"
+    ],
+    "performance_environment": {
+      "OMP_NUM_THREADS": "1",
+      "OPENBLAS_NUM_THREADS": "1",
+      "RAYON_NUM_THREADS": "1",
+      "SYMBOLICA_HIDE_BANNER": "1"
+    }
+  }
+}

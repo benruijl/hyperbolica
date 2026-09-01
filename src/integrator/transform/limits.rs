@@ -12,7 +12,7 @@ use crate::integrator::regularize::regzero_word_in_ctx;
 
 pub(super) fn word_depends_on_variable(word: &Word, variable: usize) -> Result<bool> {
     for letter in &word.letters {
-        if !letter.derivative(variable)?.is_zero() {
+        if letter.depends_on(variable)? {
             return Ok(true);
         }
     }
@@ -115,7 +115,7 @@ pub(super) fn reglim_word_impl(
     for (letter, zero_order) in word.letters.iter().zip(zero_orders) {
         if zero_order > minimum_order {
             scaled.letters.push(Rat::zero(ctx.clone()));
-        } else if letter.derivative(variable)?.is_zero() {
+        } else if !letter.depends_on(variable)? {
             scaled.letters.push(letter.clone());
         } else {
             scaled.letters.push(letter.residue(variable)?);

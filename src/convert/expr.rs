@@ -65,13 +65,6 @@ impl Expr {
             ),
         }
     }
-
-    pub fn as_leaf(&self) -> Option<&Rat> {
-        match self {
-            Self::Leaf(value) => Some(value),
-            _ => None,
-        }
-    }
 }
 
 impl std::fmt::Display for Expr {

@@ -90,6 +90,16 @@ class LicensedIntegrationTests(unittest.TestCase):
         self.assertIsNot(copy.deepcopy(prepared), prepared)
         self.assertIs(type(prepared.integrate()), hb.Expression)
 
+    def test_builtin_log_accepts_exact_rational_arguments(self) -> None:
+        x = hb.S("python_licensed_log_x")
+        for argument in (x + 1, x * (x + 1), (x + 1) / (x + 2)):
+            prepared = hb.prepare(argument.log(), [x])
+            self.assertEqual(prepared.variable_count, 1)
+            self.assertGreater(prepared.shuffle_term_count, 0)
+
+        with self.assertRaisesRegex(hb.InputError, "nested Hlog/log"):
+            hb.prepare((x + 1).log().log(), [x])
+
     def test_divergence_error_retains_structured_fields(self) -> None:
         x = hb.S("python_licensed_divergent_x")
         options = hb.IntegrationOptions(check_divergences=True, parallel=False)

@@ -1,0 +1,20 @@
+{
+  "schema": 1,
+  "fixture_sha256": "3eee783a9c8f0e2add8d92f8220f8b0f3f3f729e8076fcdd4ccdcb7fa70db5d8",
+  "workloads": [
+    {"name": "tiny_rational_addition", "tier": "qualification"},
+    {"name": "sparse_high_degree_multiply", "tier": "qualification"},
+    {"name": "dense_polynomial_multiply", "tier": "qualification"},
+    {"name": "multivariate_gcd", "tier": "qualification"},
+    {"name": "dense_parameter_resultant", "tier": "qualification"},
+    {"name": "shared_denominator_rat_sum", "tier": "qualification"},
+    {"name": "large_multiplicity_partial_fractions", "tier": "qualification"},
+    {"name": "factor_table_multistage", "tier": "qualification"},
+    {"name": "lr_verify_three_variables", "tier": "qualification"},
+    {"name": "euler_filtered_massless_box", "tier": "qualification"},
+    {"name": "high_order_laurent_series", "tier": "qualification"},
+    {"name": "production_mzv_reduction", "tier": "qualification"},
+    {"name": "convergent_integration_step", "tier": "qualification"},
+    {"name": "three_variable_hyperflint", "tier": "qualification"}
+  ]
+}

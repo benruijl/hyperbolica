@@ -7,6 +7,10 @@ use crate::error::{Error, Result};
 use super::algebraic_introduction::introduce_quadratic;
 use super::algebraic_letters::join_algebraic_letter_session;
 
+mod factored;
+
+pub use factored::{partial_fractions_factored, partial_fractions_factored_with_options};
+
 /// Policy for a univariate partial-fraction decomposition.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct PartialFractionOptions<'a> {

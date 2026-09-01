@@ -1,5 +1,42 @@
 use hyperbolica::integrator::Boundary;
 use hyperbolica::prelude::*;
+use hyperbolica::reduce::MzvReductionTable;
+use hyperbolica::symbols::mzv_atom;
+
+#[test]
+fn atom_api_default_mzv_context_is_embedded_and_basis_only() {
+    let x = symbol!("atom_api_standard_mzv_x");
+    let standard_options = AtomIntegrationOptions::default();
+    let prepared = prepare_atom_with_options(&Atom::one(), &[x], &standard_options).unwrap();
+    assert_eq!(
+        prepared.context().len(),
+        1 + standard_options.mzv_reductions.basis().len()
+    );
+    assert!(
+        prepared
+            .context()
+            .index_of_indeterminate(mzv_atom(&[2]).as_view())
+            .is_some()
+    );
+    assert!(
+        prepared
+            .context()
+            .index_of_indeterminate(mzv_atom(&[4]).as_view())
+            .is_none()
+    );
+
+    let empty_options = AtomIntegrationOptions {
+        mzv_reductions: MzvReductionTable::default(),
+        ..AtomIntegrationOptions::default()
+    };
+    let empty = prepare_atom_with_options(&Atom::one(), &[x], &empty_options).unwrap();
+    assert!(
+        empty
+            .context()
+            .index_of_indeterminate(mzv_atom(&[2]).as_view())
+            .is_none()
+    );
+}
 
 #[test]
 fn atom_native_api_regression_suite() {
@@ -31,6 +68,19 @@ fn atom_native_api_regression_suite() {
             .to_atom()
             .unwrap(),
         Atom::one()
+    );
+
+    // Never-integrated input parameters are retained in divergence fibration.
+    // Upstream records this cross-letter rational as the minimal regression:
+    // its x-boundary bins cancel only after projecting them as functions of y.
+    let parametric = Atom::one() / ((x + 1) * (x + y));
+    let prepared_parametric = prepare_atom(&parametric, &[x]).unwrap();
+    assert_eq!(prepared_parametric.integration_indices(), &[0]);
+    assert_eq!(prepared_parametric.spectator_indices(), &[1]);
+    assert!(
+        !integrate_prepared_atom(&prepared_parametric, &options)
+            .unwrap()
+            .is_zero()
     );
 
     // A registered function call remains an Atom indeterminate, never a
@@ -89,6 +139,28 @@ fn atom_api_introduces_structural_quadratic_letters_deterministically() {
     let second = integrate_atom(&input, &[x], &options).unwrap();
     assert_eq!(second.algebraic_letters()[0].idx, 1);
     assert_eq!(second.to_atom().unwrap(), first_atom);
+}
+
+#[test]
+fn atom_api_allows_quadratic_roots_depending_on_a_spectator() {
+    let (x, y) = symbol!("atom_api_spectator_root_x", "atom_api_spectator_root_y");
+    let input = Atom::one() / (x.pow(2) + y);
+    let options = AtomIntegrationOptions {
+        introduce_algebraic_letters: true,
+        parallel: false,
+        ..AtomIntegrationOptions::default()
+    };
+    let prepared = prepare_atom_with_options(&input, &[x], &options).unwrap();
+    assert_eq!(prepared.spectator_indices().len(), 1);
+
+    let output = integrate_prepared_atom(&prepared, &options).unwrap();
+    assert_eq!(output.algebraic_letters().len(), 1);
+    assert!(
+        output.algebraic_letters()[0]
+            .polynomial
+            .used_variable_indices()
+            .contains(&prepared.spectator_indices()[0])
+    );
 }
 
 #[test]

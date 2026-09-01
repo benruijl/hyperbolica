@@ -27,6 +27,11 @@ fn collect_rational_indeterminates(atom: AtomView<'_>, output: &mut HashSet<Atom
                 collect_hlog_argument_indeterminates(argument, output);
             }
         }
+        AtomView::Fun(function) if function.get_symbol() == Symbol::LOG => {
+            for argument in function {
+                collect_rational_indeterminates(argument, output);
+            }
+        }
         AtomView::Add(addition) => {
             for child in addition {
                 collect_rational_indeterminates(child, output);
@@ -68,9 +73,21 @@ fn ordered_indeterminates(
     atom: AtomView<'_>,
     integration_variables: &[Symbol],
     additional_indeterminates: &[Atom],
-) -> Vec<Atom> {
+) -> Result<Vec<Atom>> {
     let mut discovered = HashSet::new();
     collect_rational_indeterminates(atom, &mut discovered);
+
+    for candidate in &discovered {
+        for variable in integration_variables {
+            let variable_atom = variable.to_atom();
+            if candidate != &variable_atom && candidate.contains_symbol(*variable) {
+                return Err(Error::InvalidInput(format!(
+                    "unsupported Atom indeterminate `{candidate}` depends on integration variable `{}`; convert it to Hlog first or keep it spectator-only",
+                    variable.get_name()
+                )));
+            }
+        }
+    }
 
     let mut ordered = Vec::new();
     for variable in integration_variables {
@@ -88,7 +105,23 @@ fn ordered_indeterminates(
             ordered.push(atom.clone());
         }
     }
-    ordered
+    Ok(ordered)
+}
+
+/// Build the exact polynomial context shared by Atom ingress paths.
+///
+/// Keeping this separate from expression lowering lets a bare rational Atom
+/// enter the factorized-rational domain directly instead of constructing a
+/// canonical [`Rat`] first.
+pub(crate) fn context_from_atom_with_indeterminates(
+    atom: AtomView<'_>,
+    integration_variables: &[Symbol],
+    additional_indeterminates: &[Atom],
+) -> Result<(Arc<PolyCtx>, Vec<Atom>)> {
+    let indeterminates =
+        ordered_indeterminates(atom, integration_variables, additional_indeterminates)?;
+    let ctx = PolyCtx::from_indeterminates(indeterminates.clone())?;
+    Ok((ctx, indeterminates))
 }
 
 fn positive_integer(atom: AtomView<'_>) -> Result<i64> {
@@ -139,6 +172,24 @@ fn lower(atom: AtomView<'_>, ctx: &Arc<PolyCtx>) -> Result<Expr> {
     let hlog = heads().hlog;
     match atom {
         AtomView::Fun(function) if function.get_symbol() == hlog => lower_hlog(function, ctx),
+        AtomView::Fun(function) if function.get_symbol() == Symbol::LOG => {
+            if function.get_nargs() != 1 {
+                return Err(Error::InvalidInput(
+                    "Symbolica log requires exactly one argument".into(),
+                ));
+            }
+            let argument = function.get(0);
+            if argument.contains_symbol(hlog) || argument.contains_symbol(Symbol::LOG) {
+                return Err(Error::InvalidInput(
+                    "log argument must be an exact rational function; nested Hlog/log input is unsupported"
+                        .into(),
+                ));
+            }
+            Ok(Expr::hlog(
+                Rat::from_atom(ctx.clone(), argument)?,
+                Word::new(vec![Rat::zero(ctx.clone())]),
+            ))
+        }
         AtomView::Add(addition) => addition
             .into_iter()
             .map(|child| lower(child, ctx))
@@ -149,10 +200,15 @@ fn lower(atom: AtomView<'_>, ctx: &Arc<PolyCtx>) -> Result<Expr> {
             .map(|child| lower(child, ctx))
             .collect::<Result<Vec<_>>>()
             .map(Expr::times),
-        AtomView::Pow(power) if power.get_base().contains_symbol(hlog) => Expr::power(
-            lower(power.get_base(), ctx)?,
-            positive_integer(power.get_exp())?,
-        ),
+        AtomView::Pow(power)
+            if power.get_base().contains_symbol(hlog)
+                || power.get_base().contains_symbol(Symbol::LOG) =>
+        {
+            Expr::power(
+                lower(power.get_base(), ctx)?,
+                positive_integer(power.get_exp())?,
+            )
+        }
         _ if !atom.contains_symbol(hlog) => Rat::from_atom(ctx.clone(), atom).map(Expr::leaf),
         _ => Err(Error::InvalidInput(format!(
             "unsupported Atom node in hyperlogarithm input: `{atom}`"
@@ -165,7 +221,8 @@ fn lower(atom: AtomView<'_>, ctx: &Arc<PolyCtx>) -> Result<Expr> {
 /// `Hlog(z, a1, ..., an)` is the canonical Atom representation. For callers
 /// that already use Symbolica's `arg(...)` list head, `Hlog(z, arg(a1,...))`
 /// is accepted as an equivalent spelling.
-pub fn expression_from_atom(
+#[cfg(test)]
+fn expression_from_atom(
     atom: AtomView<'_>,
     integration_variables: &[Symbol],
 ) -> Result<AtomExpression> {
@@ -181,9 +238,11 @@ pub fn expression_from_atom_with_indeterminates(
     integration_variables: &[Symbol],
     additional_indeterminates: &[Atom],
 ) -> Result<AtomExpression> {
-    let indeterminates =
-        ordered_indeterminates(atom, integration_variables, additional_indeterminates);
-    let ctx = PolyCtx::from_indeterminates(indeterminates.clone())?;
+    let (ctx, indeterminates) = context_from_atom_with_indeterminates(
+        atom,
+        integration_variables,
+        additional_indeterminates,
+    )?;
     let expr = lower(atom, &ctx)?;
     Ok(AtomExpression {
         expr,
@@ -214,6 +273,55 @@ mod tests {
         let input = parse!("3") * &hlog + hlog.pow(2);
         let lowered = expression_from_atom(input.as_view(), &[x]).unwrap();
         assert!(matches!(lowered.expr, Expr::Plus(_)));
+    }
+
+    #[test]
+    fn builtin_log_is_lowered_to_a_zero_letter_hlog() {
+        let x = symbol!("atom_builtin_log_x");
+        for (input, expected) in [
+            ((x + 1).log(), x.to_atom() + 1),
+            ((x * (x + 1)).log(), x.to_atom() * (x + 1)),
+            (((x + 1) / (x + 2)).log(), (x.to_atom() + 1) / (x + 2)),
+        ] {
+            let lowered = expression_from_atom(input.as_view(), &[x]).unwrap();
+            let Expr::Hlog { arg, word } = lowered.expr else {
+                panic!("built-in log must lower to one Hlog")
+            };
+            assert_eq!(
+                arg,
+                Rat::from_atom(lowered.ctx.clone(), expected.as_view()).unwrap()
+            );
+            assert_eq!(word, Word::new(vec![Rat::zero(lowered.ctx.clone())]));
+            assert_eq!(lowered.indeterminates, vec![x.to_atom()]);
+        }
+    }
+
+    #[test]
+    fn builtin_log_rejects_nested_transcendental_arguments() {
+        let x = symbol!("atom_nested_log_x");
+        for input in [x.to_atom().log().log(), heads().hlog.call((x, 0)).log()] {
+            let error = expression_from_atom(input.as_view(), &[x]).unwrap_err();
+            assert!(error.to_string().contains("nested Hlog/log"));
+        }
+    }
+
+    #[test]
+    fn integration_dependent_opaque_functions_are_rejected() {
+        let (x, a) = symbol!("atom_opaque_x", "atom_opaque_a");
+        let opaque = Symbol::parse("f", "atom_opaque_test").unwrap();
+        let mpl = heads().mpl.call((2, x));
+        for input in [opaque.call(x), mpl] {
+            let error = expression_from_atom(input.as_view(), &[x]).unwrap_err();
+            assert!(
+                error
+                    .to_string()
+                    .contains("depends on integration variable")
+            );
+        }
+
+        let spectator = opaque.call(a);
+        let lowered = expression_from_atom(spectator.as_view(), &[x]).unwrap();
+        assert!(lowered.indeterminates.contains(&spectator));
     }
 
     #[test]

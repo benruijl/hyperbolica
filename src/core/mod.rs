@@ -14,7 +14,7 @@ pub(crate) use canonical_signature::poly_bucket_digest;
 pub use context_interner::{ContextInterner, global_context_interner, intern_poly_ctx};
 pub use factored_rat::{Factor, FactoredRat};
 pub use period_table::{PeriodTable, global_period_table};
-pub use poly::{Factored, Poly, PolyCtx};
+pub use poly::{Factored, Poly, PolyCtx, ResultantStrategy};
 pub(crate) use rat::NativeRat;
 pub use rat::Rat;
 pub use rat_split::{

@@ -11,17 +11,20 @@ use super::{
 use crate::core::{Poly, PolyCtx, Rat, SymCoef};
 use crate::error::Error;
 use crate::integrator::{RegKey, RegTerm, RegTermSym, Regulator, canonicalize_regkey};
-use crate::reduce::{MzvReductionRule, MzvReductionTable, build_mzv_atom_list};
+use crate::reduce::{
+    MzvReductionRule, MzvReductionTable, build_mzv_atom_list, build_mzv_basis_atom_list,
+    standard_mzv_reductions,
+};
 use crate::symbols::{SYMBOL_NAMESPACE, Word, mzv_atom};
 
 fn setup() -> (Arc<PolyCtx>, MzvReductionTable) {
-    let table = MzvReductionTable {
-        reductions: vec![MzvReductionRule {
+    let table = MzvReductionTable::from_parts(
+        vec![MzvReductionRule {
             lhs: "mzv_4".into(),
             rhs: "2/5*mzv_2^2".into(),
         }],
-        basis: vec!["Log2".into(), "mzv_2".into(), "mzv_3".into()],
-    };
+        vec!["Log2".into(), "mzv_2".into(), "mzv_3".into()],
+    );
     let x = Symbol::parse("x", SYMBOL_NAMESPACE).unwrap();
     let ctx =
         PolyCtx::from_indeterminates(build_mzv_atom_list(&table, [x.to_atom()]).unwrap()).unwrap();
@@ -69,6 +72,31 @@ fn zero_one_period_mints_and_reduces_mzvs() {
             .try_div(&Rat::from_int(ctx.clone(), 5))
             .unwrap()
     );
+}
+
+#[test]
+fn embedded_standard_expansion_reduces_a_nonbasis_period_in_a_narrow_context() {
+    let table = standard_mzv_reductions();
+    let ctx = PolyCtx::from_indeterminates(build_mzv_basis_atom_list(&table, []).unwrap()).unwrap();
+    assert!(
+        ctx.index_of_indeterminate(mzv_atom(&[4]).as_view())
+            .is_none()
+    );
+
+    let actual = zero_one_period(&ctx, &word(&ctx, &[0, 0, 0, 1]), &table).unwrap();
+    let expected = mzv(&ctx, &[2])
+        .pow(2)
+        .unwrap()
+        .try_mul(&Rat::from_int(ctx.clone(), -2))
+        .unwrap()
+        .try_div(&Rat::from_int(ctx.clone(), 5))
+        .unwrap();
+    assert_eq!(actual, expected);
+
+    let empty = MzvReductionTable::default();
+    let empty_ctx =
+        PolyCtx::from_indeterminates(build_mzv_basis_atom_list(&empty, []).unwrap()).unwrap();
+    assert!(zero_one_period(&empty_ctx, &word(&empty_ctx, &[0, 0, 0, 1]), &empty).is_err());
 }
 
 #[test]

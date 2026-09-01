@@ -105,6 +105,40 @@ fn exact_constant_extraction_stays_on_the_native_symbolica_value() {
 }
 
 #[test]
+fn native_degree_dependency_and_order_queries_keep_q_views_cold() {
+    let ctx = context();
+    let rational = Rat::parse(ctx.clone(), "(x^3+x*y+1)/(x*y^2+y+1)").unwrap();
+    let zero = Rat::zero(ctx);
+
+    assert_eq!(rational.numerator_degree(0).unwrap(), 3);
+    assert_eq!(rational.numerator_degree(1).unwrap(), 1);
+    assert_eq!(rational.denominator_degree(0).unwrap(), 1);
+    assert_eq!(rational.denominator_degree(1).unwrap(), 2);
+    assert!(rational.depends_on(0).unwrap());
+    assert!(rational.depends_on(1).unwrap());
+    assert_eq!(rational.pole_degree(0).unwrap(), 0);
+
+    assert_eq!(zero.numerator_degree(0).unwrap(), -1);
+    assert_eq!(zero.denominator_degree(0).unwrap(), 0);
+    assert!(!zero.depends_on(0).unwrap());
+    assert!(matches!(
+        rational.depends_on(2),
+        Err(Error::UnknownVariable(_))
+    ));
+    assert!(matches!(
+        rational.numerator_degree(2),
+        Err(Error::UnknownVariable(_))
+    ));
+    assert!(matches!(
+        rational.denominator_degree(2),
+        Err(Error::UnknownVariable(_))
+    ));
+
+    assert!(rational.views.get().is_none());
+    assert!(zero.views.get().is_none());
+}
+
+#[test]
 fn constructor_delegates_content_and_polynomial_cancellation_to_symbolica() {
     let ctx = context();
     let numerator = Poly::parse(ctx.clone(), "3/10*(x^2-y^2)").unwrap();
@@ -217,6 +251,61 @@ fn negative_power_and_typed_native_substitution_are_exact() {
     );
     assert!(rational.views.get().is_none());
     assert!(substituted.views.get().is_none());
+}
+
+#[test]
+fn rational_function_substitution_uses_native_horner_composition() {
+    let ctx = context();
+    let rational = Rat::parse(ctx.clone(), "(x^17+2*x^3*y+y^2+1)/(x^5-x^2*y+y+2)").unwrap();
+    let replacement = Rat::parse(ctx.clone(), "(y^2-1)/(y+2)").unwrap();
+    let substituted = rational.substitute_rat(0, &replacement).unwrap();
+    let expected = Rat::parse(
+        ctx,
+        "(((y^2-1)/(y+2))^17+2*((y^2-1)/(y+2))^3*y+y^2+1)/(((y^2-1)/(y+2))^5-((y^2-1)/(y+2))^2*y+y+2)",
+    )
+    .unwrap();
+
+    assert_eq!(substituted, expected);
+    assert!(rational.views.get().is_none());
+    assert!(replacement.views.get().is_none());
+    assert!(substituted.views.get().is_none());
+}
+
+#[test]
+fn rational_function_substitution_preserves_typed_failures() {
+    let ctx = context();
+    let rational = Rat::parse(ctx.clone(), "(x+y)/(x-1)").unwrap();
+    let one = Rat::one(ctx.clone());
+    let foreign = Rat::one(PolyCtx::new(["z"]).unwrap());
+
+    assert!(matches!(
+        rational.substitute_rat(0, &one),
+        Err(Error::DivisionByZero)
+    ));
+    assert!(matches!(
+        rational.substitute_rat(2, &one),
+        Err(Error::UnknownVariable(_))
+    ));
+    assert!(matches!(
+        rational.substitute_rat(0, &foreign),
+        Err(Error::ContextMismatch)
+    ));
+}
+
+#[test]
+fn native_context_transfer_keeps_compatibility_views_cold() {
+    let source_ctx = PolyCtx::new(["x", "y"]).unwrap();
+    let destination_ctx = PolyCtx::new(["z", "y", "x"]).unwrap();
+    let source = Rat::parse(source_ctx, "(x+y)/(1-x*y)").unwrap();
+    let transferred =
+        crate::reduce::cross_ctx_transfer_rat(&source, destination_ctx.clone()).unwrap();
+
+    assert_eq!(
+        transferred,
+        Rat::parse(destination_ctx, "(x+y)/(1-x*y)").unwrap()
+    );
+    assert!(source.views.get().is_none());
+    assert!(transferred.views.get().is_none());
 }
 
 #[test]

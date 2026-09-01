@@ -334,13 +334,13 @@ mod tests {
     use crate::symbols::{SYMBOL_NAMESPACE, mzv_atom};
 
     fn setup() -> (Arc<PolyCtx>, MzvReductionTable) {
-        let table = MzvReductionTable {
-            reductions: vec![MzvReductionRule {
+        let table = MzvReductionTable::from_parts(
+            vec![MzvReductionRule {
                 lhs: "mzv_4".into(),
                 rhs: "2/5*mzv_2^2".into(),
             }],
-            basis: vec!["Log2".into(), "mzv_2".into()],
-        };
+            vec!["Log2".into(), "mzv_2".into()],
+        );
         let x = Symbol::parse("x", SYMBOL_NAMESPACE).unwrap();
         let ctx = PolyCtx::from_indeterminates(build_mzv_atom_list(&table, [x.to_atom()]).unwrap())
             .unwrap();

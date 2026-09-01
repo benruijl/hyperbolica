@@ -2,16 +2,17 @@
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::Path;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
-use symbolica::prelude::Atom;
+use symbolica::domains::rational_polynomial::FromNumeratorAndDenominator;
+use symbolica::prelude::{Atom, Z};
 
-use crate::core::{PolyCtx, Rat};
+use crate::core::{NativeRat, PolyCtx, Rat};
 use crate::error::{Error, Result};
 
 use super::mzv_reduce::{
-    MzvReductionRule, identifier_tokens, load_mzv_reductions, mzv_constant_atom,
-    mzv_expression_atom, substitute_var_rat,
+    MzvReductionRule, MzvReductionTable, identifier_tokens, load_mzv_reductions, mzv_constant_atom,
+    mzv_expression_atom, standard_mzv_reductions, substitute_var_rat,
 };
 
 #[derive(Clone, Debug)]
@@ -112,23 +113,23 @@ pub fn build_basis_atom_list(
 /// Move a rational function between compatible named polynomial contexts.
 ///
 /// Unlike the original FLINT port's pretty-string round trip, this remaps
-/// sparse exponent vectors directly through Symbolica.
+/// sparse exponent vectors directly through Symbolica. The native integer
+/// rational-polynomial representation remains the source of truth: context
+/// rearrangement preserves coprimality, so only denominator-sign
+/// normalization is required after the transfer.
 pub fn cross_ctx_transfer_rat(source: &Rat, destination: Arc<PolyCtx>) -> Result<Rat> {
-    let mapping = (0..source.ctx().len())
-        .map(|index| {
-            source
-                .ctx()
-                .variable_atom(index)
-                .ok()
-                .and_then(|atom| destination.index_of_indeterminate(atom.as_view()))
-        })
-        .collect::<Vec<_>>();
-    Rat::new(
-        source
-            .numerator()
-            .transplant(destination.clone(), &mapping)?,
-        source.denominator().transplant(destination, &mapping)?,
-    )
+    let numerator = source
+        .native()
+        .numerator
+        .rearrange_with_growth(destination.native_variables())
+        .map_err(Error::InvalidInput)?;
+    let denominator = source
+        .native()
+        .denominator
+        .rearrange_with_growth(destination.native_variables())
+        .map_err(Error::InvalidInput)?;
+    let native = NativeRat::from_num_den(numerator, denominator, &Z, false);
+    Rat::from_native(destination, native)
 }
 
 /// Reject bridge payloads that contain wide-context reduction symbols.
@@ -188,12 +189,23 @@ pub fn load_mzv_expansion_with_options(
     allow_chained: bool,
 ) -> Result<MzvExpansionTable> {
     let path = path.as_ref();
-    let mut table = load_mzv_reductions(path)?;
-    table
-        .reductions
-        .sort_by_key(|rule| weight_of_mzv_name(&rule.lhs));
+    let table = load_mzv_reductions(path)?;
+    expand_mzv_reductions(&table, allow_chained, &path.display().to_string())
+}
 
-    let basis_names = canonical_basis(&table.basis)?;
+/// Eagerly expand a decoded reduction table into its basis-only context.
+///
+/// `source_name` is used only in validation diagnostics. This entry point is
+/// what lets the embedded table avoid a temporary file or source-tree path.
+pub fn expand_mzv_reductions(
+    table: &MzvReductionTable,
+    allow_chained: bool,
+    source_name: &str,
+) -> Result<MzvExpansionTable> {
+    let mut reductions = table.reductions().to_vec();
+    reductions.sort_by_key(|rule| weight_of_mzv_name(&rule.lhs));
+
+    let basis_names = canonical_basis(table.basis())?;
     let basis_atoms = basis_names
         .iter()
         .map(|name| {
@@ -211,14 +223,13 @@ pub fn load_mzv_expansion_with_options(
         .enumerate()
         .map(|(index, name)| (name, index))
         .collect::<HashMap<_, _>>();
-    let lhs_names = table
-        .reductions
+    let lhs_names = reductions
         .iter()
         .map(|rule| rule.lhs.clone())
         .collect::<HashSet<_>>();
 
     let mut any_chained = false;
-    for rule in &table.reductions {
+    for rule in &reductions {
         let lhs_weight = weight_of_mzv_name(&rule.lhs);
         if lhs_weight < 0 {
             return Err(Error::InvalidInput(format!(
@@ -250,7 +261,7 @@ pub fn load_mzv_expansion_with_options(
     if any_chained && !allow_chained {
         return Err(Error::InvalidInput(format!(
             "load_mzv_expansion: {} contains chained rules but allow_chained is false",
-            path.display()
+            source_name
         )));
     }
 
@@ -261,10 +272,34 @@ pub fn load_mzv_expansion_with_options(
         basis_idx,
         expansion: BTreeMap::new(),
     };
-    for rule in &table.reductions {
+    for rule in &reductions {
         expand_rule(rule, &lhs_names, &mut output)?;
     }
     Ok(output)
+}
+
+static STANDARD_MZV_EXPANSION: OnceLock<std::result::Result<Arc<MzvExpansionTable>, String>> =
+    OnceLock::new();
+
+/// Return the cached basis-only expansion of the embedded standard table.
+pub fn standard_mzv_expansion() -> Result<&'static MzvExpansionTable> {
+    STANDARD_MZV_EXPANSION
+        .get_or_init(|| {
+            expand_mzv_reductions(
+                &standard_mzv_reductions(),
+                false,
+                "embedded data/mzv_reductions.json",
+            )
+            .map(Arc::new)
+            .map_err(|error| error.to_string())
+        })
+        .as_ref()
+        .map(Arc::as_ref)
+        .map_err(|error| {
+            Error::InvalidInput(format!(
+                "cannot initialize embedded standard MZV expansion: {error}"
+            ))
+        })
 }
 
 fn expand_rule(
@@ -401,6 +436,32 @@ mod tests {
             actual,
             Rat::parse(destination_ctx, "(x+y)/(1-x*y)").unwrap()
         );
+    }
+
+    #[test]
+    fn context_transfer_drops_only_unused_variables() {
+        let source_ctx = PolyCtx::new(["x", "y"]).unwrap();
+        let destination_ctx = PolyCtx::new(["x"]).unwrap();
+        let independent = Rat::parse(source_ctx.clone(), "(x+1)/(x+2)").unwrap();
+        assert_eq!(
+            cross_ctx_transfer_rat(&independent, destination_ctx.clone()).unwrap(),
+            Rat::parse(destination_ctx.clone(), "(x+1)/(x+2)").unwrap()
+        );
+
+        let dependent = Rat::parse(source_ctx, "(x+y)/(x-y)").unwrap();
+        assert!(matches!(
+            cross_ctx_transfer_rat(&dependent, destination_ctx),
+            Err(Error::InvalidInput(_))
+        ));
+    }
+
+    #[test]
+    fn context_transfer_renormalizes_denominator_sign_after_permutation() {
+        let source_ctx = PolyCtx::new(["x", "y"]).unwrap();
+        let destination_ctx = PolyCtx::new(["y", "x"]).unwrap();
+        let source = Rat::parse(source_ctx, "1/(x-y)").unwrap();
+        let transferred = cross_ctx_transfer_rat(&source, destination_ctx.clone()).unwrap();
+        assert_eq!(transferred, Rat::parse(destination_ctx, "1/(x-y)").unwrap());
     }
 
     #[test]

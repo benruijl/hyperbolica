@@ -8,7 +8,7 @@ pub mod algebra;
 pub mod api;
 pub mod bridge;
 pub mod c_abi;
-pub mod convert;
+mod convert;
 pub mod core;
 pub mod error;
 pub mod integrator;

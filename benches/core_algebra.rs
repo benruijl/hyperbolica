@@ -3,9 +3,11 @@ use std::sync::{Arc, Mutex};
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use hyperbolica::algebra::{
     DEFAULT_ALGEBRAIC_LETTER_POOL_SIZE, PartialFractionOptions, begin_algebraic_letter_session,
-    build_algebraic_letter_atom_list, partial_fractions_with_options,
+    build_algebraic_letter_atom_list, partial_fractions_factored, partial_fractions_with_options,
 };
-use hyperbolica::core::{Poly, PolyCtx, Rat, SymCoef, SymCoefSplit, SymMonomial, ZwTable};
+use hyperbolica::core::{
+    FactoredRat, Poly, PolyCtx, Rat, ResultantStrategy, SymCoef, SymCoefSplit, SymMonomial, ZwTable,
+};
 use hyperbolica::symbols::SYMBOL_NAMESPACE;
 use symbolica::prelude::{Integer, Rational, Symbol};
 
@@ -39,9 +41,22 @@ fn core_algebra(criterion: &mut Criterion) {
     let resultant_left =
         Poly::parse(ctx.clone(), "x^7+(y+z)*x^5+(s*t+1)*x^3+(y*s-z*t)*x+1").unwrap();
     let resultant_right = Poly::parse(ctx.clone(), "x^6+(y-z)*x^4+(s+t)*x^2+y*t-z*s").unwrap();
-    criterion.bench_function("polynomial/resultant_ducos", |bench| {
-        bench.iter(|| resultant_left.resultant(&resultant_right, 0).unwrap())
-    });
+    let mut resultants = criterion.benchmark_group("polynomial/resultant_strategies");
+    for strategy in [
+        ResultantStrategy::Ducos,
+        ResultantStrategy::Brown,
+        ResultantStrategy::Primitive,
+        ResultantStrategy::Crt,
+    ] {
+        resultants.bench_function(format!("{strategy:?}").to_lowercase(), |bench| {
+            bench.iter(|| {
+                resultant_left
+                    .resultant_with_strategy(&resultant_right, 0, strategy)
+                    .unwrap()
+            })
+        });
+    }
+    resultants.finish();
 
     let rational_left = Rat::parse(ctx.clone(), "(x^4+y^2+z*s+1)/((x+y+1)^2*(z+t+1))").unwrap();
     let rational_right = Rat::parse(ctx, "(x^3-y*z+s+2)/((x+y+1)*(z+t+1)^2)").unwrap();
@@ -104,6 +119,8 @@ fn native_rational_arithmetic(criterion: &mut Criterion) {
         let shared = format!("(x+y+1)^{degree}*(x+z+2)^{degree}");
         let left = Rat::parse(ctx.clone(), &format!("(x^{degree}+y*z+1)/({shared})")).unwrap();
         let right = Rat::parse(ctx.clone(), &format!("(y^{degree}-x*z+2)/({shared})")).unwrap();
+        let inverse_shaped =
+            Rat::parse(ctx.clone(), &format!("({shared})/(y^{degree}-x*z+2)")).unwrap();
 
         group.bench_with_input(
             BenchmarkId::new("add_shared_denominator", degree),
@@ -113,11 +130,7 @@ fn native_rational_arithmetic(criterion: &mut Criterion) {
         group.bench_with_input(
             BenchmarkId::new("multiply_cross_cancel", degree),
             &degree,
-            |bench, _| {
-                let inverse_shaped =
-                    Rat::parse(ctx.clone(), &format!("({shared})/(y^{degree}-x*z+2)")).unwrap();
-                bench.iter(|| right.try_mul(&inverse_shaped).unwrap())
-            },
+            |bench, _| bench.iter(|| right.try_mul(&inverse_shaped).unwrap()),
         );
     }
 
@@ -140,6 +153,7 @@ fn typed_substitution_and_evaluation(criterion: &mut Criterion) {
     )
     .unwrap();
     let rational = Rat::parse(ctx.clone(), "(x^31+y^17*z+3*s*t+1)/((x+y+1)^4*(z+t+2)^3)").unwrap();
+    let rational_replacement = Rat::parse(ctx.clone(), "(y^5-z+1)/(s+t+2)").unwrap();
     let half = Rational::new(1, 2);
     let rational_point = [
         Rational::new(1, 2),
@@ -168,6 +182,9 @@ fn typed_substitution_and_evaluation(criterion: &mut Criterion) {
     let mut group = criterion.benchmark_group("rational/typed_exact_ops");
     group.bench_function("substitute_rational_native_storage", |bench| {
         bench.iter(|| rational.substitute_rational(0, &half).unwrap())
+    });
+    group.bench_function("substitute_rat_native_horner", |bench| {
+        bench.iter(|| rational.substitute_rat(0, &rational_replacement).unwrap())
     });
     group.bench_function("evaluate_rational_native_storage", |bench| {
         bench.iter(|| rational.evaluate_rational(&rational_point).unwrap())
@@ -213,12 +230,44 @@ fn algebraic_partial_fractions(criterion: &mut Criterion) {
     group.finish();
 }
 
+fn factored_denominator_partial_fractions(criterion: &mut Criterion) {
+    let ctx = PolyCtx::new(["x", "a", "b", "c"]).unwrap();
+    let mut factored = FactoredRat::from_poly(
+        Poly::parse(ctx.clone(), "x^13+a*x^11+b*x^8+c*x^5+a*b*x^3+b*c*x+a*b*c+1").unwrap(),
+    );
+    for (base, exponent) in [
+        ("2*x-a", 5),
+        ("x+b", 4),
+        ("3*x+c", 4),
+        ("x+a+b+1", 3),
+        ("2*x+b+c+3", 2),
+        ("x+a+c+5", 1),
+    ] {
+        factored
+            .push_factor(&Poly::parse(ctx.clone(), base).unwrap(), exponent)
+            .unwrap();
+    }
+    let mut group = criterion.benchmark_group("partial_fractions/factored_denominator");
+    group.throughput(Throughput::Elements(factored.den_factors().len() as u64));
+    group.bench_function("symbolica_blockwise_components", |bench| {
+        bench.iter(|| partial_fractions_factored(&factored, 0).unwrap())
+    });
+    group.bench_function("eager_materialize_then_canonical", |bench| {
+        bench.iter(|| {
+            let materialized = factored.materialize().unwrap();
+            hyperbolica::algebra::partial_fractions(&materialized, 0).unwrap()
+        })
+    });
+    group.finish();
+}
+
 criterion_group!(
     benches,
     core_algebra,
     split_scalar_arithmetic,
     native_rational_arithmetic,
     typed_substitution_and_evaluation,
-    algebraic_partial_fractions
+    algebraic_partial_fractions,
+    factored_denominator_partial_fractions
 );
 criterion_main!(benches);

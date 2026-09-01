@@ -102,7 +102,12 @@ class ContextError(AlgebraError):
 
 
 class IntegrationOptions:
-    """Mutable, value-comparable exact integration options."""
+    """Mutable exact integration options.
+
+    Omitting both MZV arguments uses the table embedded in the extension.
+    Passing either explicitly creates a complete override; use
+    ``mzv_reductions=[]`` to request no MZV reductions.
+    """
 
     def __init__(
         self,

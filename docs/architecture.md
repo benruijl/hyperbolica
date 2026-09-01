@@ -36,6 +36,16 @@ functions, and residual function indeterminates without converting the whole
 expression to text. `PreparedAtomInput` owns this work so repeated integrations
 do not rediscover it.
 
+A bare rational Atom (one containing neither `Hlog` nor built-in `log`) enters
+Symbolica's public factorized-rational converter directly. Hyperbolica checks
+the returned variable map exactly and transfers its integer scalar, numerator,
+factor bases, and powers into `FactoredRat`; it does not first build a canonical
+`Rat`. The resulting `ShuffleEntry` has a constructor-enforced unit `coef`
+sentinel because the deferred value is its complete coefficient. At the first
+partial-fraction step, coprime target-dependent blocks are separated and each
+component is then eagerly materialized; overlapping blocks use one exact full
+materialization fallback.
+
 The compatibility parser remains available only for the upstream CLI and
 fixture protocol. It is not a second production representation.
 
@@ -116,6 +126,14 @@ and gives Python and Rust the same representation.
 - contour breakup and positive-axis closure
 - MZV expansion and table-driven reduction
 - period evaluation and zero-function/fibration tests
+
+The generated standard MZV table is compiled into the library with a relative
+`include_bytes!` and decoded once into shared immutable storage. The primary
+Atom and Python APIs reserve only its basis atoms and use a cached eager
+expansion for non-basis period constants. An explicit empty table remains a
+real override. The legacy bridge resolves table data in the order explicit
+`mzv_data_path`, `HYPERFLINT_DATA_DIR/mzv_reductions.json`, then the embedded
+fallback; it never depends on the source checkout recorded at compile time.
 
 These modules retain domain algorithms when Symbolica has no equivalent. Any
 general CAS operation is first checked against the pinned Symbolica public API;

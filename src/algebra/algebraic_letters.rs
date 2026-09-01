@@ -130,11 +130,13 @@ mod tests {
             combine_wm_wp_ratios(&ratio).unwrap(),
             rat(&ctx, "WmOverWp_1")
         );
+        assert!(!ratio.compatibility_views_initialized());
         let difference = rat(&ctx, "Wm_1-Wp_1");
         assert_eq!(
             back_substitute(&difference).unwrap(),
             rat(&ctx, "-sqrt_disc_1")
         );
+        assert!(!difference.compatibility_views_initialized());
     }
 
     #[test]
@@ -157,6 +159,7 @@ mod tests {
             simplify_with_vieta(&denominator_has_atom).unwrap(),
             denominator_has_atom
         );
+        assert!(!denominator_has_atom.compatibility_views_initialized());
     }
 
     #[test]

@@ -5,6 +5,7 @@ use std::sync::Arc;
 
 use serde_json::Value;
 
+use super::narrow::payload_strings;
 use super::wire::{
     array_field, mzv_context, parse_wire_rat, result_response, string_field,
     unique_diagnostic_variable_index, wire_context_variable, wire_rat,
@@ -35,7 +36,8 @@ pub(super) fn evaluate(request: &Value, op: &str) -> Option<Result<Value>> {
 fn evaluate_supported(request: &Value, op: &str) -> Result<Value> {
     match op {
         "sym_arith" => {
-            let (ctx, _) = mzv_context(request, &[])?;
+            let expressions = payload_strings(request, &["a", "b"]);
+            let (ctx, _) = mzv_context(request, &expressions)?;
             let left = parse_symcoef(&ctx, request, "a")?;
             let right = parse_symcoef(&ctx, request, "b")?;
             let result = match string_field(request, "mode")? {
@@ -51,7 +53,8 @@ fn evaluate_supported(request: &Value, op: &str) -> Result<Value> {
             Ok(result_response(op, &ctx, symcoef_string(&result)))
         }
         "sym_reduce" => {
-            let (ctx, table) = mzv_context(request, &[])?;
+            let expressions = payload_strings(request, &["a"]);
+            let (ctx, table) = mzv_context(request, &expressions)?;
             let input = parse_symcoef(&ctx, request, "a")?;
             let result = simplify_symcoef(&input, &table)?;
             Ok(result_response(op, &ctx, symcoef_string(&result)))

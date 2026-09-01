@@ -1,11 +1,15 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
-use symbolica::prelude::{Atom, AtomView, Symbol};
+use symbolica::prelude::{Atom, AtomCore, AtomView, Symbol};
 
-use crate::convert::{convert_to_hlog_reg_inf, expression_from_atom_with_indeterminates};
-use crate::core::PolyCtx;
+use crate::convert::{
+    context_from_atom_with_indeterminates, convert_to_hlog_reg_inf,
+    expression_from_atom_with_indeterminates,
+};
+use crate::core::{FactoredRat, PolyCtx};
 use crate::integrator::{ShuffleEntry, ShuffleList};
+use crate::symbols::{heads, is_library_constant};
 
 use super::{AtomIntegrationError, AtomIntegrationOptions, AtomIntegrationResult};
 
@@ -20,6 +24,7 @@ pub struct PreparedAtomInput {
     indeterminates: Vec<Atom>,
     integration_variables: Vec<Symbol>,
     integration_indices: Vec<usize>,
+    spectator_indices: Vec<usize>,
     shuffle_list: ShuffleList,
 }
 
@@ -38,6 +43,15 @@ impl PreparedAtomInput {
 
     pub fn integration_indices(&self) -> &[usize] {
         &self.integration_indices
+    }
+
+    /// User indeterminates that remain free throughout this integration.
+    ///
+    /// Generated MZV and algebraic-letter slots reserved by the options are
+    /// deliberately excluded: only actual input parameters participate in
+    /// divergence fibration.
+    pub fn spectator_indices(&self) -> &[usize] {
+        &self.spectator_indices
     }
 
     pub fn shuffle_list(&self) -> &ShuffleList {
@@ -86,28 +100,52 @@ pub(crate) fn prepare_atom_view(
 ) -> AtomIntegrationResult<PreparedAtomInput> {
     validate_variables(integration_variables)?;
     let reserved = options.reserved_indeterminates()?;
-    let lowered =
-        expression_from_atom_with_indeterminates(input, integration_variables, &reserved)?;
-    let regulator = convert_to_hlog_reg_inf(&lowered.expr, &lowered.ctx)?;
-    let shuffle_list = regulator
-        .into_iter()
-        .map(|term| ShuffleEntry::new(term.coef, term.key))
-        .collect::<Vec<_>>();
+    let bare_rational = !input.contains_symbol(heads().hlog) && !input.contains_symbol(Symbol::LOG);
+    let (ctx, indeterminates, shuffle_list) = if bare_rational {
+        let (ctx, indeterminates) =
+            context_from_atom_with_indeterminates(input, integration_variables, &reserved)?;
+        let coefficient = FactoredRat::from_atom(ctx.clone(), input)?;
+        (
+            ctx,
+            indeterminates,
+            vec![ShuffleEntry::from_factored(coefficient, Vec::new())],
+        )
+    } else {
+        let lowered =
+            expression_from_atom_with_indeterminates(input, integration_variables, &reserved)?;
+        let regulator = convert_to_hlog_reg_inf(&lowered.expr, &lowered.ctx)?;
+        let shuffle_list = regulator
+            .into_iter()
+            .map(|term| ShuffleEntry::new(term.coef, term.key))
+            .collect::<Vec<_>>();
+        (lowered.ctx, lowered.indeterminates, shuffle_list)
+    };
     let integration_indices = integration_variables
         .iter()
         .map(|variable| {
-            lowered
-                .ctx
-                .index_of_symbol(*variable)
+            ctx.index_of_symbol(*variable)
                 .ok_or_else(|| crate::error::Error::UnknownVariable(variable.get_name().to_owned()))
         })
         .collect::<Result<Vec<_>, _>>()?;
+    let integration_index_set = integration_indices.iter().copied().collect::<HashSet<_>>();
+    let reserved = reserved.into_iter().collect::<HashSet<_>>();
+    let spectator_indices = indeterminates
+        .iter()
+        .enumerate()
+        .filter_map(|(index, atom)| {
+            (!integration_index_set.contains(&index)
+                && !reserved.contains(atom)
+                && !is_library_constant(atom.as_view()))
+            .then_some(index)
+        })
+        .collect();
 
     Ok(PreparedAtomInput {
-        ctx: lowered.ctx,
-        indeterminates: lowered.indeterminates,
+        ctx,
+        indeterminates,
         integration_variables: integration_variables.to_vec(),
         integration_indices,
+        spectator_indices,
         shuffle_list,
     })
 }
@@ -137,6 +175,32 @@ mod tests {
     }
 
     #[test]
+    fn bare_rational_atom_enters_as_a_deferred_factored_coefficient() {
+        let x = symbol!("api_input_factored_x");
+        let numerator = x.to_atom().pow(4) + 3 * x + 1;
+        let denominator = (x + 1).pow(3) * (Atom::num(2) * x + 3).pow(2);
+        let input = numerator / denominator;
+        let prepared = prepare_atom(&input, &[x]).unwrap();
+
+        let entry = &prepared.shuffle_list()[0];
+        assert!(entry.coef.is_one());
+        assert!(entry.shuffle.is_empty());
+        let factored = entry.factored_coefficient().unwrap();
+        assert!(factored.den_factors().len() >= 2);
+        let mut powers = factored
+            .den_factors()
+            .iter()
+            .map(|factor| factor.exp)
+            .collect::<Vec<_>>();
+        powers.sort_unstable();
+        assert!(powers.ends_with(&[2, 3]));
+        assert_eq!(
+            factored.materialize().unwrap(),
+            crate::core::Rat::from_atom(prepared.context().clone(), input.as_view()).unwrap()
+        );
+    }
+
+    #[test]
     fn accepts_atom_view_and_retains_hlog_words() {
         let x = symbol!("api_input_hlog_x");
         let input = heads().hlog.call((x, Atom::zero(), -1));
@@ -148,6 +212,39 @@ mod tests {
                 .iter()
                 .all(|entry| { entry.shuffle.len() == 1 && entry.shuffle[0].len() == 2 })
         );
+    }
+
+    #[test]
+    fn builtin_log_preserves_integration_variable_dependency() {
+        let x = symbol!("api_input_log_x");
+        let input = x.to_atom().log();
+        let prepared = prepare_atom(&input, &[x]).unwrap();
+        assert_eq!(prepared.indeterminates(), &[x.to_atom()]);
+        assert!(!prepared.shuffle_list().is_empty());
+        assert!(
+            prepared
+                .shuffle_list()
+                .iter()
+                .flat_map(|entry| &entry.shuffle)
+                .flat_map(|word| &word.letters)
+                .any(|letter| letter.is_zero())
+        );
+    }
+
+    #[test]
+    fn opaque_function_dependencies_fail_instead_of_becoming_constants() {
+        let (x, a) = symbol!("api_input_opaque_x", "api_input_opaque_a");
+        let opaque = Symbol::parse("f", "api_input_opaque").unwrap();
+        let error = prepare_atom(&opaque.call(x), &[x]).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("depends on integration variable")
+        );
+
+        let spectator = opaque.call(a);
+        let prepared = prepare_atom(&(spectator.clone() / (x + 1)), &[x]).unwrap();
+        assert!(prepared.indeterminates().contains(&spectator));
     }
 
     #[test]
@@ -193,13 +290,13 @@ mod tests {
     fn options_prepare_every_constant_that_period_reduction_can_introduce() {
         let x = symbol!("api_input_reduction_x");
         let options = AtomIntegrationOptions {
-            mzv_reductions: MzvReductionTable {
-                reductions: vec![MzvReductionRule {
+            mzv_reductions: MzvReductionTable::from_parts(
+                vec![MzvReductionRule {
                     lhs: "mzv_4".into(),
                     rhs: "2/5*mzv_2^2".into(),
                 }],
-                basis: vec!["Log2".into(), "mzv_2".into()],
-            },
+                vec!["Log2".into(), "mzv_2".into()],
+            ),
             ..AtomIntegrationOptions::default()
         };
         let prepared = prepare_atom_with_options(&Atom::one(), &[x], &options).unwrap();
@@ -211,5 +308,47 @@ mod tests {
                     .is_some()
             );
         }
+    }
+
+    #[test]
+    fn standard_rule_lhs_input_is_not_classified_as_a_spectator() {
+        let (x, parameter) = symbol!("api_input_mzv_x", "api_input_mzv_parameter");
+        let lhs = mzv_atom(&[4]);
+        let input = parameter * lhs.clone() / (x + 1);
+        let prepared = prepare_atom(&input, &[x]).unwrap();
+        let lhs_index = prepared
+            .context()
+            .index_of_indeterminate(lhs.as_view())
+            .unwrap();
+        let parameter_index = prepared.context().index_of_symbol(parameter).unwrap();
+
+        assert!(!prepared.spectator_indices().contains(&lhs_index));
+        assert!(prepared.spectator_indices().contains(&parameter_index));
+        assert!(prepared.context().len() < 20);
+    }
+
+    #[test]
+    fn arbitrary_registered_constants_are_not_spectator_variables() {
+        let (x, parameter) = symbol!(
+            "api_input_registered_constant_x",
+            "api_input_registered_constant_parameter"
+        );
+        let unknown_mzv = mzv_atom(&[999]);
+        let algebraic = crate::symbols::algebraic_atoms(77).minus;
+        let input = parameter * unknown_mzv.clone() * algebraic.clone() / (x + 1);
+        let prepared = prepare_atom(&input, &[x]).unwrap();
+
+        let parameter_index = prepared.context().index_of_symbol(parameter).unwrap();
+        let mzv_index = prepared
+            .context()
+            .index_of_indeterminate(unknown_mzv.as_view())
+            .unwrap();
+        let algebraic_index = prepared
+            .context()
+            .index_of_indeterminate(algebraic.as_view())
+            .unwrap();
+        assert!(prepared.spectator_indices().contains(&parameter_index));
+        assert!(!prepared.spectator_indices().contains(&mzv_index));
+        assert!(!prepared.spectator_indices().contains(&algebraic_index));
     }
 }

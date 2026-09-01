@@ -10,7 +10,7 @@ pub(crate) mod legacy;
 mod mpl;
 mod word;
 
-use symbolica::prelude::{Atom, AtomCore, Symbol, get_symbol, initialize, symbol};
+use symbolica::prelude::{Atom, AtomCore, AtomView, Symbol, get_symbol, initialize, symbol};
 
 pub use hlog::Hlog;
 pub use mpl::Mpl;
@@ -130,6 +130,31 @@ pub fn log_two_atom() -> Atom {
     heads().log_two.to_atom()
 }
 
+/// Whether an indeterminate is a constant owned by Hyperbolica.
+///
+/// This is intentionally structural: reduction-table membership is not the
+/// definition of an `MZV(...)` or algebraic-letter constant. In particular,
+/// unknown-yet-valid MZVs and algebraic atoms restored from bridge output must
+/// never be treated as spectator kinematic variables.
+pub(crate) fn is_library_constant(atom: AtomView<'_>) -> bool {
+    let symbols = heads();
+    match atom {
+        AtomView::Var(variable) => variable.get_symbol() == symbols.log_two,
+        AtomView::Fun(function) => matches!(
+            function.get_symbol(),
+            symbol
+                if symbol == symbols.mzv
+                    || symbol == symbols.delta
+                    || symbol == symbols.period
+                    || symbol == symbols.algebraic_minus
+                    || symbol == symbols.algebraic_plus
+                    || symbol == symbols.algebraic_ratio
+                    || symbol == symbols.sqrt_discriminant
+        ),
+        AtomView::Num(_) | AtomView::Pow(_) | AtomView::Mul(_) | AtomView::Add(_) => false,
+    }
+}
+
 #[cfg(test)]
 mod initialization_tests {
     use super::*;
@@ -201,5 +226,13 @@ mod initialization_tests {
             period_atom(3).as_fun_view().unwrap().get_symbol(),
             heads().period
         );
+    }
+
+    #[test]
+    fn owned_constant_classification_is_structural_not_table_driven() {
+        assert!(is_library_constant(mzv_atom(&[999]).as_view()));
+        assert!(is_library_constant(algebraic_atoms(91).minus.as_view()));
+        assert!(is_library_constant(log_two_atom().as_view()));
+        assert!(!is_library_constant(heads().hlog.call(1).as_view()));
     }
 }

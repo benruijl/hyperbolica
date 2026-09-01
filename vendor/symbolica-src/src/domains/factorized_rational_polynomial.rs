@@ -1041,6 +1041,7 @@ where
     fn is_one(&self, a: &Self::Element) -> bool {
         a.numerator.is_one()
             && a.denominators.is_empty()
+            && a.numerator.ring().is_one(&a.numer_coeff)
             && a.numerator.ring().is_one(&a.denom_coeff)
     }
 
@@ -1566,6 +1567,7 @@ where
 
 #[cfg(test)]
 mod test {
+    use super::FactorizedRationalPolynomialField;
     use crate::{
         atom::AtomCore,
         domains::{
@@ -1584,5 +1586,15 @@ mod test {
         let f = Zp::new(17);
         let res = a.evaluate_with_coeff_map(|c| c.to_finite_field(&f), &[f.nth(3.into())], &f);
         assert_eq!(res, f.nth(5.into()));
+    }
+
+    #[test]
+    fn field_is_one_checks_the_numerator_coefficient() {
+        let two = parse!("2").to_factorized_rational_polynomial::<_, _, u8>(&Q, &Z, None);
+        let field = FactorizedRationalPolynomialField::new_from_poly(&two.numerator);
+
+        assert!(!two.is_one());
+        assert!(!field.is_one(&two));
+        assert!(field.is_one(&field.one()));
     }
 }

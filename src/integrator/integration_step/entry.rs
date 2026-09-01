@@ -6,7 +6,7 @@ use crate::core::{Poly, PolyCtx, Rat, SymCoef, SymMonomial};
 use crate::error::Error;
 use crate::integrator::{
     IntegrateIiOptions, RegKey, RegTermSym, RegulatorSym, TransformResult, canonicalize_regkey,
-    integrate_ii_with_options, regzero_word_in_ctx,
+    integrate_ii_with_factored_prefactor, integrate_ii_with_options, regzero_word_in_ctx,
 };
 use crate::series::expansions::{expand_infinity_word_in_context, expand_zero_word_in_context};
 use crate::series::laurent::{
@@ -121,15 +121,18 @@ fn bump_bin(
 }
 
 fn effective_coefficient(entry: &ShuffleEntrySym) -> Result<SymCoef, Error> {
-    let Some(factored) = &entry.factored_den else {
+    let Some(factored) = &entry.factored_coefficient else {
         return Ok(entry.coef.clone());
     };
-    if !entry.coef.is_rat() {
+    if !entry.coef.is_one() {
         return Err(Error::InvalidInput(
-            "factored denominator side-channel requires a rational coefficient".into(),
+            "a factored ShuffleEntry requires its `coef` sentinel to remain one".into(),
         ));
     }
-    Ok(SymCoef::from_rat(&factored.materialize()?))
+    // The deferred value is the complete coefficient. The unit sentinel keeps
+    // the existing symbolic outer loop while the primitive layer performs the
+    // first blockwise partial-fraction step.
+    Ok(SymCoef::one(factored.ctx().clone()))
 }
 
 pub(super) fn process_entry(
@@ -138,7 +141,7 @@ pub(super) fn process_entry(
     variable: usize,
     check_divergences: bool,
     introduce_algebraic_letters: bool,
-    remaining_variables: &[usize],
+    forbidden_algebraic_variables: &[usize],
     transformed: &TransformResult,
 ) -> IntegrationResult<EntryContribution> {
     let coefficient = effective_coefficient(entry)?;
@@ -153,16 +156,22 @@ pub(super) fn process_entry(
         }
         let outer = pure_symbolic_factor(ctx, monomial);
         for transformed_pair in transformed {
-            let scaled = scale_wordlist(&transformed_pair.shuffle, &monomial.prefactor)?;
-            let primitive = integrate_ii_with_options(
-                ctx,
-                &scaled,
-                variable,
-                &IntegrateIiOptions {
-                    introduce_algebraic_letters,
-                    forbidden_variables: remaining_variables,
-                },
-            )?;
+            let primitive_options = IntegrateIiOptions {
+                introduce_algebraic_letters,
+                forbidden_variables: forbidden_algebraic_variables,
+            };
+            let primitive = if let Some(factored) = &entry.factored_coefficient {
+                integrate_ii_with_factored_prefactor(
+                    ctx,
+                    &transformed_pair.shuffle,
+                    factored,
+                    variable,
+                    &primitive_options,
+                )?
+            } else {
+                let scaled = scale_wordlist(&transformed_pair.shuffle, &monomial.prefactor)?;
+                integrate_ii_with_options(ctx, &scaled, variable, &primitive_options)?
+            };
 
             for primitive_term in primitive.terms {
                 let rational = primitive_term.coef;

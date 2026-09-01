@@ -2,7 +2,6 @@
 
 use std::collections::HashSet;
 use std::panic::{AssertUnwindSafe, catch_unwind};
-use std::sync::Arc;
 
 use symbolica::prelude::*;
 
@@ -153,13 +152,41 @@ pub(super) fn specialize_and_project(
             .iter()
             .map(|variable| polynomial.get_vars_ref()[*variable].clone()),
     );
-    let mut projected = FieldPoly::new(field, Some(specialized.nterms()), Arc::new(variables));
-    let mut exponents = vec![0_u16; active_propagators.len() + 1];
-    for monomial in &specialized {
-        for (target, source) in active_propagators.iter().copied().enumerate() {
-            exponents[target + 1] = monomial.exponents[source];
-        }
-        projected.append_monomial(*monomial.coefficient, &exponents);
+    specialized
+        .rearrange_with_growth(&variables)
+        .expect("specialization removed every variable omitted by sector projection")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::PolyCtx;
+
+    #[test]
+    fn specialization_uses_native_rearrangement_for_growth_drop_and_permutation() {
+        let ctx = PolyCtx::new(["x", "y", "z", "p"]).unwrap();
+        let polynomial = primitive_integer(&Poly::parse(ctx, "p*x^2+11*y+3*z").unwrap());
+        let field = Zp::new(101);
+        let mut residues = vec![0; 4];
+        residues[3] = 7;
+
+        let projected = specialize_and_project(&polynomial, &[2, 0], &[1], &[3], &residues, &field);
+
+        assert_eq!(
+            projected.get_vars_ref(),
+            &[
+                RABINOWITSCH_VARIABLE,
+                polynomial.get_vars_ref()[2].clone(),
+                polynomial.get_vars_ref()[0].clone(),
+            ]
+        );
+        assert_eq!(projected.nterms(), 2);
+        assert_eq!(projected.degree(0), 0);
+        assert_eq!(projected.degree(1), 1);
+        assert_eq!(projected.degree(2), 2);
+        assert_eq!(
+            projected.replace_all(&[field.zero(), field.to_element(2), field.to_element(3),]),
+            field.to_element(69)
+        );
     }
-    projected
 }

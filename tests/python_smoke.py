@@ -166,6 +166,30 @@ class InstalledExtensionContractTests(unittest.TestCase):
         self.assertEqual(eval(rendered, namespace), options)
         self.assertIn('mzv_reductions=[("MZV3", "zeta3")]', rendered)
 
+    def test_mzv_defaults_are_embedded_and_explicit_empty_is_preserved(self) -> None:
+        standard = hb.IntegrationOptions()
+        self.assertGreater(len(standard.mzv_reductions), 100)
+        self.assertGreater(len(standard.mzv_basis), 1)
+        standard_repr = repr(standard)
+        self.assertLess(len(standard_repr), 300)
+        self.assertNotIn("mzv_reductions", standard_repr)
+        self.assertNotIn("mzv_basis", standard_repr)
+        self.assertEqual(
+            eval(standard_repr, {"IntegrationOptions": hb.IntegrationOptions}),
+            standard,
+        )
+
+        explicit_empty = hb.IntegrationOptions(mzv_reductions=[])
+        self.assertEqual(explicit_empty.mzv_reductions, [])
+        self.assertEqual(explicit_empty.mzv_basis, [])
+        self.assertNotEqual(standard, explicit_empty)
+        empty_repr = repr(explicit_empty)
+        self.assertIn("mzv_reductions=[]", empty_repr)
+        self.assertEqual(
+            eval(empty_repr, {"IntegrationOptions": hb.IntegrationOptions}),
+            explicit_empty,
+        )
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

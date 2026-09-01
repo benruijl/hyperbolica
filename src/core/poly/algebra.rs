@@ -1,7 +1,7 @@
 use symbolica::domains::InternalOrdering;
 use symbolica::prelude::*;
 
-use super::{Factored, Poly, SymbolicaPoly};
+use super::{Factored, Poly, ResultantStrategy, SymbolicaPoly};
 use crate::error::{Error, Result};
 
 impl Poly {
@@ -143,13 +143,33 @@ impl Poly {
     }
 
     pub fn resultant(&self, other: &Self, variable: usize) -> Result<Self> {
+        self.resultant_with_strategy(other, variable, ResultantStrategy::Ducos)
+    }
+
+    /// Compute an exact resultant with one of Symbolica's public kernels.
+    ///
+    /// This is primarily an evidence hook. Production calls use
+    /// [`Self::resultant`], which is pinned to the improved Ducos kernel until
+    /// workload-level benchmarks justify a deterministic alternative.
+    pub fn resultant_with_strategy(
+        &self,
+        other: &Self,
+        variable: usize,
+        strategy: ResultantStrategy,
+    ) -> Result<Self> {
         self.require_same_context(other)?;
         if variable >= self.ctx.len() {
             return Err(Error::UnknownVariable(variable.to_string()));
         }
         let left = self.inner.to_univariate(variable);
         let right = other.inner.to_univariate(variable);
-        Ok(Self::from_inner(self.ctx.clone(), left.resultant(&right)))
+        let resultant = match strategy {
+            ResultantStrategy::Ducos => left.resultant(&right),
+            ResultantStrategy::Brown => left.resultant_brown(&right),
+            ResultantStrategy::Primitive => left.resultant_primitive(&right),
+            ResultantStrategy::Crt => left.resultant_crt(&right),
+        };
+        Ok(Self::from_inner(self.ctx.clone(), resultant))
     }
 
     /// HyperFLINT's historical `Res(p, p') / lc(p)` convention.
@@ -244,8 +264,7 @@ impl Poly {
         if self.is_zero() {
             return Self::zero(self.ctx.clone());
         }
-        let leading = self.inner.lcoeff();
-        Self::from_inner(self.ctx.clone(), self.inner.clone().div_coeff(&leading))
+        Self::from_inner(self.ctx.clone(), self.inner.clone().make_monic())
     }
 
     pub fn factor(&self) -> Factored {

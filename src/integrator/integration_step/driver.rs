@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::sync::Arc;
 
 use rayon::prelude::*;
@@ -90,7 +90,7 @@ fn merge_contributions(
     variable: usize,
     table: &MzvReductionTable,
     check_divergences: bool,
-    remaining_variables: &[usize],
+    fibration_variables: &[usize],
 ) -> IntegrationResult<RegulatorSym> {
     let mut finite = RegulatorSym::new();
     let mut zero_bins = BTreeMap::<BinKey, RegulatorSym>::new();
@@ -112,7 +112,7 @@ fn merge_contributions(
         ] {
             for ((log_power, power), terms) in bins {
                 let closed = close_positive_letters(ctx, &terms, variable, table)?;
-                if !regulator_bin_is_zero(ctx, &closed, remaining_variables, table)? {
+                if !regulator_bin_is_zero(ctx, &closed, fibration_variables, table)? {
                     return Err(IntegrationError::Divergent {
                         boundary,
                         variable: ctx.vars()[variable].clone(),
@@ -139,7 +139,7 @@ pub fn integration_step(
         .map(|entry| ShuffleEntrySym {
             coef: SymCoef::from_rat(&entry.coef),
             shuffle: entry.shuffle.clone(),
-            factored_den: entry.factored_den.clone(),
+            factored_coefficient: entry.factored_coefficient().cloned(),
         })
         .collect::<Vec<_>>();
     integration_step_core_sym_with_options(
@@ -152,6 +152,7 @@ pub fn integration_step(
             ..IntegrationStepOptions::default()
         },
         &[],
+        &[],
     )
 }
 
@@ -162,15 +163,43 @@ pub fn integration_step_with_options(
     table: &MzvReductionTable,
     options: &IntegrationStepOptions,
 ) -> IntegrationResult<RegulatorSym> {
+    integration_step_with_options_and_remaining_variables(ctx, input, variable, table, options, &[])
+}
+
+/// Integrate one variable while retaining the variables that survive this
+/// step in divergence zero tests.
+///
+/// The extra variables are projected through the fibration basis before a
+/// boundary bin is declared non-zero. This is required for cancellations that
+/// depend on later integration variables. They also guard algebraic-letter
+/// introduction, so each entry must be a distinct variable scheduled after
+/// `variable` and must not repeat `variable` itself.
+pub fn integration_step_with_options_and_remaining_variables(
+    ctx: &Arc<PolyCtx>,
+    input: &ShuffleList,
+    variable: usize,
+    table: &MzvReductionTable,
+    options: &IntegrationStepOptions,
+    remaining_variables: &[usize],
+) -> IntegrationResult<RegulatorSym> {
+    validate_remaining_variables(ctx, variable, remaining_variables)?;
     let promoted = input
         .iter()
         .map(|entry| ShuffleEntrySym {
             coef: SymCoef::from_rat(&entry.coef),
             shuffle: entry.shuffle.clone(),
-            factored_den: entry.factored_den.clone(),
+            factored_coefficient: entry.factored_coefficient().cloned(),
         })
         .collect::<Vec<_>>();
-    integration_step_core_sym_with_options(ctx, &promoted, variable, table, options, &[])
+    integration_step_core_sym_with_options(
+        ctx,
+        &promoted,
+        variable,
+        table,
+        options,
+        remaining_variables,
+        remaining_variables,
+    )
 }
 
 pub fn integration_step_sym(
@@ -199,7 +228,36 @@ pub fn integration_step_sym_with_options(
     table: &MzvReductionTable,
     options: &IntegrationStepOptions,
 ) -> IntegrationResult<RegulatorSym> {
-    let base = integration_step_core_sym_with_options(ctx, input, variable, table, options, &[])?;
+    integration_step_sym_with_options_and_remaining_variables(
+        ctx,
+        input,
+        variable,
+        table,
+        options,
+        &[],
+    )
+}
+
+/// SymCoef-valued variant of
+/// [`integration_step_with_options_and_remaining_variables`].
+pub fn integration_step_sym_with_options_and_remaining_variables(
+    ctx: &Arc<PolyCtx>,
+    input: &ShuffleListSym,
+    variable: usize,
+    table: &MzvReductionTable,
+    options: &IntegrationStepOptions,
+    remaining_variables: &[usize],
+) -> IntegrationResult<RegulatorSym> {
+    validate_remaining_variables(ctx, variable, remaining_variables)?;
+    let base = integration_step_core_sym_with_options(
+        ctx,
+        input,
+        variable,
+        table,
+        options,
+        remaining_variables,
+        remaining_variables,
+    )?;
     close_positive_letters(ctx, &base, variable, table)
 }
 
@@ -214,10 +272,23 @@ pub(crate) fn integration_step_core_sym_with_options(
     variable: usize,
     table: &MzvReductionTable,
     options: &IntegrationStepOptions,
-    remaining_variables: &[usize],
+    forbidden_algebraic_variables: &[usize],
+    divergence_fibration_variables: &[usize],
 ) -> IntegrationResult<RegulatorSym> {
     if variable >= ctx.len() {
         return Err(Error::UnknownVariable(variable.to_string()).into());
+    }
+    if let Some(&remaining) = forbidden_algebraic_variables
+        .iter()
+        .find(|&&remaining| remaining >= ctx.len())
+    {
+        return Err(Error::UnknownVariable(remaining.to_string()).into());
+    }
+    if let Some(&fibration) = divergence_fibration_variables
+        .iter()
+        .find(|&&fibration| fibration >= ctx.len())
+    {
+        return Err(Error::UnknownVariable(fibration.to_string()).into());
     }
     // Transform only the shuffle spine, so equal spines across independently
     // weighted entries share one result. The cache is step-local: it cannot
@@ -250,7 +321,7 @@ pub(crate) fn integration_step_core_sym_with_options(
                         variable,
                         options.check_divergences,
                         options.introduce_algebraic_letters,
-                        remaining_variables,
+                        forbidden_algebraic_variables,
                         transformed[index].as_ref(),
                     )
                 })
@@ -266,7 +337,7 @@ pub(crate) fn integration_step_core_sym_with_options(
                         variable,
                         options.check_divergences,
                         options.introduce_algebraic_letters,
-                        remaining_variables,
+                        forbidden_algebraic_variables,
                         transformed.as_ref(),
                     )
                 })
@@ -278,6 +349,37 @@ pub(crate) fn integration_step_core_sym_with_options(
         variable,
         table,
         options.check_divergences,
-        remaining_variables,
+        divergence_fibration_variables,
     )
+}
+
+fn validate_remaining_variables(
+    ctx: &Arc<PolyCtx>,
+    variable: usize,
+    remaining_variables: &[usize],
+) -> IntegrationResult<()> {
+    if variable >= ctx.len() {
+        return Err(Error::UnknownVariable(variable.to_string()).into());
+    }
+    let mut seen = HashSet::with_capacity(remaining_variables.len());
+    for &remaining in remaining_variables {
+        if remaining >= ctx.len() {
+            return Err(Error::UnknownVariable(remaining.to_string()).into());
+        }
+        if remaining == variable {
+            return Err(Error::InvalidInput(format!(
+                "remaining variable `{}` is the current integration variable",
+                ctx.vars()[remaining]
+            ))
+            .into());
+        }
+        if !seen.insert(remaining) {
+            return Err(Error::InvalidInput(format!(
+                "remaining variable `{}` is listed more than once",
+                ctx.vars()[remaining]
+            ))
+            .into());
+        }
+    }
+    Ok(())
 }

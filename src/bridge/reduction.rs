@@ -3,6 +3,7 @@
 use serde_json::{Value, json};
 
 use super::integration::integration_context;
+use super::narrow::payload_strings;
 use super::symcoef::symcoef_string;
 use super::wire::{
     WireValue, array_field, mzv_context, optional_bool, parse_regulator, parse_wire_rat,
@@ -55,7 +56,8 @@ fn evaluate_supported(request: &Value, op: &str) -> Result<Value> {
             Ok(result_response(op, &ctx, output))
         }
         "evaluate_periods" | "test_zero_function" => {
-            let (ctx, table) = mzv_context(request, &[])?;
+            let expressions = payload_strings(request, &["regulator"]);
+            let (ctx, table) = mzv_context(request, &expressions)?;
             let regulator = parse_regulator(&ctx, request, "regulator")?;
             if op == "evaluate_periods" {
                 let output = evaluate_periods(&ctx, &regulator, &table)?;
@@ -78,7 +80,9 @@ fn evaluate_supported(request: &Value, op: &str) -> Result<Value> {
                 .map(|_| string_array_field(request, "vars_int"))
                 .transpose()?
                 .unwrap_or_default();
-            let (ctx, table) = integration_context(request, &variables_to_reduce, &[], false)?;
+            let expressions = payload_strings(request, &["wordlist"]);
+            let (ctx, table) =
+                integration_context(request, &variables_to_reduce, &expressions, false)?;
             let input = parse_regulator(&ctx, request, "wordlist")?;
             let variable_indices = variables_to_reduce
                 .iter()
@@ -134,7 +138,8 @@ fn evaluate_supported(request: &Value, op: &str) -> Result<Value> {
             }
         }
         "break_up_contour" | "break_up_contour_sym" => {
-            let (ctx, table) = mzv_context(request, &[])?;
+            let expressions = payload_strings(request, &["wl", "on_axis"]);
+            let (ctx, table) = mzv_context(request, &expressions)?;
             let wordlist = parse_wordlist(&ctx, request, "wl")?;
             let on_axis_values = array_field(request, "on_axis")?;
             if op == "break_up_contour" {

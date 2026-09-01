@@ -53,6 +53,8 @@ fn conic_square_semantics_reject_irrational_and_negative_units() {
     assert!(!conic_rationalizable(&parse(&ctx, "2*x^2+s*x+1"), 0).unwrap());
     assert!(!conic_rationalizable(&parse(&ctx, "-x^2+s*x+1"), 0).unwrap());
     assert!(!conic_rationalizable(&parse(&ctx, "q*x^2+s*x+1"), 0).unwrap());
+    assert!(conic_rationalizable(&parse(&ctx, "((z+1)^2*(s^2+1)^4/4)*x^2+q*x+9/16"), 0,).unwrap());
+    assert!(!conic_rationalizable(&parse(&ctx, "((z+1)^2*(s^2+1)^3/4)*x^2+q*x+9/16"), 0,).unwrap());
 }
 
 #[test]

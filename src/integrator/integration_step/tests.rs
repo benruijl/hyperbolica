@@ -4,7 +4,11 @@ use symbolica::prelude::Symbol;
 
 use super::contour::positive_integer;
 use super::driver::StepTransformCache;
-use super::{Boundary, IntegrationError, ShuffleEntry, integration_step};
+use super::{
+    Boundary, IntegrationError, IntegrationStepOptions, ShuffleEntry, ShuffleEntrySym,
+    integration_step, integration_step_sym_with_options_and_remaining_variables,
+    integration_step_with_options_and_remaining_variables,
+};
 use crate::core::{FactoredRat, Poly, PolyCtx, Rat};
 use crate::integrator::TransformResult;
 use crate::reduce::MzvReductionTable;
@@ -45,12 +49,103 @@ fn divergence_is_a_structured_error() {
 }
 
 #[test]
-fn factored_input_is_materialized_without_losing_the_denominator() {
+fn rational_step_rejects_duplicate_and_current_remaining_variables() {
+    let ctx = PolyCtx::new(["x", "y"]).unwrap();
+    let input = Vec::<ShuffleEntry>::new();
+    let options = IntegrationStepOptions::default();
+
+    let duplicate = integration_step_with_options_and_remaining_variables(
+        &ctx,
+        &input,
+        0,
+        &table(),
+        &options,
+        &[1, 1],
+    )
+    .unwrap_err();
+    assert!(duplicate.to_string().contains("listed more than once"));
+
+    let current = integration_step_with_options_and_remaining_variables(
+        &ctx,
+        &input,
+        0,
+        &table(),
+        &options,
+        &[0],
+    )
+    .unwrap_err();
+    assert!(current.to_string().contains("current integration variable"));
+}
+
+#[test]
+fn symbolic_step_rejects_duplicate_and_current_remaining_variables() {
+    let ctx = PolyCtx::new(["x", "y"]).unwrap();
+    let input = Vec::<ShuffleEntrySym>::new();
+    let options = IntegrationStepOptions::default();
+
+    let duplicate = integration_step_sym_with_options_and_remaining_variables(
+        &ctx,
+        &input,
+        0,
+        &table(),
+        &options,
+        &[1, 1],
+    )
+    .unwrap_err();
+    assert!(duplicate.to_string().contains("listed more than once"));
+
+    let current = integration_step_sym_with_options_and_remaining_variables(
+        &ctx,
+        &input,
+        0,
+        &table(),
+        &options,
+        &[0],
+    )
+    .unwrap_err();
+    assert!(current.to_string().contains("current integration variable"));
+}
+
+#[test]
+fn factored_input_matches_materialized_step_for_multiple_denominator_blocks() {
     let ctx = PolyCtx::new(["x"]).unwrap();
-    let mut entry = ShuffleEntry::new(Rat::one(ctx.clone()), Vec::new());
-    entry.factored_den = Some(FactoredRat::parse(ctx.clone(), "1/(x+1)^2").unwrap());
-    let result = integration_step(&ctx, &vec![entry], 0, &table(), false).unwrap();
-    assert_eq!(result[0].coef.as_rat().unwrap(), Rat::one(ctx));
+    let mut factored = FactoredRat::from_poly(Poly::parse(ctx.clone(), "x^2+3*x+1").unwrap());
+    factored
+        .push_factor(&Poly::parse(ctx.clone(), "x+1").unwrap(), 3)
+        .unwrap();
+    factored
+        .push_factor(&Poly::parse(ctx.clone(), "2*x+3").unwrap(), 2)
+        .unwrap();
+    factored
+        .push_factor(&Poly::parse(ctx.clone(), "x+4").unwrap(), 2)
+        .unwrap();
+
+    let deferred = ShuffleEntry::from_factored(factored.clone(), Vec::new());
+    assert!(deferred.coef.is_one());
+    assert_eq!(
+        deferred
+            .factored_coefficient()
+            .unwrap()
+            .materialize()
+            .unwrap(),
+        factored.materialize().unwrap()
+    );
+    let materialized = ShuffleEntry::new(factored.materialize().unwrap(), Vec::new());
+    let deferred_result = integration_step(&ctx, &vec![deferred], 0, &table(), false).unwrap();
+    let materialized_result =
+        integration_step(&ctx, &vec![materialized], 0, &table(), false).unwrap();
+    assert_eq!(deferred_result, materialized_result);
+}
+
+#[test]
+fn factored_input_rejects_a_changed_unit_sentinel() {
+    let ctx = PolyCtx::new(["x"]).unwrap();
+    let factored = FactoredRat::parse(ctx.clone(), "1/(x+1)^2").unwrap();
+    let mut entry = ShuffleEntry::from_factored(factored, Vec::new());
+    entry.coef = Rat::from_int(ctx.clone(), 2);
+
+    let error = integration_step(&ctx, &vec![entry], 0, &table(), false).unwrap_err();
+    assert!(error.to_string().contains("sentinel to remain one"));
 }
 
 #[test]

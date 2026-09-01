@@ -1,6 +1,6 @@
 use symbolica::prelude::{Atom, Symbol};
 
-use crate::integrator::hyperflint_with_options;
+use crate::integrator::hyperflint_with_options_and_spectators;
 
 use super::{
     AtomIntegrationOptions, AtomIntegrationOutput, AtomIntegrationResult, PreparedAtomInput,
@@ -28,12 +28,13 @@ pub fn integrate_prepared_atom(
         .introduce_algebraic_letters
         .then(crate::algebra::begin_algebraic_letter_session)
         .transpose()?;
-    let regulator = hyperflint_with_options(
+    let regulator = hyperflint_with_options_and_spectators(
         prepared.context(),
         prepared.shuffle_list(),
         prepared.integration_indices(),
         &options.mzv_reductions,
         &options.core_options(),
+        prepared.spectator_indices(),
     )?;
     let algebraic_letters = if options.introduce_algebraic_letters {
         crate::algebra::algebraic_letters_show()?
@@ -89,5 +90,19 @@ mod tests {
         let output = integrate_atom(&input, &[x], &options).unwrap();
         assert_eq!(output.to_atom().unwrap(), Atom::one());
         assert_eq!(output.integration_variables(), &[x]);
+    }
+
+    #[test]
+    fn builtin_log_integral_is_not_treated_as_a_constant_coefficient() {
+        let x = symbol!("api_integrate_log_x");
+        let input = x.to_atom().log() / (x + 1).pow(2);
+        let options = AtomIntegrationOptions {
+            parallel: false,
+            check_divergences: true,
+            ..AtomIntegrationOptions::default()
+        };
+        let output = integrate_atom(&input, &[x], &options).unwrap();
+        assert!(output.is_zero());
+        assert_eq!(output.to_atom().unwrap(), Atom::zero());
     }
 }

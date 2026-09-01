@@ -124,6 +124,11 @@ impl Rat {
         &self.native
     }
 
+    #[cfg(test)]
+    pub(crate) fn compatibility_views_initialized(&self) -> bool {
+        self.views.get().is_some()
+    }
+
     pub(crate) fn from_native(ctx: Arc<PolyCtx>, native: NativeRat) -> Result<Self> {
         if native.denominator.is_zero() {
             return Err(Error::DivisionByZero);

@@ -8,7 +8,6 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use hyperbolica::algebra::{PartialFractionization, partial_fractions};
-use hyperbolica::convert::{Expr, parse_expression};
 use hyperbolica::core::{
     Poly, PolyCtx, Rat, ZWTable, build_fn_index_maps, recombine_rat_split, split_rat_by_w_monomial,
 };
@@ -21,16 +20,6 @@ use hyperbolica::symbols::{log_two_atom, mzv_atom};
 
 fn parse_poly(ctx: &Arc<PolyCtx>, expression: &str) -> Poly {
     Poly::parse(ctx.clone(), expression).unwrap()
-}
-
-fn max_log_weight(expression: &Expr) -> usize {
-    match expression {
-        Expr::Leaf(_) => 0,
-        Expr::Plus(children) => children.iter().map(max_log_weight).max().unwrap_or(0),
-        Expr::Times(children) => children.iter().map(max_log_weight).sum(),
-        Expr::Power(base, exponent) => max_log_weight(base) * usize::try_from(*exponent).unwrap(),
-        Expr::Hlog { word, .. } => word.letters.len(),
-    }
 }
 
 fn factor_products(
@@ -138,28 +127,6 @@ fn scale(value: &Rat, numerator: i64, denominator: i64) -> Rat {
 
 #[test]
 fn portable_upstream_regressions_are_preserved() {
-    // The complete Smirnov public corpus must remain accepted by the Rust
-    // parser. Its maximum logarithmic weight is the fixture number.
-    let smirnov = [
-        ("tst0", include_str!("data/smirnov/tst0.txt"), 177, 0),
-        ("tst1", include_str!("data/smirnov/tst1.txt"), 531, 1),
-        ("tst2", include_str!("data/smirnov/tst2.txt"), 3_232, 2),
-        ("tst3", include_str!("data/smirnov/tst3.txt"), 14_106, 3),
-        ("tst4", include_str!("data/smirnov/tst4.txt"), 41_327, 4),
-    ];
-    let variables = ["t1", "t2", "t3", "t4", "t5"].map(str::to_owned);
-    for (name, source, byte_len, weight) in smirnov {
-        assert_eq!(source.len(), byte_len, "fixture drift in {name}");
-        let parsed = parse_expression(source, &variables, true)
-            .unwrap_or_else(|error| panic!("failed to ingest {name}: {error}"));
-        assert_eq!(parsed.augmented_vars, variables, "variable drift in {name}");
-        assert_eq!(
-            max_log_weight(&parsed.expr),
-            weight,
-            "weight drift in {name}"
-        );
-    }
-
     // UQ5: exact projectivity, gauge-exhaustive strict rejection, and the
     // published FindRoots order/count oracle.
     let uq5_ctx = PolyCtx::new([

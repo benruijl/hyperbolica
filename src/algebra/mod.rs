@@ -20,5 +20,6 @@ pub use linear_factors::{
 };
 pub use partial_fractions::{
     PartialFractionOptions, PartialFractionPole, PartialFractionization, partial_fractions,
+    partial_fractions_factored, partial_fractions_factored_with_options,
     partial_fractions_with_options,
 };

@@ -385,6 +385,7 @@ fn representative_json_cli_schemas_are_stable() {
             .iter()
             .any(|variable| variable == "mzv_2")
     );
+    assert!(string_array(&reduced["vars"]).len() < 20);
     assert_rat_equivalent(
         reduced["result"].as_str().expect("reduced expression"),
         "-1/2*mzv_2",
@@ -423,6 +424,49 @@ fn representative_json_cli_schemas_are_stable() {
     assert_ne!(step["divergent"], true);
     assert_eq!(step["result"], json!([{"coef": "1", "key": []}]));
 
+    let step_with_spectator = eval(&json!({
+        "op": "integration_step",
+        "var": "x",
+        "remaining_vars": ["y"],
+        "vars": ["x", "y"],
+        "parallel": false,
+        "check_divergences": true,
+        "wordlist": [{"coef": "1/((x+1)*(x+y))", "shuffle": []}],
+    }));
+    assert_ne!(step_with_spectator["failed"], true);
+    assert_ne!(step_with_spectator["divergent"], true);
+    assert!(!step_with_spectator["result"].as_array().unwrap().is_empty());
+
+    let duplicate_remaining = eval(&json!({
+        "op": "integration_step",
+        "var": "x",
+        "remaining_vars": ["y", "y"],
+        "vars": ["x", "y"],
+        "wordlist": [],
+    }));
+    assert_eq!(duplicate_remaining["failed"], true);
+    assert!(
+        duplicate_remaining["reason"]
+            .as_str()
+            .unwrap()
+            .contains("listed more than once")
+    );
+
+    let current_as_remaining = eval(&json!({
+        "op": "integration_step",
+        "var": "x",
+        "remaining_vars": ["x"],
+        "vars": ["x"],
+        "wordlist": [],
+    }));
+    assert_eq!(current_as_remaining["failed"], true);
+    assert!(
+        current_as_remaining["reason"]
+            .as_str()
+            .unwrap()
+            .contains("current integration variable")
+    );
+
     let integrated = eval(&json!({
         "op": "hyperflint",
         "vars": ["x", "y"],
@@ -435,6 +479,112 @@ fn representative_json_cli_schemas_are_stable() {
     assert_ne!(integrated["divergent"], true);
     assert_eq!(integrated["result"], json!([{"coef": "1", "key": []}]));
     assert!(integrated["timing_compute_s"].as_f64().is_some());
+
+    let integrated_with_spectator = eval(&json!({
+        "op": "hyperflint",
+        "vars": ["x", "y"],
+        "vars_int": ["x"],
+        "f": "1/((x+1)*(x+y))",
+        "parallel": false,
+        "check_divergences": true,
+    }));
+    assert_ne!(integrated_with_spectator["failed"], true);
+    assert_ne!(integrated_with_spectator["divergent"], true);
+    assert!(
+        !integrated_with_spectator["result"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+
+    let parametric_quadratic = eval(&json!({
+        "op": "hyperflint",
+        "vars": ["x", "y"],
+        "vars_int": ["x"],
+        "f": "1/(x^2+y)",
+        "algebraic_letters": true,
+        "parallel": false,
+    }));
+    assert_ne!(parametric_quadratic["failed"], true);
+    let parametric_allocations = parametric_quadratic["algebraic_letters"]
+        .as_array()
+        .expect("parametric quadratic allocation table");
+    assert_eq!(parametric_allocations.len(), 1);
+    assert!(
+        parametric_allocations[0]["polynomial"]
+            .as_str()
+            .unwrap()
+            .contains('y')
+    );
+
+    let discovered_spectator = eval(&json!({
+        "op": "hyperflint",
+        "vars_int": ["x"],
+        "f": "1/((x+1)*(x+y))",
+        "parallel": false,
+        "check_divergences": true,
+    }));
+    assert_ne!(discovered_spectator["failed"], true);
+    assert_ne!(discovered_spectator["divergent"], true);
+    assert!(
+        !discovered_spectator["result"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+
+    // Standard-table narrowing must inspect expressions below the top-level
+    // request. Each response retains the mentioned rule LHS, while avoiding a
+    // 700-variable polynomial context.
+    let nested_mzv_requests = [
+        json!({
+            "op": "evaluate_periods",
+            "vars": ["x"],
+            "regulator": [{"coef": "mzv_4", "key": []}],
+        }),
+        json!({
+            "op": "test_zero_function",
+            "vars": ["x"],
+            "regulator": [{"coef": "mzv_4", "key": []}],
+        }),
+        json!({
+            "op": "fibration_basis",
+            "vars": ["x"],
+            "vars_int": [],
+            "wordlist": [{"coef": "mzv_4", "key": []}],
+        }),
+        json!({
+            "op": "break_up_contour",
+            "vars": ["x"],
+            "wl": [{"coef": "mzv_4", "word": []}],
+            "on_axis": [],
+        }),
+        json!({
+            "op": "integration_step",
+            "var": "x",
+            "vars": ["x"],
+            "parallel": false,
+            "wordlist": [{"coef": "mzv_4/(1+x)^2", "shuffle": []}],
+        }),
+        json!({
+            "op": "hyperflint",
+            "vars": ["x", "y"],
+            "vars_int": ["x"],
+            "parallel": false,
+            "wordlist": [{"coef": "mzv_4/(1+x)^2", "shuffle": []}],
+        }),
+        json!({
+            "op": "sym_reduce",
+            "vars": ["x"],
+            "a": [{"prefactor": "mzv_4"}],
+        }),
+    ];
+    for request in nested_mzv_requests {
+        let response = eval(&request);
+        let variables = string_array(&response["vars"]);
+        assert!(variables.contains(&"mzv_4".to_owned()), "{response}");
+        assert!(variables.len() < 20, "context was widened: {response}");
+    }
 
     let integrated_parallel = eval(&json!({
         "op": "hyperflint",

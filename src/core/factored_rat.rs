@@ -1,5 +1,6 @@
 //! Rational functions with deferred denominator factor products.
 
+mod apart;
 mod arithmetic;
 mod construction;
 mod materialization;

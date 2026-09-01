@@ -2,6 +2,8 @@
 
 use std::sync::Arc;
 
+use symbolica::prelude::{AtomCore, AtomView, Q, Rational, Z};
+
 use super::{Factor, FactoredRat, exponent_as_usize};
 use crate::core::{Poly, PolyCtx, Rat};
 use crate::error::{Error, Result};
@@ -23,6 +25,47 @@ impl FactoredRat {
             });
         }
         result
+    }
+
+    /// Convert a bare rational Symbolica atom without formatting, reparsing,
+    /// or first constructing one expanded denominator polynomial.
+    ///
+    /// Symbolica's public factorized-rational conversion owns the algebraic
+    /// normalization. This adapter only transfers its exact integer scalar,
+    /// numerator, denominator blocks, and powers into Hyperbolica's checked
+    /// context-bound representation.
+    pub(crate) fn from_atom(ctx: Arc<PolyCtx>, atom: AtomView<'_>) -> Result<Self> {
+        let native = atom
+            .try_to_factorized_rational_polynomial::<_, _, u16>(&Q, &Z, Some(ctx.variable_map()))
+            .map_err(|error| Error::InvalidInput(error.to_string()))?;
+
+        let expected_variables = ctx.variable_map();
+        if native.numerator.get_vars_ref() != expected_variables.as_ref()
+            || native
+                .denominators
+                .iter()
+                .any(|(factor, _)| factor.get_vars_ref() != expected_variables.as_ref())
+        {
+            return Err(Error::InvalidInput(
+                "atom contains an indeterminate outside its factored-rational context".into(),
+            ));
+        }
+
+        let scalar = Rational::from((native.numer_coeff, native.denom_coeff));
+        let numerator = native
+            .numerator
+            .map_coeff(|coefficient| Q.to_element_numerator(coefficient.clone()), Q)
+            .mul_coeff(scalar);
+        let mut result = Self::from_poly(Poly::from_inner(ctx.clone(), numerator));
+        for (factor, exponent) in native.denominators {
+            let exponent = i64::try_from(exponent).map_err(|_| {
+                Error::InvalidInput("denominator factor exponent does not fit in i64".into())
+            })?;
+            let factor =
+                factor.map_coeff(|coefficient| Q.to_element_numerator(coefficient.clone()), Q);
+            result.push_factor(&Poly::from_inner(ctx.clone(), factor), exponent)?;
+        }
+        Ok(result)
     }
 
     /// Parse `(NUMERATOR_BASE)^p/(DENOMINATOR_BASE)^q` without expanding the

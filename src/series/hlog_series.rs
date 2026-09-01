@@ -27,7 +27,7 @@ pub struct HlogSeriesResult {
 }
 
 fn is_free_of_variable(value: &Rat, variable: usize) -> Result<bool> {
-    Ok(value.numerator().degree(variable)? <= 0 && value.denominator().degree(variable)? <= 0)
+    Ok(!value.depends_on(variable)?)
 }
 
 fn goes_to_zero(value: &Rat, variable: usize) -> Result<bool> {
@@ -135,5 +135,9 @@ mod tests {
             hlog_series(&one_plus_x, &word, 0, 2).unwrap().branch,
             HlogSeriesBranch::TaylorDeferred
         );
+        assert!(!constant.compatibility_views_initialized());
+        assert!(!x.compatibility_views_initialized());
+        assert!(!one_plus_x.compatibility_views_initialized());
+        assert!(!word.letters[0].compatibility_views_initialized());
     }
 }

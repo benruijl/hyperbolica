@@ -17,6 +17,53 @@
         "op": {"type": "string", "minLength": 1},
         "schema_version_min": {"type": "integer", "minimum": 1, "maximum": 2}
       }
+    },
+    "compare": {"enum": ["byte", "normalized"]},
+    "ignore": {
+      "type": "array",
+      "items": {"type": "string", "minLength": 1},
+      "minItems": 1,
+      "uniqueItems": true
+    },
+    "ignore_recursive": {
+      "type": "array",
+      "items": {"type": "string", "minLength": 1},
+      "uniqueItems": true
+    },
+    "reason": {"type": "string", "minLength": 1},
+    "permutation_field": {"type": "string", "minLength": 1},
+    "permutation_values": {
+      "type": "array",
+      "items": {"type": "string", "minLength": 1},
+      "minItems": 1,
+      "uniqueItems": true
+    },
+    "tier": {
+      "enum": ["qualification", "nightly", "heavyweight", "exploratory"]
+    },
+    "timeout_seconds": {"type": "integer", "minimum": 1},
+    "pairs": {"type": "integer", "minimum": 1}
+  },
+  "dependentRequired": {
+    "permutation_field": ["permutation_values"],
+    "permutation_values": ["permutation_field"]
+  },
+  "oneOf": [
+    {
+      "properties": {"compare": {"enum": ["byte"]}},
+      "not": {
+        "anyOf": [
+          {"required": ["ignore"]},
+          {"required": ["ignore_recursive"]},
+          {"required": ["reason"]},
+          {"required": ["permutation_field"]},
+          {"required": ["permutation_values"]}
+        ]
+      }
+    },
+    {
+      "required": ["compare", "ignore", "reason"],
+      "properties": {"compare": {"const": "normalized"}}
     }
-  }
+  ]
 }

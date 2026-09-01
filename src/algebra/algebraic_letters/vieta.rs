@@ -12,7 +12,7 @@ fn reduce_var_via_recurrence(
     sum_value: &Rat,
     product_value: &Rat,
 ) -> Result<Rat> {
-    let max_degree = value.numerator().degree(variable)?;
+    let max_degree = value.numerator_degree(variable)?;
     if max_degree < 2 {
         return Ok(value.clone());
     }
@@ -68,7 +68,7 @@ pub fn simplify_with_vieta(value: &Rat) -> Result<Rat> {
         let atoms = entry.atoms();
         for atom in [&atoms.minus, &atoms.plus] {
             if let Some(variable) = find_var_idx(value.ctx(), atom)
-                && value.denominator().degree(variable)? > 0
+                && value.denominator_degree(variable)? > 0
             {
                 return Ok(value.clone());
             }

@@ -2,11 +2,11 @@
 
 This inventory compares the public test tree from
 `SubTropica/SubTropica/HyperFLINT` with this pure-Symbolica Rust port. It was
-audited file-by-file against the upstream checkout at
-`/tmp/hyperflint-upstream/HyperFLINT/test` on 2026-08-31. No C++ implementation
-body was copied. Rust assertions below were independently expressed from the
-observable mathematical, protocol, and determinism contracts and small public
-inputs.
+audited file-by-file against upstream commit
+`adfd3af3be234cb43a2322bd9ec442caa26edd74` on 2026-08-31. No C++
+implementation body was copied. Rust assertions below were independently
+expressed from the observable mathematical, protocol, and determinism
+contracts and small public inputs.
 
 Status meanings:
 
@@ -31,7 +31,7 @@ remains confined to `scripts/differential.sh` and
 | `test/test_lf_perfpow.cpp` | Replaced | Symbolica factorization is the only kernel; reconstruction and quadratic classification are pinned in `src/algebra/linear_factors.rs` tests. |
 | `test/test_lr_scan.cpp` | Covered | Unit cases in `src/integrator/lr_scan/tests.rs`; exact UQ5 strict/120-order/gauge/collaborator oracle in `tests/upstream_portable.rs`. |
 | `test/test_partial_fractions_characterization.cpp` | Covered | `src/algebra/partial_fractions.rs` reconstruction tests plus the two parameter-dependent, non-unit pole systems in `tests/upstream_portable.rs`. |
-| `test/test_partial_fractions_factored_den.cpp` | Covered | Repeated/scaled poles and quadratic-plus-linear factored denominators in `src/algebra/partial_fractions.rs`. |
+| `test/test_partial_fractions_factored_den.cpp` | Covered | Repeated/scaled poles and quadratic-plus-linear factored denominators in `src/algebra/partial_fractions.rs`; the native block-separation path, per-component eager materialization, rational units, independent factors, exact overlap fallback, cold views, deterministic matrix, primitive, and integration-step equivalence are covered in `src/algebra/partial_fractions/factored.rs` and `src/integrator/primitive.rs`. |
 | `test/test_rat_add_equivalence.cpp` | Replaced | There is no FLINT dual-backend dispatch. Exact Symbolica normalization and arithmetic oracles are in `src/core/rat/tests.rs`; content-path equivalence is in `tests/upstream_portable.rs`. |
 | `test/test_univar_rat.cpp` | Replaced | No parallel `UnivarRat` CAS exists. Symbolica's public univariate projection is exercised through `src/core/poly/tests.rs`, `src/algebra/linear_factors.rs`, and `src/algebra/partial_fractions.rs`. |
 | `test/unit/test_factor_table.cpp` | Covered | Existing pair/guard/dedup cases in `src/integrator/factor_table.rs`; all-object exactness, OOP singleton, and zero-difference cases in `tests/upstream_portable.rs`. |
@@ -76,11 +76,11 @@ remains confined to `scripts/differential.sh` and
 | Upstream data | Status | Rust evidence |
 | --- | --- | --- |
 | `test/abi/symbols_golden.txt` | Covered | Port whitelist at `tests/abi/symbols_golden.txt`, enforced by `scripts/check-abi.sh`. |
-| `test/Smirnov/tst0.txt` | Covered for ingestion | Byte-identical `tests/data/smirnov/tst0.txt`; parses with variables `t1`…`t5` and maximum log weight 0 in `tests/upstream_portable.rs`. |
-| `test/Smirnov/tst1.txt` | Covered for ingestion | Byte-identical `tests/data/smirnov/tst1.txt`; parses with variables `t1`…`t5` and maximum log weight 1 in `tests/upstream_portable.rs`. |
-| `test/Smirnov/tst2.txt` | Covered for ingestion | Byte-identical `tests/data/smirnov/tst2.txt`; parses with variables `t1`…`t5` and maximum log weight 2 in `tests/upstream_portable.rs`. |
-| `test/Smirnov/tst3.txt` | Covered for ingestion | Byte-identical `tests/data/smirnov/tst3.txt`; parses with variables `t1`…`t5` and maximum log weight 3 in `tests/upstream_portable.rs`. |
-| `test/Smirnov/tst4.txt` | Covered for ingestion | Byte-identical `tests/data/smirnov/tst4.txt`; parses with variables `t1`…`t5` and maximum log weight 4 in `tests/upstream_portable.rs`. Full execution remains a licensed performance job. |
+| `test/Smirnov/tst0.txt` | Covered for ingestion | Byte-identical `tests/data/smirnov/tst0.txt`; parses with variables `t1`…`t5` and maximum log weight 0 in `src/convert/tests.rs`. |
+| `test/Smirnov/tst1.txt` | Covered for ingestion | Byte-identical `tests/data/smirnov/tst1.txt`; parses with variables `t1`…`t5` and maximum log weight 1 in `src/convert/tests.rs`. |
+| `test/Smirnov/tst2.txt` | Covered for ingestion | Byte-identical `tests/data/smirnov/tst2.txt`; parses with variables `t1`…`t5` and maximum log weight 2 in `src/convert/tests.rs`. |
+| `test/Smirnov/tst3.txt` | Covered for ingestion | Byte-identical `tests/data/smirnov/tst3.txt`; parses with variables `t1`…`t5` and maximum log weight 3 in `src/convert/tests.rs`. |
+| `test/Smirnov/tst4.txt` | Covered for ingestion | Byte-identical `tests/data/smirnov/tst4.txt`; parses with variables `t1`…`t5` and maximum log weight 4 in `src/convert/tests.rs`. Full execution remains a licensed performance job. |
 | `test/Smirnov/diagnostics/tst0_step3_failure.json` | Not applicable | Historical failure diagnostic, not a mathematical expected-output fixture. |
 | `test/data/mzv_basis_reference_values.json` | Covered | Checked-in at `tests/data/mzv_basis_reference_values.json`; six identities are asserted structurally in `tests/upstream_portable.rs`. |
 | `test/data/mzv_reductions_chained_test.json` | Covered | Byte-identical `tests/data/mzv_reductions_chained_test.json`; default-flatness rejection and exact opt-in expansion are asserted in `tests/upstream_portable.rs`. |
@@ -129,4 +129,10 @@ The matrix closes portable fixture ingestion and mathematical/ABI contracts,
 but it does not claim runtime performance from compile-only CI. Full Smirnov
 integration, C++ differential parity, and wall/RSS comparisons must run on a
 licensed benchmark host. `scripts/benchmark-compare.sh` is the authoritative
-on-par-or-better gate; external C++ is never linked into production Rust.
+on-par-or-better gate for the shared end-to-end JSON operations in its locked
+corpus: algebra kernels, shared-denominator arithmetic, repeated-pole partial
+fractions, factor-table/LR and Euler-filter work, high-order series, production
+MZV reduction, one integration step, and a three-variable full integration.
+The Atom-native factored ingress and Euler phase breakdown are separate
+Criterion/diagnostic gates and cannot inherit a claim from the CLI aggregate.
+External C++ is never linked into production Rust.

@@ -9,8 +9,11 @@ use symbolica::prelude::{Atom, AtomCore, Rational};
 use crate::core::{Poly, PolyCtx, Rat};
 use crate::error::{Error, Result};
 use crate::integrator::{RegTerm, RegTermSym, Regulator, RegulatorSym, regkey_structural_cmp};
-use crate::reduce::{MzvReductionTable, build_mzv_atom_list, load_mzv_reductions};
+use crate::reduce::MzvReductionTable;
 use crate::symbols::{Word, Wordlist, WordlistTerm, legacy};
+
+use super::mzv_data::mzv_reduction_table;
+use super::narrow::mzv_indeterminates;
 
 pub(super) fn string_field<'a>(request: &'a Value, name: &str) -> Result<&'a str> {
     request
@@ -97,25 +100,13 @@ pub(super) fn explicit_variables(request: &Value) -> Result<Option<Vec<String>>>
         .map(Some)
 }
 
-pub(super) fn mzv_data_path(request: &Value) -> std::path::PathBuf {
-    request
-        .get("mzv_data_path")
-        .and_then(Value::as_str)
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(|| {
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("data")
-                .join("mzv_reductions.json")
-        })
-}
-
 pub(super) fn mzv_context(
     request: &Value,
     expressions: &[&str],
 ) -> Result<(Arc<PolyCtx>, MzvReductionTable)> {
-    let table = load_mzv_reductions(mzv_data_path(request))?;
+    let table = mzv_reduction_table(request)?;
     let user_variables = wire_indeterminates(request, expressions)?;
-    let variables = build_mzv_atom_list(&table, user_variables)?;
+    let variables = mzv_indeterminates(&table, user_variables, expressions)?;
     Ok((PolyCtx::from_indeterminates(variables)?, table))
 }
 

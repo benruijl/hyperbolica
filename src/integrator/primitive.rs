@@ -2,7 +2,9 @@ use std::collections::{HashMap, hash_map::RandomState};
 use std::hash::BuildHasher;
 use std::sync::Arc;
 
-use crate::algebra::partial_fractions::{PartialFractionOptions, partial_fractions_with_options};
+use crate::algebra::partial_fractions::{
+    PartialFractionOptions, partial_fractions_factored_with_options, partial_fractions_with_options,
+};
 use crate::core::{FactoredRat, Poly, PolyCtx, Rat};
 use crate::error::{Error, Result};
 use crate::symbols::{Word, Wordlist, WordlistTerm};
@@ -21,6 +23,27 @@ fn antiderivative_polynomial_part(polynomial: &Rat, variable: usize) -> Result<R
 struct AccumulatorCell {
     word: Word,
     coefficient: FactoredRat,
+}
+
+#[derive(Clone)]
+enum WorkCoefficient {
+    Rational(Rat),
+    Factored(FactoredRat),
+}
+
+impl WorkCoefficient {
+    fn ctx(&self) -> &Arc<PolyCtx> {
+        match self {
+            Self::Rational(value) => value.ctx(),
+            Self::Factored(value) => value.ctx(),
+        }
+    }
+}
+
+#[derive(Clone)]
+struct WorkTerm {
+    coefficient: WorkCoefficient,
+    word: Word,
 }
 
 /// A collision-safe index into [`AccumulatorCell`] rows.
@@ -91,7 +114,7 @@ fn bump<S: BuildHasher>(
 }
 
 fn push_integration_by_parts(
-    queue: &mut Vec<WordlistTerm>,
+    queue: &mut Vec<WorkTerm>,
     primitive: &Rat,
     word: &Word,
     variable_rat: &Rat,
@@ -105,10 +128,10 @@ fn push_integration_by_parts(
     }
     let coefficient = primitive.negated().try_div(&chain_denominator)?;
     if !coefficient.is_zero() {
-        queue.push(WordlistTerm::new(
-            coefficient,
-            Word::from(word.letters[1..].to_vec()),
-        ));
+        queue.push(WorkTerm {
+            coefficient: WorkCoefficient::Rational(coefficient),
+            word: Word::from(word.letters[1..].to_vec()),
+        });
     }
     Ok(())
 }
@@ -129,8 +152,60 @@ pub fn integrate_ii_with_options(
     variable: usize,
     options: &IntegrateIiOptions<'_>,
 ) -> Result<Wordlist> {
+    let queue = wordlist
+        .terms
+        .iter()
+        .map(|term| WorkTerm {
+            coefficient: WorkCoefficient::Rational(term.coef.clone()),
+            word: term.word.clone(),
+        })
+        .collect();
+    integrate_ii_work_queue(ctx, queue, variable, options)
+}
+
+/// Multiply the initial wordlist by one deferred rational prefactor.
+///
+/// Canonical denominator construction is deferred to the first partial-
+/// fraction decomposition. That step separates coprime target-dependent
+/// blocks first, then eagerly materializes and decomposes each component; an
+/// overlapping-block input uses the exact full-materialization fallback.
+pub(crate) fn integrate_ii_with_factored_prefactor(
+    ctx: &Arc<PolyCtx>,
+    wordlist: &Wordlist,
+    prefactor: &FactoredRat,
+    variable: usize,
+    options: &IntegrateIiOptions<'_>,
+) -> Result<Wordlist> {
+    let queue = wordlist
+        .terms
+        .iter()
+        .map(|term| {
+            if !term.coef.ctx().is_compatible_with(prefactor.ctx()) {
+                return Err(Error::ContextMismatch);
+            }
+            let coefficient = if term.coef.is_zero() {
+                FactoredRat::from_poly(Poly::zero(prefactor.ctx().clone()))
+            } else if term.coef.is_one() {
+                prefactor.clone()
+            } else {
+                FactoredRat::from_rat(&term.coef).try_mul(prefactor)?
+            };
+            Ok(WorkTerm {
+                coefficient: WorkCoefficient::Factored(coefficient),
+                word: term.word.clone(),
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    integrate_ii_work_queue(ctx, queue, variable, options)
+}
+
+fn integrate_ii_work_queue(
+    ctx: &Arc<PolyCtx>,
+    mut queue: Vec<WorkTerm>,
+    variable: usize,
+    options: &IntegrateIiOptions<'_>,
+) -> Result<Wordlist> {
     let variable_rat = Rat::from_poly(Poly::generator(ctx.clone(), variable)?);
-    let mut queue = wordlist.terms.clone();
     let mut queue_index = 0_usize;
     let mut rows = Vec::<AccumulatorCell>::new();
     let mut indices = WordIndex::default();
@@ -138,7 +213,7 @@ pub fn integrate_ii_with_options(
     while queue_index < queue.len() {
         let term = queue[queue_index].clone();
         queue_index += 1;
-        if !term.coef.ctx().is_compatible_with(ctx)
+        if !term.coefficient.ctx().is_compatible_with(ctx)
             || term
                 .word
                 .letters
@@ -148,14 +223,20 @@ pub fn integrate_ii_with_options(
             return Err(Error::ContextMismatch);
         }
 
-        let fractions = partial_fractions_with_options(
-            &term.coef,
-            variable,
-            &PartialFractionOptions {
-                introduce_algebraic_letters: options.introduce_algebraic_letters,
-                forbidden_variables: options.forbidden_variables,
-            },
-        )
+        let partial_fraction_options = PartialFractionOptions {
+            introduce_algebraic_letters: options.introduce_algebraic_letters,
+            forbidden_variables: options.forbidden_variables,
+        };
+        let fractions = match &term.coefficient {
+            WorkCoefficient::Rational(coefficient) => {
+                partial_fractions_with_options(coefficient, variable, &partial_fraction_options)
+            }
+            WorkCoefficient::Factored(coefficient) => partial_fractions_factored_with_options(
+                coefficient,
+                variable,
+                &partial_fraction_options,
+            ),
+        }
         .map_err(|error| Error::InvalidInput(format!("IntegrateII: partial_fractions: {error}")))?;
 
         if !fractions.polynomial_part.is_zero() {
@@ -364,6 +445,63 @@ mod tests {
             primitive.terms[0].word,
             Word::new(vec![Rat::parse(ctx.clone(), "a").unwrap(), Rat::zero(ctx)])
         );
+    }
+
+    #[test]
+    fn factored_prefactor_matches_materialized_primitive_and_derivative() {
+        let ctx = PolyCtx::new(["x", "a", "b"]).unwrap();
+        let mut prefactor =
+            FactoredRat::from_poly(Poly::parse(ctx.clone(), "x^4+a*x^2+b*x+1").unwrap());
+        for (base, exponent) in [("2*x-a", 3), ("x+b", 2), ("3*x+1", 1)] {
+            prefactor
+                .push_factor(&Poly::parse(ctx.clone(), base).unwrap(), exponent)
+                .unwrap();
+        }
+        let unit = Rat::one(ctx.clone());
+        let seed = Wordlist::new(vec![WordlistTerm::new(unit.clone(), Word::default())]);
+
+        let actual = integrate_ii_with_factored_prefactor(
+            &ctx,
+            &seed,
+            &prefactor,
+            0,
+            &IntegrateIiOptions::default(),
+        )
+        .unwrap();
+        assert!(!unit.compatibility_views_initialized());
+        assert!(actual.terms.iter().all(|term| {
+            !term.coef.compatibility_views_initialized()
+                && term
+                    .word
+                    .letters
+                    .iter()
+                    .all(|letter| !letter.compatibility_views_initialized())
+        }));
+
+        let scaled = Wordlist::new(vec![WordlistTerm::new(
+            prefactor.materialize().unwrap(),
+            Word::default(),
+        )]);
+        let expected = integrate_ii(&ctx, &scaled, 0).unwrap();
+        assert_eq!(actual, expected);
+        assert_eq!(differentiate_wordlist(&actual, 0).unwrap(), scaled);
+    }
+
+    #[test]
+    fn factored_prefactor_rejects_a_cross_context_wordlist() {
+        let ctx = PolyCtx::new(["x"]).unwrap();
+        let other = PolyCtx::new(["y"]).unwrap();
+        let prefactor = FactoredRat::parse(ctx.clone(), "1/(x+1)^2").unwrap();
+        let seed = Wordlist::new(vec![WordlistTerm::new(Rat::one(other), Word::default())]);
+        let error = integrate_ii_with_factored_prefactor(
+            &ctx,
+            &seed,
+            &prefactor,
+            0,
+            &IntegrateIiOptions::default(),
+        )
+        .unwrap_err();
+        assert!(matches!(error, Error::ContextMismatch));
     }
 
     #[test]

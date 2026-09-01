@@ -20,12 +20,18 @@ rerunning the compatibility and performance gates.
 
 ## Hyperbolica-maintained patch
 
-The tracked snapshot has one post-snapshot optimization used by this crate:
+The tracked snapshot has two post-snapshot changes used by this crate:
 
 - `src/domains/rational_polynomial.rs` implements rational-polynomial powers by
   exponentiation by squaring, and `RationalPolynomialField::pow` delegates to
   that implementation. Focused coverage lives in
   `tests/rational_polynomial.rs`.
+- `src/domains/factorized_rational_polynomial.rs` makes
+  `FactorizedRationalPolynomialField::is_one` check `numer_coeff` as well as
+  the numerator, denominator factors, and `denom_coeff`. Without that check a
+  scalar such as `2` was misclassified as one by the field trait even though
+  the value's inherent `is_one` correctly rejected it. A focused regression
+  lives beside the implementation.
 
 Keep subsequent changes to the vendored source minimal, covered by Symbolica's
 own tests, and listed here. The ignored original checkout remains unchanged.

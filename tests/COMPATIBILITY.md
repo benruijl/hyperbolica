@@ -15,7 +15,7 @@ the benchmark corpus. It validates the checked-in schemas, canonical one-record
 JSONL form, unique names and requests, and the narrow metadata allowlist below.
 Both runtime harnesses invoke it before building or executing a backend.
 
-Four response classes cannot be byte-compared:
+Five response classes cannot be byte-compared:
 
 - LR responses contain a backend version, a floating score, wall time, and may
   choose either order when scores tie exactly. Both orders are validated as
@@ -31,14 +31,19 @@ Four response classes cannot be byte-compared:
 Those fields are named in each fixture and removed before a canonical JSON
 comparison. Mathematical result fields remain exact.
 
-`scripts/benchmark-compare.sh` builds the Rust release binary, warms both CLI
-binaries, verifies exact output equality, and reports median end-to-end times.
-The default gate fails when Rust is both more than 1.20 times slower and more
-than 2 ms slower. Useful knobs are `WARMUP`, `ITERATIONS`, `THREADS`,
-`MAX_SLOWDOWN`, `REGRESSION_TOLERANCE_MS`, `CPUSET`, `RESULTS_FILE`, and
-`FAIL_ON_REGRESSION`. The benchmark includes process startup by design; no
-persistent protocol exists in either compatibility CLI.
+`scripts/benchmark-compare.sh` builds the LTO Rust release binary, validates
+fixture-controlled response equality, and measures adjacent balanced backend
+pairs with monotonic wall time, process CPU time, and peak RSS. Process startup
+is included by design; neither compatibility CLI has a persistent protocol.
+The default exploratory mode accepts `PAIRS` (or legacy `ITERATIONS`),
+`WARMUP`, `THREADS`, `CPUSET`, and the three explicit ratio thresholds.
+It always records `qualified: false`.
 
-Every benchmark invocation records its unchanged five-column summary CSV,
-per-iteration raw samples, and reproducibility metadata. See
-`docs/verification.md` for the evidence layout and interpretation rules.
+Set `BENCHMARK_MODE=qualification` for the locked on-par-or-better gate.
+That mode rejects altered sampling, affinity, thread, bootstrap, threshold, or
+corpus settings and requires the optimized pinned C++ baseline. Every run
+fresh-builds both timed backends, records the five-column summary, paired raw
+samples, correctness hashes, statistical analysis, build manifests, and a
+self-bound policy verdict. The supplied C++ path only locates its verified
+source checkout for the fresh CMake build. See
+`docs/verification.md` for the artifact layout and strict claim rules.

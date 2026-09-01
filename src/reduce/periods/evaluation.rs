@@ -10,6 +10,7 @@ use crate::symbols::{Word, Wordlist, WordlistTerm, log_two_atom};
 
 use crate::reduce::mzv_expansion::MzvExpansionTable;
 use crate::reduce::mzv_reduce::{MzvReductionTable, apply_mzv_reductions};
+use crate::reduce::standard_mzv_expansion;
 
 fn all_zero(word: &Word) -> bool {
     !word.is_empty() && word.letters.iter().all(Rat::is_zero)
@@ -20,7 +21,12 @@ pub(super) fn zero_one_period(
     word: &Word,
     table: &MzvReductionTable,
 ) -> Result<Rat> {
-    zero_one_period_with_expansion(ctx, word, table, None)
+    let expansion = if table.is_embedded_standard() {
+        Some(standard_mzv_expansion()?)
+    } else {
+        None
+    };
+    zero_one_period_with_expansion(ctx, word, table, expansion)
 }
 
 pub(super) fn zero_one_period_with_expansion(
@@ -75,7 +81,12 @@ pub(super) fn zero_inf_period(
     word: &Word,
     table: &MzvReductionTable,
 ) -> Result<Rat> {
-    zero_inf_period_with_expansion(ctx, word, table, None)
+    let expansion = if table.is_embedded_standard() {
+        Some(standard_mzv_expansion()?)
+    } else {
+        None
+    };
+    zero_inf_period_with_expansion(ctx, word, table, expansion)
 }
 
 pub(super) fn zero_inf_period_with_expansion(

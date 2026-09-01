@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use symbolica::prelude::*;
 
-use super::{Poly, PolyCtx};
+use super::{Poly, PolyCtx, ResultantStrategy};
 use crate::error::Error;
 
 fn context() -> Arc<PolyCtx> {
@@ -84,6 +84,51 @@ fn improved_symbolica_resultant_is_used() {
     let right = Poly::parse(ctx.clone(), "x-y").unwrap();
     let resultant = left.resultant(&right, 0).unwrap();
     assert_eq!(resultant, Poly::parse(ctx, "2*y^2+1").unwrap());
+}
+
+#[test]
+fn every_public_symbolica_resultant_strategy_agrees_on_bounded_sparse_inputs() {
+    fn next(state: &mut u64) -> i64 {
+        *state = state
+            .wrapping_mul(6_364_136_223_846_793_005)
+            .wrapping_add(1_442_695_040_888_963_407);
+        i64::try_from((*state >> 32) % 11).unwrap() - 5
+    }
+
+    fn polynomial(state: &mut u64, degree: usize) -> String {
+        (0..=degree)
+            .map(|power| {
+                let mut constant = next(state);
+                let linear = next(state);
+                if power == degree && constant == 0 && linear == 0 {
+                    constant = 1;
+                }
+                format!("({constant}+({linear})*y)*x^{power}")
+            })
+            .collect::<Vec<_>>()
+            .join("+")
+    }
+
+    let ctx = context();
+    let mut state = 0x5eed_d0c0_5eed_cafe;
+    for case in 0..20 {
+        let left = Poly::parse(ctx.clone(), &polynomial(&mut state, 2 + case % 4)).unwrap();
+        let right = Poly::parse(ctx.clone(), &polynomial(&mut state, 1 + (case * 3) % 5)).unwrap();
+        let expected = left
+            .resultant_with_strategy(&right, 0, ResultantStrategy::Ducos)
+            .unwrap();
+        for strategy in [
+            ResultantStrategy::Brown,
+            ResultantStrategy::Primitive,
+            ResultantStrategy::Crt,
+        ] {
+            assert_eq!(
+                left.resultant_with_strategy(&right, 0, strategy).unwrap(),
+                expected,
+                "strategy {strategy:?}, case {case}"
+            );
+        }
+    }
 }
 
 #[test]

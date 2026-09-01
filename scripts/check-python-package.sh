@@ -75,6 +75,11 @@ native = [
     and name.endswith((".so", ".pyd", ".dylib"))
 ]
 assert len(native) == 1, f"expected one package-local native extension, found {native}"
+loose_mzv_data = [name for name in names if name.endswith("/mzv_reductions.json")]
+assert not loose_mzv_data, (
+    "standard MZV data must be embedded in the native extension, not loaded "
+    f"as a loose runtime file: {loose_mzv_data}"
+)
 print(
     f"validated {wheels[0].name}: typed package, native extension, and licenses are present"
 )

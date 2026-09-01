@@ -2,6 +2,8 @@
 set -euo pipefail
 
 repo_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
+# shellcheck source=scripts/lib/response-comparison.sh
+source "$repo_root/scripts/lib/response-comparison.sh"
 fixtures=${DIFFERENTIAL_FIXTURES:-"$repo_root/tests/fixtures/differential.jsonl"}
 rust_bin=${HYPERFLINT_RUST:-"$repo_root/target/release/hyperflint"}
 cpp_bin=${HYPERFLINT_CPP:-/tmp/hyperflint-cpp-build/hyperflint}
@@ -51,23 +53,6 @@ run_backend() {
         env SYMBOLICA_HIDE_BANNER=1 "${command[@]}" >"$stdout_path" 2>"$stderr_path"
 }
 
-normalize() {
-    local input=$1
-    local ignored=$2
-    jq -S -c --argjson ignored "$ignored" \
-        'reduce $ignored[] as $key (. ; del(.[$key]))' "$input"
-}
-
-validate_permutation() {
-    local input=$1
-    local field=$2
-    local expected=$3
-    [[ -z "$field" ]] && return 0
-    cmp -s \
-        <(jq -c --arg field "$field" '.[$field] | sort' "$input") \
-        <(jq -c 'sort' <<<"$expected")
-}
-
 passed=0
 failed=0
 not_byte_comparable=0
@@ -84,6 +69,7 @@ while IFS= read -r fixture || [[ -n "$fixture" ]]; do
     compare=$(jq -r '.compare // "byte"' <<<"$fixture")
     request=$(jq -c '.request' <<<"$fixture")
     ignored=$(jq -c '.ignore // []' <<<"$fixture")
+    ignored_recursive=$(jq -c '.ignore_recursive // []' <<<"$fixture")
     reason=$(jq -r '.reason // ""' <<<"$fixture")
     permutation_field=$(jq -r '.permutation_field // ""' <<<"$fixture")
     permutation_values=$(jq -c '.permutation_values // []' <<<"$fixture")
@@ -109,8 +95,8 @@ while IFS= read -r fixture || [[ -n "$fixture" ]]; do
         failed=$((failed + 1))
         continue
     fi
-    if ! validate_permutation "$rust_out" "$permutation_field" "$permutation_values" ||
-        ! validate_permutation "$cpp_out" "$permutation_field" "$permutation_values"; then
+    if ! hf_validate_permutation "$rust_out" "$permutation_field" "$permutation_values" ||
+        ! hf_validate_permutation "$cpp_out" "$permutation_field" "$permutation_values"; then
         echo "[FAIL] $name: '$permutation_field' is not the required permutation" >&2
         failed=$((failed + 1))
         continue
@@ -131,15 +117,15 @@ while IFS= read -r fixture || [[ -n "$fixture" ]]; do
             not_byte_comparable=$((not_byte_comparable + 1))
             echo "[INFO] $name is not byte-comparable: $reason"
             if cmp -s \
-                <(normalize "$rust_out" "$ignored") \
-                <(normalize "$cpp_out" "$ignored"); then
+                <(hf_normalize_response "$rust_out" "$ignored" "$ignored_recursive") \
+                <(hf_normalize_response "$cpp_out" "$ignored" "$ignored_recursive"); then
                 echo "[PASS normalized] $name"
                 passed=$((passed + 1))
             else
                 echo "[FAIL normalized] $name" >&2
                 diff -u \
-                    <(normalize "$cpp_out" "$ignored" | jq .) \
-                    <(normalize "$rust_out" "$ignored" | jq .) >&2 || true
+                    <(hf_normalize_response "$cpp_out" "$ignored" "$ignored_recursive" | jq .) \
+                    <(hf_normalize_response "$rust_out" "$ignored" "$ignored_recursive" | jq .) >&2 || true
                 failed=$((failed + 1))
             fi
             ;;

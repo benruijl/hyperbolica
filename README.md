@@ -116,7 +116,9 @@ result = prepared.integrate(options)
 The root `pyproject.toml` selects the `python-extension` feature for maturin
 wheel builds. The lower-level `python` feature supports Rust-side binding
 tests without PyO3's extension-module linker mode. The supported packaged API
-is currently the standalone wheel. A future Symbolica community package needs
+is currently the standalone wheel. Its standard MZV reductions are embedded,
+so installed integration does not need a source-tree data directory or a
+separate CAS package. A future Symbolica community package needs
 separate wrappers whose declared module paths follow
 `symbolica.community.hyperbolica`; the top-level standalone classes are not
 silently reused for that incompatible layout. Do not pass objects from a
@@ -160,12 +162,25 @@ binary with a separately built C++ HyperFLINT executable:
 ```sh
 HYPERFLINT_CPP=/absolute/path/to/hyperflint scripts/differential.sh
 HYPERFLINT_CPP=/absolute/path/to/hyperflint scripts/benchmark-compare.sh
+
+# The publishable gate is deliberately opt-in.
+BENCHMARK_MODE=qualification \
+  HYPERFLINT_CPP=/absolute/path/to/release-portable/hyperflint \
+  scripts/benchmark-compare.sh
 ```
 
-The benchmark gate rejects a median slowdown over 20%, except for sub-2 ms
-noise. No parity claim should be made from compilation alone: release results,
-hardware details, thread count, and both executable revisions must accompany a
-performance claim.
+The locked qualification gate uses 12 adjacent, balanced backend pairs for
+each workload, a stratified bootstrap upper confidence bound, a severe
+per-workload limit, and a peak-RSS limit. It requires the complete checked-in
+corpus, sanitized one-thread child environments, fixed CPU affinity, clean
+source revisions, the LTO Rust profile, and upstream's optimized
+`release-portable` C++ profile. Qualification builds Rust in a fresh isolated
+target directory and clean-builds the pinned C++ source in a fresh CMake tree;
+the supplied C++ path is used only to locate that source checkout. The default
+mode is exploratory and can never claim qualification. No parity claim may be
+made from compilation, an exploratory run, or a failed/missing qualification
+artifact; see
+[`docs/verification.md`](docs/verification.md).
 
 ## Design
 

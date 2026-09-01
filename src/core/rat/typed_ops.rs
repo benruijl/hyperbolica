@@ -1,7 +1,9 @@
 //! Typed evaluation, substitution, integration, and Laurent operations.
 
 use symbolica::domains::rational::RationalField;
-use symbolica::domains::rational_polynomial::FromNumeratorAndDenominator;
+use symbolica::domains::rational_polynomial::{
+    FromNumeratorAndDenominator, RationalPolynomialField,
+};
 use symbolica::prelude::*;
 
 use super::{NativeRat, Rat};
@@ -13,7 +15,53 @@ fn lift_native_polynomial(polynomial: &MultivariatePolynomial<IntegerRing, u16>)
     polynomial.map_coeff(|coefficient| Q.to_element_numerator(coefficient.clone()), Q)
 }
 
+fn evaluate_native_polynomial_at_rat(
+    polynomial: &MultivariatePolynomial<IntegerRing, u16>,
+    variable: usize,
+    replacement: &NativeRat,
+) -> NativeRat {
+    let rational_function_field = RationalPolynomialField::<IntegerRing, u16>::new(Z);
+    polynomial
+        .to_univariate(variable)
+        .map_coeff(
+            |coefficient| {
+                NativeRat::from_num_den(coefficient.clone(), coefficient.one(), &Z, false)
+            },
+            rational_function_field,
+        )
+        .evaluate(replacement)
+}
+
 impl Rat {
+    /// Substitute one variable by another exact rational function.
+    ///
+    /// Symbolica exposes every required primitive publicly: split each native
+    /// integer polynomial with `to_univariate`, lift its coefficient ring to
+    /// `RationalPolynomialField`, and use the univariate Horner `evaluate`.
+    /// This keeps the canonical native representation throughout and avoids
+    /// materializing the lazy `Poly<Q>` compatibility views.
+    pub fn substitute_rat(&self, variable: usize, replacement: &Self) -> Result<Self> {
+        self.require_same_context(replacement)?;
+        if variable >= self.ctx.len() {
+            return Err(Error::UnknownVariable(variable.to_string()));
+        }
+
+        let numerator = evaluate_native_polynomial_at_rat(
+            &self.native.numerator,
+            variable,
+            replacement.native(),
+        );
+        let denominator = evaluate_native_polynomial_at_rat(
+            &self.native.denominator,
+            variable,
+            replacement.native(),
+        );
+        if denominator.is_zero() {
+            return Err(Error::DivisionByZero);
+        }
+        Self::from_native(self.ctx.clone(), &numerator / &denominator)
+    }
+
     /// Substitute one variable by an exact rational number.
     ///
     /// Symbolica's integer-backed `RationalPolynomial` has mapped full
@@ -98,6 +146,44 @@ impl Rat {
         Ok(Q.to_element(numerator, denominator, true))
     }
 
+    /// Highest numerator exponent of `variable`; zero has degree `-1`.
+    ///
+    /// This queries Symbolica's canonical integer polynomial directly and
+    /// does not materialize the lazy `Poly<Q>` compatibility view.
+    pub fn numerator_degree(&self, variable: usize) -> Result<i64> {
+        if variable >= self.ctx.len() {
+            return Err(Error::UnknownVariable(variable.to_string()));
+        }
+        if self.native.numerator.is_zero() {
+            Ok(-1)
+        } else {
+            Ok(i64::from(self.native.numerator.degree(variable)))
+        }
+    }
+
+    /// Highest denominator exponent of `variable`.
+    ///
+    /// This queries Symbolica's canonical integer polynomial directly and
+    /// does not materialize the lazy `Poly<Q>` compatibility view.
+    pub fn denominator_degree(&self, variable: usize) -> Result<i64> {
+        if variable >= self.ctx.len() {
+            return Err(Error::UnknownVariable(variable.to_string()));
+        }
+        Ok(i64::from(self.native.denominator.degree(variable)))
+    }
+
+    /// Whether either canonical polynomial contains `variable`.
+    ///
+    /// Symbolica's native `contains` scan avoids allocating the public
+    /// compatibility numerator and denominator solely for a dependency
+    /// guard.
+    pub fn depends_on(&self, variable: usize) -> Result<bool> {
+        if variable >= self.ctx.len() {
+            return Err(Error::UnknownVariable(variable.to_string()));
+        }
+        Ok(self.native.numerator.contains(variable) || self.native.denominator.contains(variable))
+    }
+
     /// Integrate a rational function known to be polynomial in `variable`.
     ///
     /// This is the polynomial-part kernel used by the hyperlog primitive. It
@@ -131,7 +217,12 @@ impl Rat {
         if self.is_zero() {
             return Ok(i64::MAX);
         }
-        Ok(self.numerator().min_exponent(variable)? - self.denominator().min_exponent(variable)?)
+        if variable >= self.ctx.len() {
+            return Err(Error::UnknownVariable(variable.to_string()));
+        }
+        let numerator_min = i64::from(self.native.numerator.degree_bounds(variable).0);
+        let denominator_min = i64::from(self.native.denominator.degree_bounds(variable).0);
+        Ok(numerator_min - denominator_min)
     }
 
     /// Leading Laurent coefficient at `variable = 0`.

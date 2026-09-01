@@ -27,6 +27,11 @@
       "minItems": 1,
       "uniqueItems": true
     },
+    "ignore_recursive": {
+      "type": "array",
+      "items": {"type": "string", "minLength": 1},
+      "uniqueItems": true
+    },
     "reason": {"type": "string", "minLength": 1},
     "permutation_field": {"type": "string", "minLength": 1},
     "permutation_values": {
@@ -46,6 +51,7 @@
       "not": {
         "anyOf": [
           {"required": ["ignore"]},
+          {"required": ["ignore_recursive"]},
           {"required": ["reason"]},
           {"required": ["permutation_field"]},
           {"required": ["permutation_values"]}

@@ -59,7 +59,23 @@ detailed = prepared.integrate_detailed(
 `PreparedIntegral`, `IntegrationResult`, and `AlgebraicLetter` are immutable.
 Their `copy.copy` and `copy.deepcopy` operations return equivalent independent
 Python handles backed by shared immutable Rust storage. `IntegrationOptions`
-is mutable, compares by value, and copies all of its MZV table data.
+is mutable and compares by value. Its default MZV table is embedded in the
+extension and stored behind cheap shared Rust storage; no data directory or
+separate CAS package is needed at runtime.
+
+Omitting both `mzv_reductions` and `mzv_basis` selects that standard table.
+Passing either argument explicitly selects a complete override, so an empty
+table is intentional and remains possible:
+
+```python
+standard = hb.IntegrationOptions()
+without_mzv_reductions = hb.IntegrationOptions(mzv_reductions=[])
+```
+
+The standard table is eagerly expanded into its small basis when a generated
+period constant is needed. Preparation reserves only those basis atoms rather
+than adding every generated reduction left-hand side to every polynomial
+context.
 
 ## Errors
 

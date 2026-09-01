@@ -35,6 +35,21 @@ pub struct Poly {
     inner: SymbolicaPoly,
 }
 
+/// Public Symbolica resultant kernels available for differential benchmarking.
+///
+/// [`ResultantStrategy::Ducos`] is the production default because this vendored
+/// Symbolica snapshot contains the improved Lazard--Ducos implementation. The
+/// alternatives are exposed so callers can build evidence on their own input
+/// distribution; Hyperbolica does not silently dispatch between them.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ResultantStrategy {
+    #[default]
+    Ducos,
+    Brown,
+    Primitive,
+    Crt,
+}
+
 /// Factorization with a rational unit and irreducible polynomial bases.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Factored {

@@ -3,7 +3,7 @@ use std::sync::Arc;
 use symbolica::prelude::Symbol;
 
 use super::collection::collect_regulator_with_digest;
-use super::limits::one_regulator;
+use super::limits::{one_regulator, word_depends_on_variable};
 use super::shuffle::group_log_powers_with_digest;
 use super::word::{TransformCache, collect_result_rows_with_forced_collision, identity_transform};
 use super::{
@@ -92,6 +92,21 @@ fn regularized_limit_handles_empty_constant_and_scaled_words() {
 
     let scaled = reglim_word(&ctx, &word(&ctx, &["x", "-x"]), 0).unwrap();
     assert_eq!(scaled, one_regulator(&ctx, vec![word(&ctx, &["1", "-1"])]));
+}
+
+#[test]
+fn word_dependency_predicate_stays_on_native_symbolica_rationals() {
+    let ctx = context();
+    let independent = rat(&ctx, "(y+1)/(y-1)");
+    let dependent = rat(&ctx, "(x+y)/(1+x*y)");
+
+    assert!(!word_depends_on_variable(&Word::from(vec![independent.clone()]), 0).unwrap());
+    assert!(
+        word_depends_on_variable(&Word::from(vec![independent.clone(), dependent.clone()]), 0)
+            .unwrap()
+    );
+    assert!(!independent.compatibility_views_initialized());
+    assert!(!dependent.compatibility_views_initialized());
 }
 
 #[test]

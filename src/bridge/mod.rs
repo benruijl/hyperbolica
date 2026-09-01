@@ -3,6 +3,8 @@
 mod algebra;
 mod integration;
 mod lr;
+mod mzv_data;
+mod narrow;
 mod reduction;
 mod series;
 mod symcoef;

@@ -47,11 +47,23 @@ fn factor_into(
             break;
         }
         let divisor = table.intern_polys[id].clone();
-        while divisor.divides(&work)? {
-            work = work.div_exact(&divisor)?;
-            *exponents.entry(id).or_default() += sign;
-            if work.is_rational_constant() {
-                break;
+        // Exact division by any non-zero constant in Q[x] always succeeds and
+        // would never reduce the work polynomial's structure, so a malformed
+        // trial pool containing a constant must not spin forever.
+        if divisor.is_rational_constant() {
+            continue;
+        }
+        loop {
+            match work.div_exact(&divisor) {
+                Ok(quotient) => {
+                    work = quotient;
+                    *exponents.entry(id).or_default() += sign;
+                    if work.is_rational_constant() {
+                        break;
+                    }
+                }
+                Err(Error::InexactDivision) => break,
+                Err(error) => return Err(error),
             }
         }
     }
@@ -132,4 +144,28 @@ pub(super) fn make_object(
             .collect(),
         oop,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::core::PolyCtx;
+
+    use super::*;
+
+    #[test]
+    fn trial_pool_extracts_repeated_factors_from_one_exact_division_per_power() {
+        let ctx = PolyCtx::new(["x", "y"]).unwrap();
+        let factor = Poly::parse(ctx.clone(), "x+y").unwrap();
+        let target = Poly::from_int(ctx, 3).try_mul(&factor.pow(7)).unwrap();
+        let mut table = FactorTable::default();
+        let constant_id = intern(&mut table, &Poly::from_int(factor.ctx().clone(), 2));
+        let id = intern(&mut table, &factor);
+
+        let object = make_object(&mut table, &[target], &[], &[constant_id, id]).unwrap();
+
+        assert_eq!(object.constant, Rational::from(3));
+        assert_eq!(object.factors, vec![(id, 7)]);
+        assert!(!object.oop);
+        assert_eq!(table.stats.oop, 0);
+    }
 }

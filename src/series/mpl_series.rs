@@ -18,7 +18,7 @@ pub struct MplSeriesResult {
 }
 
 fn is_free_of_variable(value: &Rat, variable: usize) -> Result<bool> {
-    Ok(value.numerator().degree(variable)? <= 0 && value.denominator().degree(variable)? <= 0)
+    Ok(!value.depends_on(variable)?)
 }
 
 fn goes_to_zero(value: &Rat, variable: usize) -> Result<bool> {
@@ -107,10 +107,13 @@ mod tests {
 
         let two_plus_x = Rat::parse(ctx.clone(), "2+x").unwrap();
         assert_eq!(
-            mpl_series(&[1, 1], &[two_plus_x, one_plus_x], 0, 2)
+            mpl_series(&[1, 1], &[two_plus_x.clone(), one_plus_x.clone()], 0, 2)
                 .unwrap()
                 .branch,
             MplSeriesBranch::LogSingularity
         );
+        assert!(!x.compatibility_views_initialized());
+        assert!(!one_plus_x.compatibility_views_initialized());
+        assert!(!two_plus_x.compatibility_views_initialized());
     }
 }

@@ -104,7 +104,7 @@ lint_differential() {
         if ! jq -e '
             def allowed_keys:
                 ["name", "compare", "request", "ignore", "reason",
-                 "permutation_field", "permutation_values"];
+                 "ignore_recursive", "permutation_field", "permutation_values"];
             def strings_unique:
                 type == "array" and all(.[]; type == "string" and length > 0)
                 and (length == (unique | length));
@@ -116,19 +116,27 @@ lint_differential() {
                 elif .request.op == "hyperflint" then
                     ["timing_compute_s", "vars", "algebraic_letters"]
                 else [] end;
+            def allowed_recursive:
+                if .request.op == "factor_table" then
+                    ["t_build_s", "trial_s", "fallback_s"]
+                else [] end;
             ((keys_unsorted - allowed_keys) | length == 0)
             and (.compare == "byte" or .compare == "normalized")
             and (
                 if .compare == "byte" then
                     (has("ignore") | not)
+                    and (has("ignore_recursive") | not)
                     and (has("reason") | not)
                     and (has("permutation_field") | not)
                     and (has("permutation_values") | not)
                 else
                     (.ignore | strings_unique and length > 0)
+                    and ((.ignore_recursive // []) | strings_unique)
                     and (.reason | type == "string" and length > 0)
                     and ([.ignore[] as $key | allowed_ignored | index($key)] |
                          all(.[]; . != null))
+                    and ([((.ignore_recursive // [])[]) as $key |
+                          allowed_recursive | index($key)] | all(.[]; . != null))
                     and ((has("permutation_field") and has("permutation_values"))
                          or ((has("permutation_field") | not)
                              and (has("permutation_values") | not)))
@@ -160,10 +168,70 @@ lint_benchmark() {
         line_number=$((line_number + 1))
         [[ -n "$line" ]] || continue
         jq -e . >/dev/null 2>&1 <<<"$line" || continue
-        if ! jq -e 'keys_unsorted | sort == ["name", "request"]' \
+        if ! jq -e '
+            def allowed_keys:
+                ["name", "compare", "request", "ignore", "ignore_recursive",
+                 "reason", "permutation_field", "permutation_values", "tier",
+                 "timeout_seconds", "pairs"];
+            def strings_unique:
+                type == "array" and all(.[]; type == "string" and length > 0)
+                and (length == (unique | length));
+            def allowed_ignored:
+                if .request.op == "find_lr_orders" then
+                    ["hf_version", "timing_compute_s", "score", "best_order"]
+                elif .request.op == "find_lr_orders_scan" then
+                    ["hf_version", "timing_compute_s"]
+                elif .request.op == "factor_table" then ["hf_version"]
+                elif .request.op == "apply_mzv_reductions" then ["vars"]
+                elif .request.op == "integration_step" then ["vars"]
+                elif .request.op == "hyperflint" then
+                    ["timing_compute_s", "vars", "algebraic_letters"]
+                else [] end;
+            def allowed_recursive:
+                if .request.op == "factor_table" then
+                    ["t_build_s", "trial_s", "fallback_s"]
+                else [] end;
+            ((keys_unsorted - allowed_keys) | length == 0)
+            and ((.tier // "qualification") |
+                 . == "qualification" or . == "nightly" or
+                 . == "heavyweight" or . == "exploratory")
+            and ((.timeout_seconds // 1) |
+                 type == "number" and floor == . and . >= 1)
+            and ((.pairs // 1) | type == "number" and floor == . and . >= 1)
+            and ((.compare // "byte") == "byte" or .compare == "normalized")
+            and (
+                if (.compare // "byte") == "byte" then
+                    (has("ignore") | not)
+                    and (has("ignore_recursive") | not)
+                    and (has("reason") | not)
+                    and (has("permutation_field") | not)
+                    and (has("permutation_values") | not)
+                else
+                    (.ignore | strings_unique and length > 0)
+                    and ((.ignore_recursive // []) | strings_unique)
+                    and (.reason | type == "string" and length > 0)
+                    and ([.ignore[] as $key | allowed_ignored | index($key)] |
+                         all(.[]; . != null))
+                    and ([((.ignore_recursive // [])[]) as $key |
+                          allowed_recursive | index($key)] | all(.[]; . != null))
+                    and ((has("permutation_field") and has("permutation_values"))
+                         or ((has("permutation_field") | not)
+                             and (has("permutation_values") | not)))
+                    and (
+                        if has("permutation_field") then
+                            (.permutation_field | type == "string" and length > 0)
+                            and (.permutation_values | strings_unique and length > 0)
+                            and (.permutation_field as $field |
+                                 .ignore | index($field) != null)
+                            and ((.permutation_values | sort) == (.request.xvars | sort))
+                        else true end
+                    )
+                end
+            )
+        ' \
             >/dev/null <<<"$line"; then
             report_failure "$file" "$line_number" \
-                "benchmark fixtures allow exactly name and request"
+                "comparison policy violates benchmark.schema.json or the ignore-field allowlist"
         fi
     done <"$file"
 }

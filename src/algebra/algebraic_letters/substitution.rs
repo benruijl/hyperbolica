@@ -21,8 +21,8 @@ fn algebraic_atom_total(value: &Rat, entries: &[AlgebraicLetterEntry]) -> Result
             let Some(variable) = find_var_idx(value.ctx(), atom) else {
                 continue;
             };
-            let numerator_degree = value.numerator().degree(variable)?.max(0);
-            let denominator_degree = value.denominator().degree(variable)?.max(0);
+            let numerator_degree = value.numerator_degree(variable)?.max(0);
+            let denominator_degree = value.denominator_degree(variable)?.max(0);
             total = total
                 .checked_add(numerator_degree)
                 .and_then(|sum| sum.checked_add(denominator_degree))
@@ -46,7 +46,7 @@ pub fn combine_wm_wp_ratios(value: &Rat) -> Result<Rat> {
             continue;
         };
 
-        if current.numerator().degree(wm)? <= 0 || current.denominator().degree(wp)? <= 0 {
+        if current.numerator_degree(wm)? <= 0 || current.denominator_degree(wp)? <= 0 {
             continue;
         }
         let replacement = Rat::from_poly(Poly::generator(value.ctx().clone(), ratio)?)

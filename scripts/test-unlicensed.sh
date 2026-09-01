@@ -20,7 +20,8 @@ done
 cargo test --test atom_api --quiet -- --test-threads=1
 
 # Portable upstream mathematical fixtures are kept in one serial process for
-# the same restricted-mode reason. This includes the Smirnov parser corpus.
+# the same restricted-mode reason. Smirnov ingestion is covered earlier by the
+# library-test loop (`convert::tests`).
 cargo test --test upstream_portable --quiet -- --test-threads=1
 
 # The JSON/CLI compatibility suite is a single serial test that launches each

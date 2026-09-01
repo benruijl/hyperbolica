@@ -33,13 +33,8 @@ fn integer_is_square(value: &Integer) -> bool {
     if value.is_negative() {
         return false;
     }
-    if value == &0 || value == &1 {
-        return true;
-    }
-    value
-        .factor()
-        .into_iter()
-        .all(|(_, exponent)| (&exponent % 2_i64).is_zero())
+    let root = value.root(2);
+    &root * &root == *value
 }
 
 fn rational_is_square(value: &Rational) -> bool {
@@ -50,18 +45,16 @@ fn perfect_square(polynomial: &Poly) -> bool {
     if polynomial.is_zero() {
         return true;
     }
-    polynomial
-        .inner()
-        .factor()
+    let content = polynomial.inner().content();
+    if !rational_is_square(&content) {
+        return false;
+    }
+    let primitive = polynomial.inner().clone().div_coeff(&content);
+    primitive
+        .square_free_factorization()
         .into_iter()
-        .all(|(factor, exponent)| {
-            if exponent % 2 == 0 {
-                true
-            } else if factor.is_constant() {
-                rational_is_square(&factor.get_constant())
-            } else {
-                false
-            }
+        .all(|(factor, multiplicity)| {
+            factor.is_one() || (!factor.is_constant() && multiplicity % 2 == 0)
         })
 }
 

@@ -5,9 +5,12 @@ mod convert_hlog;
 mod expr;
 mod parse;
 
-pub use atom::{AtomExpression, expression_from_atom, expression_from_atom_with_indeterminates};
-pub use convert_hlog::{
-    RegTailExprTerm, convert_to_hlog_reg_inf, convert_to_hlog_reg_inf_hlog, reg_tail_expr,
+#[cfg(test)]
+mod tests;
+
+pub(crate) use atom::{
+    context_from_atom_with_indeterminates, expression_from_atom_with_indeterminates,
 };
-pub use expr::Expr;
-pub use parse::{ParseResult, parse_expression};
+pub(crate) use convert_hlog::convert_to_hlog_reg_inf;
+pub(crate) use expr::Expr;
+pub(crate) use parse::parse_expression;

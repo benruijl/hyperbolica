@@ -15,19 +15,20 @@ pub use contour::close_positive_letters;
 pub(super) use driver::integration_step_core_sym_with_options;
 pub use driver::{
     integration_step, integration_step_sym, integration_step_sym_with_options,
-    integration_step_with_options,
+    integration_step_sym_with_options_and_remaining_variables, integration_step_with_options,
+    integration_step_with_options_and_remaining_variables,
 };
 
 /// One rational coefficient times a shuffle product of words.
 #[derive(Clone, Debug)]
 pub struct ShuffleEntry {
+    /// The complete coefficient for an ordinary entry. Entries built with
+    /// [`Self::from_factored`] keep this at one as an invariant sentinel; the
+    /// complete coefficient then lives in `factored_coefficient` until the
+    /// first partial-fraction step.
     pub coef: Rat,
     pub shuffle: Vec<Word>,
-    /// Optional deferred representation for a bare rational integrand.
-    /// The current Symbolica partial-fraction layer materializes it once at
-    /// the entry boundary; retaining the field keeps the API compatible with
-    /// the stay-factored optimization path.
-    pub factored_den: Option<FactoredRat>,
+    factored_coefficient: Option<FactoredRat>,
 }
 
 impl ShuffleEntry {
@@ -35,8 +36,41 @@ impl ShuffleEntry {
         Self {
             coef,
             shuffle,
-            factored_den: None,
+            factored_coefficient: None,
         }
+    }
+
+    /// Construct an entry whose complete rational coefficient is held in
+    /// deferred denominator blocks.
+    ///
+    /// `coef` is deliberately set to one and is not an additional multiplier.
+    /// Integration rejects an entry if that public sentinel is later changed,
+    /// so the two representations can never be silently combined or one
+    /// silently ignored.
+    pub fn from_factored(coefficient: FactoredRat, shuffle: Vec<Word>) -> Self {
+        Self {
+            coef: Rat::one(coefficient.ctx().clone()),
+            shuffle,
+            factored_coefficient: Some(coefficient),
+        }
+    }
+
+    /// Return the deferred complete coefficient, when this is a factored
+    /// entry. In that case [`Self::coef`] is required to remain one.
+    pub fn factored_coefficient(&self) -> Option<&FactoredRat> {
+        self.factored_coefficient.as_ref()
+    }
+
+    pub(crate) fn materialized_coefficient(&self) -> Result<Rat, Error> {
+        let Some(coefficient) = &self.factored_coefficient else {
+            return Ok(self.coef.clone());
+        };
+        if !self.coef.is_one() {
+            return Err(Error::InvalidInput(
+                "a factored ShuffleEntry requires its `coef` sentinel to remain one".into(),
+            ));
+        }
+        coefficient.materialize()
     }
 }
 
@@ -46,7 +80,7 @@ pub type ShuffleList = Vec<ShuffleEntry>;
 pub struct ShuffleEntrySym {
     pub coef: SymCoef,
     pub shuffle: Vec<Word>,
-    pub factored_den: Option<FactoredRat>,
+    pub(crate) factored_coefficient: Option<FactoredRat>,
 }
 
 impl ShuffleEntrySym {
@@ -54,7 +88,7 @@ impl ShuffleEntrySym {
         Self {
             coef,
             shuffle,
-            factored_den: None,
+            factored_coefficient: None,
         }
     }
 }
