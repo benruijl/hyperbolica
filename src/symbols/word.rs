@@ -4,6 +4,7 @@ use std::hash::{Hash, Hasher};
 use std::ops::{Index, IndexMut};
 
 use crate::core::Rat;
+use crate::symbols::plain_atom_string;
 
 /// A singularity of a hyperlogarithm.
 ///
@@ -65,7 +66,7 @@ impl Word {
             // Format the native Symbolica value, not the compatibility Poly
             // views whose diagnostic context names can differ across two
             // constructors for the same ordered PolyVariable map.
-            key.push_str(&letter.to_atom().to_string());
+            key.push_str(&plain_atom_string(letter.to_atom()));
             key.push('\u{1}');
         }
         key

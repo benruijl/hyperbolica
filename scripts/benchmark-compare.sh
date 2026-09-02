@@ -29,6 +29,8 @@ rust_source=${HYPERBOLICA_SOURCE:-"$repo_root"}
 cpp_source_hint=${HYPERFLINT_CPP_SOURCE:-}
 cpp_cache=${HYPERFLINT_CPP_CMAKE_CACHE:-}
 cpp_build_command=${HYPERFLINT_CPP_BUILD_COMMAND:-external-prebuilt-binary}
+symbolica_source="$repo_root/vendor/symbolica"
+symbolica_git_root=unknown
 
 fail() {
     local message=$1
@@ -114,6 +116,9 @@ if [[ "$mode" == qualification ]]; then
     rust_profile_required=$(jq -er '.requirements.backend_profiles.rust' "$policy")
     cpp_profile_required=$(jq -er '.requirements.backend_profiles.cpp_oracle' "$policy")
     cpp_revision_required=$(jq -er '.requirements.required_cpp_revision' "$policy")
+    symbolica_revision_required=$(jq -er '.requirements.required_symbolica.revision' "$policy")
+    symbolica_branch_required=$(jq -er '.requirements.required_symbolica.branch' "$policy")
+    symbolica_remote_required=$(jq -er '.requirements.required_symbolica.remote' "$policy")
     cpp_build_type_required=$(jq -er '.requirements.required_cpp_cmake.build_type' "$policy")
     cpp_mimalloc_required=$(jq -er '.requirements.required_cpp_cmake.mimalloc' "$policy")
     cpp_openmp_required=$(jq -er '.requirements.required_cpp_cmake.openmp' "$policy")
@@ -178,6 +183,35 @@ if [[ "$mode" == qualification ]]; then
         [[ "$config_directory" == / ]] && break
         config_directory=$(dirname -- "$config_directory")
     done
+
+    # The path dependency is ignored by the parent repository, so a clean root
+    # revision alone does not identify the Symbolica sources being compiled.
+    # Enforce the official clean checkout before building and capture its
+    # independent Git provenance in the Rust build manifest below.
+    "$repo_root/scripts/check-pure-symbolica.sh" ||
+        qualification_fail "the pinned Symbolica source audit failed"
+    symbolica_source=$(realpath "$symbolica_source") ||
+        qualification_fail "the pinned Symbolica checkout is unavailable"
+    symbolica_git_root=$(git -c safe.directory="$symbolica_source" \
+        -C "$symbolica_source" rev-parse --show-toplevel) ||
+        qualification_fail "the pinned Symbolica source is not a Git worktree"
+    symbolica_git_root=$(realpath "$symbolica_git_root") ||
+        qualification_fail "the Symbolica Git worktree root cannot be resolved"
+    [[ "$symbolica_git_root" == "$symbolica_source" ]] ||
+        qualification_fail "vendor/symbolica is not the root of its own Git worktree"
+    symbolica_revision=$(git -c safe.directory="$symbolica_source" \
+        -C "$symbolica_source" rev-parse HEAD)
+    symbolica_branch=$(git -c safe.directory="$symbolica_source" \
+        -C "$symbolica_source" rev-parse --abbrev-ref HEAD)
+    symbolica_remote=$(git -c safe.directory="$symbolica_source" \
+        -C "$symbolica_source" remote get-url origin)
+    [[ "$symbolica_revision" == "$symbolica_revision_required" ]] ||
+        qualification_fail "Symbolica revision $symbolica_revision differs from the locked value $symbolica_revision_required"
+    [[ "$symbolica_branch" == "$symbolica_branch_required" ]] ||
+        qualification_fail "Symbolica branch $symbolica_branch differs from the locked value $symbolica_branch_required"
+    [[ "$symbolica_remote" == "$symbolica_remote_required" ]] ||
+        qualification_fail "Symbolica remote $symbolica_remote differs from the locked value $symbolica_remote_required"
+    symbolica_clean=true
 else
     build_cpp=${build_cpp:-0}
     pairs=${PAIRS:-${ITERATIONS:-4}}
@@ -189,6 +223,21 @@ else
     thresholds=$(
         jq -cn --argjson global "${GLOBAL_UPPER_CI:-1.20}" --argjson tail "${MAX_WORKLOAD_RATIO:-1.50}" --argjson rss "${MAX_RSS_RATIO:-2.00}" '{global_upper_ci:$global,max_workload_ratio:$tail,max_rss_ratio:$rss}'
     )
+    if symbolica_source=$(realpath "$symbolica_source" 2>/dev/null) \
+        && symbolica_git_root=$(git -c safe.directory="$symbolica_source" \
+            -C "$symbolica_source" rev-parse --show-toplevel 2>/dev/null) \
+        && symbolica_git_root=$(realpath "$symbolica_git_root" 2>/dev/null) \
+        && [[ "$symbolica_git_root" == "$symbolica_source" ]]; then
+        symbolica_branch=$(git -c safe.directory="$symbolica_source" \
+            -C "$symbolica_source" rev-parse --abbrev-ref HEAD 2>/dev/null || printf unknown)
+        symbolica_remote=$(git -c safe.directory="$symbolica_source" \
+            -C "$symbolica_source" remote get-url origin 2>/dev/null || printf unknown)
+    else
+        symbolica_source=unknown
+        symbolica_branch=unknown
+        symbolica_remote=unknown
+    fi
+    symbolica_clean=false
 fi
 
 [[ "$pairs" =~ ^[1-9][0-9]*$ ]] || fail "PAIRS must be a positive integer"
@@ -198,7 +247,16 @@ fi
     fail "BOOTSTRAP_SAMPLES must be a positive integer"
 [[ "$seed" =~ ^[0-9]+$ ]] || fail "SEED must be a non-negative integer"
 [[ "$build_cpp" =~ ^[01]$ ]] || fail "BUILD_CPP must be 0 or 1"
-jq -e 'all(.[]; type == "number" and . > 0)' <<<"$thresholds" >/dev/null ||
+jq -e '
+    (.global_upper_ci | type == "number" and . > 0) and
+    (.max_workload_ratio | type == "number" and . > 0) and
+    (.max_rss_ratio | type == "number" and . > 0) and
+    ((.max_rss_ratio_overrides // {}) |
+        type == "object" and all(.[];
+            type == "object" and keys == ["limit", "reason"] and
+            (.limit | type == "number" and . > 0) and
+            (.reason | type == "string" and length > 0)))
+' <<<"$thresholds" >/dev/null ||
     fail "performance thresholds must be positive JSON numbers"
 
 taskset_bin=
@@ -230,6 +288,25 @@ if [[ "$build_rust" == 1 ]]; then
     fi
 fi
 
+if [[ "$mode" == qualification ]]; then
+    "$repo_root/scripts/check-pure-symbolica.sh" ||
+        qualification_fail "the post-build Symbolica source audit failed"
+    symbolica_revision_after=$(git -c safe.directory="$symbolica_source" \
+        -C "$symbolica_source" rev-parse HEAD)
+    symbolica_branch_after=$(git -c safe.directory="$symbolica_source" \
+        -C "$symbolica_source" rev-parse --abbrev-ref HEAD)
+    symbolica_remote_after=$(git -c safe.directory="$symbolica_source" \
+        -C "$symbolica_source" remote get-url origin)
+    symbolica_git_root_after=$(git -c safe.directory="$symbolica_source" \
+        -C "$symbolica_source" rev-parse --show-toplevel)
+    symbolica_git_root_after=$(realpath "$symbolica_git_root_after")
+    [[ "$symbolica_revision_after" == "$symbolica_revision" \
+        && "$symbolica_branch_after" == "$symbolica_branch" \
+        && "$symbolica_remote_after" == "$symbolica_remote" \
+        && "$symbolica_git_root_after" == "$symbolica_git_root" ]] ||
+        qualification_fail "the Symbolica checkout changed during the Rust build"
+fi
+
 resolve_executable() {
     local selected=$1
     local resolved
@@ -243,7 +320,7 @@ resolve_executable() {
 }
 
 without_symbolica_license() {
-    env -u SYMBOLICA_LICENSE -- "$@"
+    env -u SYMBOLICA_LICENSE -u SYMBOLICA_LICENSE_SERVER -- "$@"
 }
 
 rust_bin=$(resolve_executable "$rust_bin") ||
@@ -298,9 +375,11 @@ git_revision() {
     local source=$1
     local revision
     if [[ "$source" != unknown ]] &&
-        git -C "$source" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-        revision=$(git -C "$source" rev-parse HEAD)
-        if [[ -n $(git -C "$source" status --porcelain --untracked-files=normal) ]]; then
+        git -c safe.directory="$source" -C "$source" \
+            rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+        revision=$(git -c safe.directory="$source" -C "$source" rev-parse HEAD)
+        if [[ -n $(git -c safe.directory="$source" -C "$source" \
+            status --porcelain --untracked-files=normal) ]]; then
             revision="$revision-dirty"
         fi
         printf '%s\n' "$revision"
@@ -311,6 +390,16 @@ git_revision() {
 
 rust_revision=${RUST_REVISION:-$(git_revision "$rust_source")}
 cpp_revision=${CPP_REVISION:-$(git_revision "$cpp_source")}
+if [[ "$mode" != qualification ]]; then
+    if [[ "$symbolica_git_root" == "$symbolica_source" ]]; then
+        symbolica_revision=$(git_revision "$symbolica_source")
+    else
+        symbolica_revision=unknown
+    fi
+    if [[ "$symbolica_revision" =~ ^([0-9a-f]{40}|[0-9a-f]{64})$ ]]; then
+        symbolica_clean=true
+    fi
+fi
 
 if [[ "$mode" == qualification ]]; then
     [[ "$rust_profile_required" == release-lto ]] ||
@@ -448,11 +537,19 @@ rust_manifest_args=(
     --arg command "$rust_build_command"
     --arg rustc "$(rustc --version 2>/dev/null || printf unavailable)"
     --arg cargo "$("$cargo_bin" --version 2>/dev/null || printf unavailable)"
+    --arg symbolica_source "$symbolica_source"
+    --arg symbolica_revision "$symbolica_revision"
+    --arg symbolica_branch "$symbolica_branch"
+    --arg symbolica_remote "$symbolica_remote"
+    --argjson symbolica_clean "$symbolica_clean"
     --argjson built_by_driver "$build_rust"
 )
 jq -n "${rust_manifest_args[@]}" '{schema:1,source:$source,source_revision:$revision,binary:$binary,
       binary_sha256:$binary_sha256,profile:$profile,command:$command,
-      built_by_driver:($built_by_driver == 1),tools:{rustc:$rustc,cargo:$cargo}}' >"$rust_manifest"
+      built_by_driver:($built_by_driver == 1),tools:{rustc:$rustc,cargo:$cargo},
+      symbolica:{source:$symbolica_source,revision:$symbolica_revision,
+                 branch:$symbolica_branch,remote:$symbolica_remote,
+                 clean:$symbolica_clean}}' >"$rust_manifest"
 cpp_manifest_args=(
     --arg source "$cpp_source"
     --arg revision "$cpp_revision"
@@ -574,6 +671,11 @@ metadata_args=(
     --arg rust_manifest "$rust_manifest"
     --arg rust_manifest_sha256 "$rust_manifest_sha256"
     --argjson rust_built_by_driver "$build_rust"
+    --arg symbolica_source "$symbolica_source"
+    --arg symbolica_revision "$symbolica_revision"
+    --arg symbolica_branch "$symbolica_branch"
+    --arg symbolica_remote "$symbolica_remote"
+    --argjson symbolica_clean "$symbolica_clean"
     --arg cpp_binary "$cpp_bin"
     --arg cpp_sha256 "$cpp_sha256"
     --arg cpp_source "$cpp_source"
@@ -625,7 +727,12 @@ jq -n "${metadata_args[@]}" '{
             build:{source_revision:$rust_revision,profile:"release-lto",
                    command:$rust_command,manifest:$rust_manifest,
                    manifest_sha256:$rust_manifest_sha256,
-                   built_by_driver:($rust_built_by_driver == 1)}},
+                   built_by_driver:($rust_built_by_driver == 1),
+                   symbolica:{source:$symbolica_source,
+                              revision:$symbolica_revision,
+                              branch:$symbolica_branch,
+                              remote:$symbolica_remote,
+                              clean:$symbolica_clean}}},
       cpp_oracle:{binary:$cpp_binary,binary_sha256:$cpp_sha256,source:$cpp_source,
                   revision:$cpp_revision,
                   build:{source_revision:$cpp_revision,profile:$cpp_profile,
@@ -825,7 +932,7 @@ run_checked() {
 
 for ((round = 0; round < warmup; round++)); do
     while IFS= read -r index; do
-        if ((((round + index)) % 2 == 0)); then
+        if (((round + index) % 2 == 0)); then
             first=cpp
             second=rust
         else
@@ -849,7 +956,7 @@ printf 'paired measurement (pairs=%d warmup=%d threads=%d mode=%s)\n' "$pairs" "
 for ((pair = 0; pair < max_pairs; pair++)); do
     while IFS= read -r index; do
         ((pair < pair_counts[index])) || continue
-        if ((((pair + index)) % 2 == 0)); then
+        if (((pair + index) % 2 == 0)); then
             first=cpp
             second=rust
         else

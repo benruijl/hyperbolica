@@ -71,16 +71,7 @@ if ! rg -q \
 fi
 
 symbolica_checkout="$repo_root/vendor/symbolica"
-symbolica_patch="$repo_root/vendor/symbolica-dev_poly.patch"
-symbolica_revision=76e3eb630abcc4d597463d759a0b40fedb57b764
-symbolica_diff_command=(
-    git -C "$symbolica_checkout"
-    -c diff.noprefix=false
-    -c diff.mnemonicPrefix=false
-    diff --binary --no-ext-diff --no-color --full-index --no-renames
-    --src-prefix=a/ --dst-prefix=b/ --diff-algorithm=myers
-    --no-indent-heuristic --unified=3 HEAD
-)
+symbolica_revision=0b57776bf911faeea7e28ea133706fb03740ffeb
 
 if [[ ! -d "$symbolica_checkout/.git" ]]; then
     echo "pure-Symbolica gate: vendor/symbolica is not a Git checkout" >&2
@@ -88,9 +79,9 @@ if [[ ! -d "$symbolica_checkout/.git" ]]; then
 fi
 if [[ $(git -C "$symbolica_checkout" remote get-url origin) \
         != https://github.com/symbolica-dev/symbolica.git \
-    || $(git -C "$symbolica_checkout" rev-parse --abbrev-ref HEAD) != dev_poly \
+    || $(git -C "$symbolica_checkout" rev-parse --abbrev-ref HEAD) != dev \
     || $(git -C "$symbolica_checkout" rev-parse HEAD) != "$symbolica_revision" ]]; then
-    echo "pure-Symbolica gate: vendor/symbolica is not the audited dev_poly revision" >&2
+    echo "pure-Symbolica gate: vendor/symbolica is not the audited dev revision" >&2
     exit 1
 fi
 mapfile -t symbolica_untracked < <(
@@ -101,11 +92,20 @@ if [[ ${#symbolica_untracked[@]} -ne 0 ]]; then
     printf 'untracked Symbolica file: %s\n' "${symbolica_untracked[@]}" >&2
     exit 1
 fi
-if ! cmp -s \
-    <("${symbolica_diff_command[@]}") \
-    "$symbolica_patch"; then
-    echo "pure-Symbolica gate: the Symbolica checkout does not match the recorded patch" >&2
+if ! git -C "$symbolica_checkout" diff --quiet --ignore-submodules -- \
+    || ! git -C "$symbolica_checkout" diff --cached --quiet --ignore-submodules --; then
+    echo "pure-Symbolica gate: vendor/symbolica has tracked local changes" >&2
     exit 1
 fi
 
-echo "pure-Symbolica gate: dependency graphs, source imports, special symbols, and the dev_poly checkout are clean"
+for integrated_commit in \
+    4fd8443c \
+    b8fa6b53; do
+    if ! git -C "$symbolica_checkout" merge-base --is-ancestor \
+        "$integrated_commit" HEAD; then
+        echo "pure-Symbolica gate: required upstream commit $integrated_commit is absent" >&2
+        exit 1
+    fi
+done
+
+echo "pure-Symbolica gate: dependency graphs, source imports, special symbols, and the dev checkout are clean"

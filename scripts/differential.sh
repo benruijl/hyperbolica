@@ -41,16 +41,22 @@ cleanup() {
 trap cleanup EXIT
 
 run_backend() {
-    local executable=$1
-    local request=$2
-    local stdout_path=$3
-    local stderr_path=$4
+    local backend=$1
+    local executable=$2
+    local request=$3
+    local stdout_path=$4
+    local stderr_path=$5
     local -a command=("$executable" eval-json)
+    local -a environment=(env)
+    if [[ "$backend" == cpp ]]; then
+        environment+=(-u SYMBOLICA_LICENSE -u SYMBOLICA_LICENSE_SERVER)
+    fi
+    environment+=(SYMBOLICA_HIDE_BANNER=1)
     if command -v timeout >/dev/null 2>&1; then
         command=(timeout "$timeout_seconds" "${command[@]}")
     fi
     printf '%s\n' "$request" |
-        env SYMBOLICA_HIDE_BANNER=1 "${command[@]}" >"$stdout_path" 2>"$stderr_path"
+        "${environment[@]}" "${command[@]}" >"$stdout_path" 2>"$stderr_path"
 }
 
 passed=0
@@ -71,6 +77,8 @@ while IFS= read -r fixture || [[ -n "$fixture" ]]; do
     ignored=$(jq -c '.ignore // []' <<<"$fixture")
     ignored_recursive=$(jq -c '.ignore_recursive // []' <<<"$fixture")
     reason=$(jq -r '.reason // ""' <<<"$fixture")
+    semantic_fields=$(jq -c '.semantic_fields // []' <<<"$fixture")
+    semantic_variables=$(jq -c '.request.vars // []' <<<"$fixture")
     permutation_field=$(jq -r '.permutation_field // ""' <<<"$fixture")
     permutation_values=$(jq -c '.permutation_values // []' <<<"$fixture")
     rust_out="$scratch/${line_number}.rust.json"
@@ -78,13 +86,13 @@ while IFS= read -r fixture || [[ -n "$fixture" ]]; do
     rust_err="$scratch/${line_number}.rust.stderr"
     cpp_err="$scratch/${line_number}.cpp.stderr"
 
-    if ! run_backend "$rust_bin" "$request" "$rust_out" "$rust_err"; then
+    if ! run_backend rust "$rust_bin" "$request" "$rust_out" "$rust_err"; then
         echo "[FAIL] $name: Rust backend failed" >&2
         sed -n '1,20p' "$rust_err" >&2
         failed=$((failed + 1))
         continue
     fi
-    if ! run_backend "$cpp_bin" "$request" "$cpp_out" "$cpp_err"; then
+    if ! run_backend cpp "$cpp_bin" "$request" "$cpp_out" "$cpp_err"; then
         echo "[FAIL] $name: C++ oracle failed" >&2
         sed -n '1,20p' "$cpp_err" >&2
         failed=$((failed + 1))
@@ -116,16 +124,42 @@ while IFS= read -r fixture || [[ -n "$fixture" ]]; do
         normalized)
             not_byte_comparable=$((not_byte_comparable + 1))
             echo "[INFO] $name is not byte-comparable: $reason"
-            if cmp -s \
-                <(hf_normalize_response "$rust_out" "$ignored" "$ignored_recursive") \
-                <(hf_normalize_response "$cpp_out" "$ignored" "$ignored_recursive"); then
+            rust_compare="$scratch/${line_number}.rust.normalized.json"
+            cpp_compare="$scratch/${line_number}.cpp.normalized.json"
+            if ! hf_normalize_response "$rust_out" "$ignored" "$ignored_recursive" \
+                    >"$rust_compare" ||
+                ! hf_normalize_response "$cpp_out" "$ignored" "$ignored_recursive" \
+                    >"$cpp_compare"; then
+                echo "[FAIL normalized] $name: response normalization failed" >&2
+                failed=$((failed + 1))
+            elif cmp -s "$rust_compare" "$cpp_compare"; then
                 echo "[PASS normalized] $name"
                 passed=$((passed + 1))
             else
                 echo "[FAIL normalized] $name" >&2
-                diff -u \
-                    <(hf_normalize_response "$cpp_out" "$ignored" "$ignored_recursive" | jq .) \
-                    <(hf_normalize_response "$rust_out" "$ignored" "$ignored_recursive" | jq .) >&2 || true
+                diff -u <(jq . "$cpp_compare") <(jq . "$rust_compare") >&2 || true
+                failed=$((failed + 1))
+            fi
+            ;;
+        semantic)
+            not_byte_comparable=$((not_byte_comparable + 1))
+            echo "[INFO] $name uses semantic Atom comparison: $reason"
+            rust_compare="$scratch/${line_number}.rust.semantic.json"
+            cpp_compare="$scratch/${line_number}.cpp.semantic.json"
+            if ! hf_semantic_response "$rust_out" "$ignored" "$ignored_recursive" \
+                    "$semantic_fields" "$semantic_variables" "$rust_bin" \
+                    >"$rust_compare" ||
+                ! hf_semantic_response "$cpp_out" "$ignored" "$ignored_recursive" \
+                    "$semantic_fields" "$semantic_variables" "$rust_bin" \
+                    >"$cpp_compare"; then
+                echo "[FAIL semantic] $name: Atom canonicalization failed" >&2
+                failed=$((failed + 1))
+            elif cmp -s "$rust_compare" "$cpp_compare"; then
+                echo "[PASS semantic] $name"
+                passed=$((passed + 1))
+            else
+                echo "[FAIL semantic] $name" >&2
+                diff -u <(jq . "$cpp_compare") <(jq . "$rust_compare") >&2 || true
                 failed=$((failed + 1))
             fi
             ;;

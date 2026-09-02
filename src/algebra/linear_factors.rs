@@ -43,9 +43,15 @@ pub struct NonlinearFactor {
 /// in HyperFLINT, it can depend on variables other than `x`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LinearFactorization {
+    /// Exact reconstruction coefficient, including every extracted linear
+    /// factor's leading coefficient.
     pub constant: Poly,
     pub linear: Vec<LinearFactor>,
     pub nonlinear: Vec<NonlinearFactor>,
+    /// HyperFLINT's legacy wire `constant`: factorization content plus bases
+    /// independent of the selected variable, but excluding leading
+    /// coefficients stripped while reporting poles.
+    pub(crate) legacy_constant: Poly,
 }
 
 /// Factor `polynomial` with Symbolica and classify its factors by degree in
@@ -74,6 +80,7 @@ pub fn linear_factors_with_options(
 
     let factorization = polynomial.factor();
     let mut constant = Poly::from_rational(polynomial.ctx().clone(), factorization.constant);
+    let mut legacy_constant = constant.clone();
     let mut linear = Vec::new();
     let mut nonlinear = Vec::new();
 
@@ -82,6 +89,7 @@ pub fn linear_factors_with_options(
         match degree_in_var {
             0 => {
                 constant = constant.try_mul(&factor.pow(multiplicity))?;
+                legacy_constant = legacy_constant.try_mul(&factor.pow(multiplicity))?;
             }
             1 => {
                 let constant_coefficient = factor.coefficient_of(variable, 0)?;
@@ -132,6 +140,7 @@ pub fn linear_factors_with_options(
         constant,
         linear,
         nonlinear,
+        legacy_constant,
     })
 }
 
@@ -187,6 +196,10 @@ mod tests {
         let factors = linear_factors(&polynomial, 0).unwrap();
         assert_eq!(factors.linear.len(), 2);
         assert_eq!(factors.nonlinear.len(), 1);
+        assert_eq!(
+            factors.legacy_constant,
+            Poly::parse(ctx.clone(), "y+1").unwrap()
+        );
 
         let rational_pole = factors
             .linear

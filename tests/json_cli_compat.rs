@@ -70,8 +70,143 @@ fn string_array(value: &Value) -> Vec<String> {
         .collect()
 }
 
+fn minimal_dispatch_requests() -> Vec<Value> {
+    vec![
+        json!({"op": "add", "a": "x", "b": "1", "vars": ["x"]}),
+        json!({
+            "op": "algebraic_letters_allocate",
+            "polynomial": "x^2+1",
+            "var": "x",
+            "vars": ["x"],
+        }),
+        json!({"op": "algebraic_letters_clear"}),
+        json!({"op": "algebraic_letters_show"}),
+        json!({"op": "back_substitute", "expr": "x", "vars": ["x"]}),
+        json!({
+            "op": "break_up_contour_sym",
+            "wl": [],
+            "on_axis": [],
+            "vars": ["x"],
+        }),
+        json!({"op": "collect_words", "wl": [], "vars": ["x"]}),
+        json!({
+            "op": "combine_wm_wp_ratios",
+            "expr": "x",
+            "vars": ["x"],
+        }),
+        json!({"op": "concat_mul", "a": [], "b": [], "vars": ["x"]}),
+        json!({"op": "convert_1inf_to_01", "wl": [], "vars": ["x"]}),
+        json!({
+            "op": "convert_ab_to_zero_inf",
+            "A": "0",
+            "B": "1",
+            "wl": [],
+            "vars": ["x"],
+        }),
+        json!({
+            "op": "derivative",
+            "a": "x^2",
+            "var": "x",
+            "vars": ["x"],
+        }),
+        json!({
+            "op": "differentiate_wordlist",
+            "wl": [],
+            "var": "x",
+            "vars": ["x"],
+        }),
+        json!({
+            "op": "diff_hlog",
+            "z": "x",
+            "word": [],
+            "var": "x",
+            "vars": ["x"],
+        }),
+        json!({
+            "op": "diff_mpl",
+            "ns": [1],
+            "zs": ["x"],
+            "var": "x",
+            "vars": ["x"],
+        }),
+        json!({"op": "divexact", "a": "x^2", "b": "x", "vars": ["x"]}),
+        json!({"op": "eval", "a": "x+1", "values": ["2"], "vars": ["x"]}),
+        json!({"op": "expand_inf_word", "word": [], "min_order": 0}),
+        json!({"op": "expand_zero_word", "word": [], "min_order": 0}),
+        json!({
+            "op": "find_lr_orders_scan",
+            "xvars": ["x"],
+            "groups": [["x"]],
+            "exps": [[[-1, 0]]],
+        }),
+        json!({
+            "op": "hlog_series",
+            "arg": "1",
+            "word": [],
+            "var": "x",
+            "order": 0,
+            "vars": ["x"],
+        }),
+        json!({
+            "op": "hlog_zero_expand",
+            "arg": "x",
+            "word": [],
+            "order": 0,
+            "vars": ["x"],
+        }),
+        json!({
+            "op": "mpl_series",
+            "ns": [],
+            "zs": [],
+            "var": "x",
+            "order": 0,
+            "vars": ["x"],
+        }),
+        json!({"op": "mpl_sum", "ns": [1], "zs": ["x"], "max_n": 1}),
+        json!({"op": "neg", "a": "x", "vars": ["x"]}),
+        json!({"op": "pole_degree", "f": "1/x^2", "var": "x", "vars": ["x"]}),
+        json!({"op": "rat_div", "a": "x", "b": "x+1", "vars": ["x"]}),
+        json!({"op": "rat_residue", "f": "1/x", "var": "x", "vars": ["x"]}),
+        json!({"op": "reg0", "wl": [], "vars": ["x"]}),
+        json!({"op": "reg_head", "wl": [], "vars": ["x"]}),
+        json!({"op": "reg_tail", "wl": [], "vars": ["x"]}),
+        json!({"op": "regzero_word", "word": [], "vars": ["x"]}),
+        json!({"op": "shuffle_product", "a": [], "b": [], "vars": ["x"]}),
+        json!({"op": "shuffle_symbolic", "a": [], "b": [], "vars": ["x"]}),
+        json!({
+            "op": "simplify_with_vieta",
+            "expr": "x",
+            "vars": ["x"],
+        }),
+        json!({"op": "sub", "a": "x", "b": "1", "vars": ["x"]}),
+        json!({
+            "op": "sym_arith",
+            "mode": "add",
+            "a": [{"prefactor": "1"}],
+            "b": [{"prefactor": "2"}],
+            "vars": ["x"],
+        }),
+        json!({"op": "zero_inf_period", "word": [], "vars": ["x"]}),
+        json!({"op": "zero_one_period", "word": [], "vars": ["x"]}),
+    ]
+}
+
 #[test]
 fn representative_json_cli_schemas_are_stable() {
+    // Keep a minimal valid request for every dispatch arm that is not already
+    // exercised by a more specific JSON assertion below. This table is about
+    // transport parsing and routing; kernel behavior has focused unit tests.
+    let minimal_requests = minimal_dispatch_requests();
+    assert_eq!(minimal_requests.len(), 39);
+    let minimal_operations = minimal_requests
+        .iter()
+        .map(|request| request["op"].as_str().expect("operation string"))
+        .collect::<BTreeSet<_>>();
+    assert_eq!(minimal_operations.len(), minimal_requests.len());
+    for request in minimal_requests {
+        eval(&request);
+    }
+
     // Polynomial/rational algebra: compare values algebraically so harmless
     // printer changes do not turn the integration test into a snapshot test.
     let product = eval(&json!({

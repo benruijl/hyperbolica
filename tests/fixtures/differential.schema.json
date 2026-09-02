@@ -11,7 +11,7 @@
       "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]*$"
     },
     "compare": {
-      "enum": ["byte", "normalized"]
+      "enum": ["byte", "normalized", "semantic"]
     },
     "request": {
       "type": "object",
@@ -33,6 +33,12 @@
       "uniqueItems": true
     },
     "reason": {"type": "string", "minLength": 1},
+    "semantic_fields": {
+      "type": "array",
+      "items": {"type": "string", "minLength": 1},
+      "minItems": 1,
+      "uniqueItems": true
+    },
     "permutation_field": {"type": "string", "minLength": 1},
     "permutation_values": {
       "type": "array",
@@ -53,6 +59,7 @@
           {"required": ["ignore"]},
           {"required": ["ignore_recursive"]},
           {"required": ["reason"]},
+          {"required": ["semantic_fields"]},
           {"required": ["permutation_field"]},
           {"required": ["permutation_values"]}
         ]
@@ -60,7 +67,31 @@
     },
     {
       "required": ["ignore", "reason"],
-      "properties": {"compare": {"const": "normalized"}}
+      "properties": {"compare": {"const": "normalized"}},
+      "not": {"required": ["semantic_fields"]}
+    },
+    {
+      "required": ["reason", "semantic_fields"],
+      "properties": {
+        "compare": {"const": "semantic"},
+        "request": {
+          "required": ["op", "vars"],
+          "properties": {
+            "vars": {
+              "type": "array",
+              "items": {"type": "string", "minLength": 1},
+              "minItems": 1,
+              "uniqueItems": true
+            }
+          }
+        }
+      },
+      "not": {
+        "anyOf": [
+          {"required": ["permutation_field"]},
+          {"required": ["permutation_values"]}
+        ]
+      }
     }
   ]
 }

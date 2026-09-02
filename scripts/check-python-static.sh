@@ -13,7 +13,7 @@ else
     exit 1
 fi
 
-"$python_bin" - hyperbolica.pyi tests/python_smoke.py tests/python_licensed.py tests/python_pickle_roundtrip.py tests/python_typing.py tests/test_benchmark_evidence.py <<'PY'
+"$python_bin" - hyperbolica.pyi tests/python_smoke.py tests/python_licensed.py tests/python_pickle_roundtrip.py tests/python_typing.py tests/test_benchmark_evidence.py tests/test_local_stage.py <<'PY'
 import ast
 from pathlib import Path
 import sys
@@ -28,7 +28,7 @@ PY
 # This suite is CAS- and license-independent. Keep the qualification driver,
 # process measurement, statistics, artifact hashing, and policy verifier wired
 # into the ordinary repository gate rather than relying on implicit discovery.
-"$python_bin" -m unittest tests.test_benchmark_evidence
+"$python_bin" -m unittest tests.test_benchmark_evidence tests.test_local_stage
 
 "$python_bin" - <<'PY'
 from pathlib import Path

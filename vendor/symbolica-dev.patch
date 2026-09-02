@@ -1,0 +1,466 @@
+diff --git a/src/domains/rational_polynomial.rs b/src/domains/rational_polynomial.rs
+index 8f2fb2955b43b1f9e57851c5554aa5d05bb09308..c2893a27951e6988939274c59ec56710c018af91 100644
+--- a/src/domains/rational_polynomial.rs
++++ b/src/domains/rational_polynomial.rs
+@@ -541,18 +541,27 @@ where
+         if e > u32::MAX as u64 {
+             panic!("Power of exponentiation is larger than 2^32: {e}");
+         }
+-        let e = e as u32;
+ 
+-        // TODO: do binary exponentiation
+-        let mut poly = RationalPolynomial {
++        let mut exponent = e as u32;
++        let mut result = RationalPolynomial {
+             numerator: self.numerator.one(),
+             denominator: self.denominator.one(),
+         };
++        if exponent == 0 {
++            return result;
++        }
+ 
+-        for _ in 0..e {
+-            poly = &poly * self;
++        let mut base = self.clone();
++        while exponent > 0 {
++            if exponent & 1 == 1 {
++                result = &result * &base;
++            }
++            exponent >>= 1;
++            if exponent > 0 {
++                base = &base * &base;
++            }
+         }
+-        poly
++        result
+     }
+ 
+     pub fn gcd(&self, other: &Self) -> Self {
+@@ -876,23 +885,7 @@ where
+     }
+ 
+     fn pow(&self, b: &Self::Element, e: u64) -> Self::Element {
+-        if e > u32::MAX as u64 {
+-            panic!("Power of exponentiation is larger than 2^32: {e}");
+-        }
+-        let e = e as u32;
+-
+-        // TODO: do binary exponentiation
+-        let mut poly = RationalPolynomial {
+-            numerator: b.numerator.zero(),
+-            denominator: b.denominator.zero(),
+-        };
+-        poly.numerator = poly.numerator.add_constant(self.ring.one());
+-        poly.denominator = poly.denominator.add_constant(self.ring.one());
+-
+-        for _ in 0..e {
+-            poly = self.mul(&poly, b);
+-        }
+-        poly
++        b.pow(e)
+     }
+ 
+     fn is_zero(&self, a: &Self::Element) -> bool {
+diff --git a/src/lib.rs b/src/lib.rs
+index 03e3dabe5e42769e8eacb945bfa80353f27930ca..ff9a96a42e352bd236242fdfabad49b3e0ab42a8 100644
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -156,7 +156,7 @@ pub mod prelude {
+ 
+     pub use crate::poly::{
+         CoefficientToExpression, Exponent, GrevLexOrder, IntoVariableMap, LexOrder, MonomialOrder,
+-        PolyVariable, PositiveExponent,
++        PolyVariable, PolynomialResultant, PositiveExponent,
+         factor::Factorize,
+         gcd::PolynomialGCD,
+         groebner::{
+diff --git a/src/poly.rs b/src/poly.rs
+index 7d8bab8a3621146ec2917cb54a37f6f5b2425471..ef98b43b339f4a96e6c06c560c468b22722413ca 100644
+--- a/src/poly.rs
++++ b/src/poly.rs
+@@ -5,6 +5,7 @@ pub mod gcd;
+ pub mod groebner;
+ pub mod polynomial;
+ mod resultant;
++pub use resultant::PolynomialResultant;
+ pub mod series;
+ pub mod univariate;
+ 
+diff --git a/src/poly/resultant.rs b/src/poly/resultant.rs
+index f25689ebc7128576d8f1d718c3eccaa7b799ad3c..d6c126b729c2a63e741d2d4402baf5f0eb0a85be 100644
+--- a/src/poly/resultant.rs
++++ b/src/poly/resultant.rs
+@@ -6,11 +6,56 @@ use crate::domains::rational::{Q, Rational, RationalField};
+ use crate::domains::{EuclideanDomain, Field, Ring};
+ 
+ use super::PositiveExponent;
++use super::gcd::PolynomialGCD;
+ use super::polynomial::{MultivariatePolynomial, PolynomialRing};
+ use super::univariate::UnivariatePolynomial;
+ 
+ const RESULTANT_CRT_PRIME_BLOCK: u64 = 1 << 30;
+ const RESULTANT_CRT_VERIFICATION_PRIMES: usize = 2;
++const RATIONAL_RESULTANT_CRT_TERM_PRODUCT_GUARD: usize = 2_000;
++
++#[derive(Clone, Copy, Debug, Eq, PartialEq)]
++enum RationalResultantAlgorithm {
++    IntegerDucos,
++    Crt,
++}
++
++fn select_rational_resultant_algorithm(
++    left_terms: usize,
++    right_terms: usize,
++) -> RationalResultantAlgorithm {
++    if left_terms.saturating_mul(right_terms) > RATIONAL_RESULTANT_CRT_TERM_PRODUCT_GUARD {
++        RationalResultantAlgorithm::Crt
++    } else {
++        RationalResultantAlgorithm::IntegerDucos
++    }
++}
++
++/// Coefficient-domain dispatch for multivariate polynomial resultants.
++///
++/// Implementations own the projection to the elimination variable and the
++/// representation- and domain-specific algorithm choice, just as
++/// [`PolynomialGCD`] owns multivariate GCD selection. The default uses the
++/// generic Lazard-Ducos recurrence; domains that need a different plan opt in
++/// explicitly instead of relying on overlapping blanket implementations.
++/// In particular, there is intentionally no blanket implementation for all
++/// fields: on stable Rust it would overlap coefficient-domain overrides such
++/// as the rational integer-associate/CRT selector.
++pub trait PolynomialResultant<E: PositiveExponent>: EuclideanDomain + PolynomialGCD<E> {
++    fn resultant(
++        left: &MultivariatePolynomial<Self, E>,
++        right: &MultivariatePolynomial<Self, E>,
++        variable: usize,
++    ) -> MultivariatePolynomial<Self, E>
++    where
++        Self: Sized,
++    {
++        left.to_univariate(variable)
++            .resultant(&right.to_univariate(variable))
++    }
++}
++
++impl<E: PositiveExponent> PolynomialResultant<E> for IntegerRing {}
+ 
+ impl<F: Ring> UnivariatePolynomial<F> {
+     /// Handle resultants for zero, constant, linear, and two quadratic inputs
+@@ -733,6 +778,66 @@ impl<E: PositiveExponent> UnivariatePolynomial<PolynomialRing<IntegerRing, E>> {
+ }
+ 
+ impl<E: PositiveExponent> UnivariatePolynomial<PolynomialRing<RationalField, E>> {
++    /// Compute a rational-coefficient resultant using a coefficient-domain
++    /// specific plan.
++    ///
++    /// Both paths clear rational denominators and integer content once. Small
++    /// and ordinary inputs use Lazard-Ducos over primitive integer associates;
++    /// inputs beyond the current term-product guard use modular images with CRT
++    /// reconstruction. The guard is deliberately internal so callers do not
++    /// have to reproduce representation-specific dispatch policy.
++    pub fn resultant_auto(&self, other: &Self) -> MultivariatePolynomial<RationalField, E> {
++        let self_terms = self.coefficients.iter().fold(0usize, |sum, coefficient| {
++            sum.saturating_add(coefficient.nterms())
++        });
++        let other_terms = other.coefficients.iter().fold(0usize, |sum, coefficient| {
++            sum.saturating_add(coefficient.nterms())
++        });
++
++        match select_rational_resultant_algorithm(self_terms, other_terms) {
++            RationalResultantAlgorithm::IntegerDucos => self.resultant_ducos_integer(other),
++            RationalResultantAlgorithm::Crt => self.resultant_crt(other),
++        }
++    }
++
++    /// Clear rational denominators and integer content once, compute the
++    /// primitive integer resultant with the Lazard-Ducos recurrence, and
++    /// restore the overall rational scale.
++    ///
++    /// For `self = (c_a / d_a) A` and `other = (c_b / d_b) B`, with primitive
++    /// integer polynomials `A` and `B`, homogeneity of the resultant gives
++    ///
++    /// `Res(self, other) = (c_a / d_a)^deg(other)
++    ///                     (c_b / d_b)^deg(self) Res(A, B)`.
++    ///
++    /// This avoids repeated rational normalization inside the direct Ducos
++    /// recurrence. Inputs whose exact integer recurrence suffers coefficient
++    /// swell may be better served by [`Self::resultant_crt`].
++    pub fn resultant_ducos_integer(
++        &self,
++        other: &Self,
++    ) -> MultivariatePolynomial<RationalField, E> {
++        if let Some(resultant) = self.resultant_small(other) {
++            return resultant;
++        }
++
++        let self_degree = self.degree() as u64;
++        let other_degree = other.degree() as u64;
++        let (self_integer, self_content, self_denominator) = self.primitive_integer_associate();
++        let (other_integer, other_content, other_denominator) = other.primitive_integer_associate();
++
++        let numerator_scale = &self_content.pow(other_degree) * &other_content.pow(self_degree);
++        let denominator_scale =
++            &self_denominator.pow(other_degree) * &other_denominator.pow(self_degree);
++
++        self_integer.resultant(&other_integer).map_coeff(
++            |coefficient| {
++                Rational::from((coefficient * &numerator_scale, denominator_scale.clone()))
++            },
++            Q,
++        )
++    }
++
+     /// Clear rational denominators, compute the integer resultant with modular
+     /// Ducos images and CRT reconstruction, and restore the overall scale.
+     pub fn resultant_crt(&self, other: &Self) -> MultivariatePolynomial<RationalField, E> {
+@@ -740,26 +845,60 @@ impl<E: PositiveExponent> UnivariatePolynomial<PolynomialRing<RationalField, E>>
+             return resultant;
+         }
+ 
+-        let self_denominator = self.coefficient_denominator_lcm();
+-        let other_denominator = other.coefficient_denominator_lcm();
+-        let integer_ring = PolynomialRing::new(Z);
+-        let self_integer = self.map_coeff(
+-            |polynomial| Self::clear_coefficient_denominators(polynomial, &self_denominator),
+-            integer_ring.clone(),
+-        );
+-        let other_integer = other.map_coeff(
+-            |polynomial| Self::clear_coefficient_denominators(polynomial, &other_denominator),
+-            integer_ring,
+-        );
++        let self_degree = self.degree() as u64;
++        let other_degree = other.degree() as u64;
++        let (self_integer, self_content, self_denominator) = self.primitive_integer_associate();
++        let (other_integer, other_content, other_denominator) = other.primitive_integer_associate();
++        let numerator_scale = &self_content.pow(other_degree) * &other_content.pow(self_degree);
++        let denominator_scale =
++            &self_denominator.pow(other_degree) * &other_denominator.pow(self_degree);
+ 
+-        let scale = &self_denominator.pow(other.degree() as u64)
+-            * &other_denominator.pow(self.degree() as u64);
+         self_integer.resultant_crt(&other_integer).map_coeff(
+-            |coefficient| Rational::from((coefficient.clone(), scale.clone())),
++            |coefficient| {
++                Rational::from((coefficient * &numerator_scale, denominator_scale.clone()))
++            },
+             Q,
+         )
+     }
+ 
++    fn primitive_integer_associate(
++        &self,
++    ) -> (
++        UnivariatePolynomial<PolynomialRing<IntegerRing, E>>,
++        Integer,
++        Integer,
++    ) {
++        let denominator = self.coefficient_denominator_lcm();
++        let integer_ring = PolynomialRing::new(Z);
++        let mut primitive = self.map_coeff(
++            |polynomial| Self::clear_coefficient_denominators(polynomial, &denominator),
++            integer_ring,
++        );
++
++        let mut content = Integer::zero();
++        for polynomial in &primitive.coefficients {
++            for coefficient in &polynomial.coefficients {
++                content = Z.gcd(&content, coefficient);
++            }
++        }
++        debug_assert!(!content.is_zero());
++
++        // Keep the leading coefficient of the nested primitive polynomial
++        // positive, moving the sign into the scalar content as fmpq_mpoly does.
++        if primitive.lcoeff().lcoeff().is_negative() {
++            content = -content;
++        }
++
++        if !content.is_one() {
++            for polynomial in &mut primitive.coefficients {
++                let zero = polynomial.zero();
++                *polynomial = std::mem::replace(polynomial, zero).div_coeff(&content);
++            }
++        }
++
++        (primitive, content, denominator)
++    }
++
+     fn coefficient_denominator_lcm(&self) -> Integer {
+         let mut denominator = Integer::one();
+         for polynomial in &self.coefficients {
+@@ -786,6 +925,17 @@ impl<E: PositiveExponent> UnivariatePolynomial<PolynomialRing<RationalField, E>>
+     }
+ }
+ 
++impl<E: PositiveExponent> PolynomialResultant<E> for RationalField {
++    fn resultant(
++        left: &MultivariatePolynomial<Self, E>,
++        right: &MultivariatePolynomial<Self, E>,
++        variable: usize,
++    ) -> MultivariatePolynomial<Self, E> {
++        left.to_univariate(variable)
++            .resultant_auto(&right.to_univariate(variable))
++    }
++}
++
+ impl<F: Field> UnivariatePolynomial<F> {
+     /// Compute the resultant using ordinary Euclidean polynomial remainders.
+     ///
+@@ -843,13 +993,18 @@ mod test {
+ 
+     use crate::atom::AtomCore;
+     use crate::domains::integer::Z;
+-    use crate::domains::rational::Q;
++    use crate::domains::rational::{Q, RationalField};
+     use crate::domains::rational_polynomial::{
+         FromNumeratorAndDenominator, RationalPolynomial, RationalPolynomialField,
+     };
+     use crate::poly::polynomial::MultivariatePolynomial;
+     use crate::{parse, symbol};
+ 
++    use super::{
++        PolynomialResultant, RATIONAL_RESULTANT_CRT_TERM_PRODUCT_GUARD, RationalResultantAlgorithm,
++        select_rational_resultant_algorithm,
++    };
++
+     #[test]
+     fn resultant() {
+         let a = parse!("9v1^6-27v1^4-27v1^3+72v1^2+18v1-451")
+@@ -992,6 +1147,91 @@ mod test {
+             .to_univariate(0);
+ 
+         assert_eq!(a.resultant_crt(&b), a.resultant(&b));
++        assert_eq!(a.resultant_ducos_integer(&b), a.resultant(&b));
++    }
++
++    #[test]
++    fn resultant_integer_ducos_restores_content_denominators_and_sign() {
++        let (x, y, z) = symbol!("integer_ducos_x", "integer_ducos_y", "integer_ducos_z");
++        let vars = Arc::new(vec![x.into(), y.into(), z.into()]);
++        let a = parse!(
++            "(6*integer_ducos_y+9*integer_ducos_z)*integer_ducos_x^3+\
++             (15*integer_ducos_y*integer_ducos_z+21/2)*integer_ducos_x^2+3/10"
++        )
++        .to_polynomial::<_, u16>(&Q, Some(vars.clone()))
++        .to_univariate(0);
++        let b = parse!(
++            "(-14*integer_ducos_z+35/3)*integer_ducos_x^3+\
++             (21*integer_ducos_y-49*integer_ducos_z)*integer_ducos_x+7/15"
++        )
++        .to_polynomial::<_, u16>(&Q, Some(vars))
++        .to_univariate(0);
++
++        let expected = a.resultant(&b);
++        assert_eq!(a.resultant_ducos_integer(&b), expected);
++        assert_eq!(a.resultant_crt(&b), expected);
++
++        // Both pivot degrees are odd, so swapping inputs changes the sign.
++        assert_eq!(b.resultant_ducos_integer(&a), -expected);
++    }
++
++    #[test]
++    fn resultant_integer_ducos_handles_zero_constants_and_small_formulas() {
++        let (x, y) = symbol!("integer_ducos_small_x", "integer_ducos_small_y");
++        let vars = Arc::new(vec![x.into(), y.into()]);
++        let inputs = [
++            ("0", "integer_ducos_small_x^3+integer_ducos_small_y"),
++            ("-2/3", "integer_ducos_small_x^3+integer_ducos_small_y"),
++            (
++                "integer_ducos_small_x^2-integer_ducos_small_y",
++                "integer_ducos_small_x^2+integer_ducos_small_y",
++            ),
++        ];
++
++        for (left, right) in inputs {
++            let left = parse!(left)
++                .to_polynomial::<_, u16>(&Q, Some(vars.clone()))
++                .to_univariate(0);
++            let right = parse!(right)
++                .to_polynomial::<_, u16>(&Q, Some(vars.clone()))
++                .to_univariate(0);
++
++            assert_eq!(left.resultant_ducos_integer(&right), left.resultant(&right));
++            assert_eq!(right.resultant_ducos_integer(&left), right.resultant(&left));
++        }
++    }
++
++    #[test]
++    fn rational_resultant_auto_owns_the_dispatch_guard() {
++        assert_eq!(40 * 50, RATIONAL_RESULTANT_CRT_TERM_PRODUCT_GUARD);
++        assert_eq!(
++            select_rational_resultant_algorithm(40, 50),
++            RationalResultantAlgorithm::IntegerDucos
++        );
++        assert_eq!(
++            select_rational_resultant_algorithm(40, 51),
++            RationalResultantAlgorithm::Crt
++        );
++        assert_eq!(
++            select_rational_resultant_algorithm(usize::MAX, 2),
++            RationalResultantAlgorithm::Crt
++        );
++    }
++
++    #[test]
++    fn rational_resultant_trait_owns_the_default_path() {
++        let (x, y) = symbol!("resultant_trait_x", "resultant_trait_y");
++        let vars = Arc::new(vec![x.into(), y.into()]);
++        let left = parse!("resultant_trait_x^3+resultant_trait_y/2")
++            .to_polynomial::<_, u16>(&Q, Some(vars.clone()));
++        let right = parse!("resultant_trait_x^2-resultant_trait_y/3")
++            .to_polynomial::<_, u16>(&Q, Some(vars));
++
++        assert_eq!(
++            <RationalField as PolynomialResultant<u16>>::resultant(&left, &right, 0),
++            left.to_univariate(0)
++                .resultant_auto(&right.to_univariate(0))
++        );
+     }
+ 
+     #[test]
+diff --git a/tests/rational_polynomial.rs b/tests/rational_polynomial.rs
+index 88045d6c53228c8f3fac8ad7eb00dbe05606475d..6193786e360a3233cfc088bf92112f2ef1f02151 100644
+--- a/tests/rational_polynomial.rs
++++ b/tests/rational_polynomial.rs
+@@ -2,7 +2,12 @@ use std::sync::Arc;
+ 
+ use symbolica::{
+     atom::AtomCore,
+-    domains::{integer::Z, rational::Q, rational_polynomial::RationalPolynomial},
++    domains::{
++        Ring,
++        integer::Z,
++        rational::Q,
++        rational_polynomial::{RationalPolynomial, RationalPolynomialField},
++    },
+     parse,
+     parser::{ParseSettings, Token},
+     poly::{PolyVariable, polynomial::MultivariatePolynomial},
+@@ -10,6 +15,26 @@ use symbolica::{
+ };
+ 
+ #[test]
++fn rational_polynomial_power_uses_exact_binary_exponentiation() {
++    let variables = Arc::new(vec![PolyVariable::Symbol(symbol!("x"))]);
++    let value: RationalPolynomial<_> =
++        parse!("(x+1)/(x-2)").to_rational_polynomial(&Z, &Z, Some(variables.clone()));
++
++    let one = value.pow(0);
++    assert!(one.numerator.is_one());
++    assert!(one.denominator.is_one());
++    assert_eq!(one.get_variables(), &variables);
++    assert_eq!(value.pow(1), value);
++
++    let expected: RationalPolynomial<_> =
++        parse!("(x+1)^13/(x-2)^13").to_rational_polynomial(&Z, &Z, Some(variables));
++    assert_eq!(value.pow(13), expected);
++
++    let field = RationalPolynomialField::from_poly(&value.numerator);
++    assert_eq!(field.pow(&value, 13), expected);
++}
++
++#[test]
+ fn integer_factors_in_non_polynomial_exponents() {
+     let exp_x = parse!("exp(x)");
+     let exp_x_var = PolyVariable::Power(exp_x.clone());

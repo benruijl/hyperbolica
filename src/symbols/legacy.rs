@@ -138,6 +138,7 @@ pub(crate) fn special_name_from_atom(atom: AtomView<'_>) -> Option<String> {
     Some(format!("{prefix}{index}"))
 }
 
+#[cfg(test)]
 fn wire_symbol(name: &str) -> Atom {
     Symbol::parse(name, SYMBOL_NAMESPACE)
         .expect("validated legacy identifier must parse as a Symbolica symbol")
@@ -160,6 +161,7 @@ pub(crate) fn import_special_atoms(atom: impl AtomCore) -> Atom {
 }
 
 /// Replace registered special indeterminates by legacy protocol variables.
+#[cfg(test)]
 pub(crate) fn export_special_atoms(atom: impl AtomCore) -> Atom {
     atom.as_atom_view().replace_map(|term, _, output| {
         if let Some(name) = special_name_from_atom(term) {
@@ -181,8 +183,9 @@ pub(crate) fn parse_expression(expression: &str) -> Result<Atom> {
 }
 
 /// Format a native expression in byte-compatible legacy identifier notation.
+#[cfg(test)]
 pub(crate) fn format_expression(atom: impl AtomCore) -> String {
-    export_special_atoms(atom).to_string()
+    super::plain_atom_string(export_special_atoms(atom))
 }
 
 /// Convert one legacy variable name, leaving ordinary names as plain symbols.

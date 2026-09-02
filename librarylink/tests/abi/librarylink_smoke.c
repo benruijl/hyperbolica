@@ -25,6 +25,14 @@ struct strategy_case {
     const char *strategy;
 };
 
+struct success_case {
+    const char *name;
+    const char *op;
+    json_operation function;
+    const char *request;
+    const char *required_field;
+};
+
 static unsigned int disown_count = 0;
 
 static void test_disown(char *value) {
@@ -177,6 +185,48 @@ int main(void) {
                 ++failures;
             }
             free(response);
+        }
+
+        {
+            static const struct success_case successes[] = {
+                {"factor_table",
+                 "factor_table",
+                 hf_factor_table,
+                 "{\"op\":\"factor_table\",\"xvars\":[\"x\"],"
+                 "\"groups\":[[\"x\"]],\"order\":[\"x\"]}",
+                 "\"polys\":[\"x\"]"},
+                {"find_lr_orders_scan",
+                 "find_lr_orders_scan",
+                 hf_find_lr_orders_scan,
+                 "{\"op\":\"find_lr_orders_scan\",\"xvars\":[\"x\"],"
+                 "\"groups\":[[\"x\"]],\"exps\":[[[-1,0]]]}",
+                 "\"orders\":"},
+                {"hyperflint",
+                 "hyperflint",
+                 hf_hyperflint_sym,
+                 "{\"op\":\"hyperflint\",\"vars\":[\"x\"],"
+                 "\"vars_int\":[\"x\"],\"f\":\"1/(1+x)^2\","
+                 "\"parallel\":false,\"check_divergences\":true}",
+                 "\"result\":[{\"coef\":\"1\",\"key\":[]}]"},
+            };
+            for (index = 0; index < sizeof(successes) / sizeof(successes[0]); ++index) {
+                char *response = NULL;
+                char expected_op[96];
+                const int written = snprintf(expected_op, sizeof(expected_op),
+                                             "\"op\":\"%s\"", successes[index].op);
+                if (!call_json(&callbacks, successes[index].function,
+                               successes[index].request, &response) ||
+                    written <= 0 || (size_t)written >= sizeof(expected_op) ||
+                    has_field(response, "\"error\":") ||
+                    !has_field(response, expected_op) ||
+                    !has_field(response, successes[index].required_field)) {
+                    fprintf(stderr,
+                            "LibraryLink smoke: licensed success row %s failed\n",
+                            successes[index].name);
+                    ++failures;
+                }
+                free(response);
+            }
         }
     }
 

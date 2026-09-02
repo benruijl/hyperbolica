@@ -159,11 +159,10 @@ scripts/check-python-package.sh
 Both scripts accept explicit `PYTHON`, and the first also accepts `PYRIGHT`
 while the second accepts `MATURIN`.
 
-Symbolica enables PyO3's stable ABI without fixing its minimum interpreter in
-the dependency feature. Build release wheels with the oldest supported CPython
-(currently 3.10) so Maturin emits the broad `cp310-abi3` tag; a layout check
-run with a newer interpreter intentionally produces a correspondingly newer
-ABI tag.
+The `python-extension` feature fixes PyO3's stable-ABI floor at CPython 3.10.
+The package gate builds in release mode and rejects a wheel unless both its
+filename and WHEEL metadata carry `cp310-abi3`, even when the selected build
+interpreter is newer.
 
 After `maturin develop --release` or installing a wheel, run:
 

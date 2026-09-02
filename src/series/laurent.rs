@@ -166,4 +166,51 @@ mod tests {
             Rat::parse(ctx, "(x+y*x^2)/(1+x^2)").unwrap()
         );
     }
+
+    #[test]
+    fn truncated_series_multiply_back_to_the_original_numerator() {
+        let ctx = context();
+        let cases = [
+            ("(1+2*x+x^3)/(1-x+x^2)", 5),
+            ("(1+y*x+x^4)/(x^2*(2+y+x+x^3))", 3),
+            ("(x^4+y*x^7)/(1+x^2+y*x^3)", 2),
+            ("(x+y)/(x^3*(y+1+x+x^2))", 2),
+            ("0", 4),
+        ];
+
+        for (case_index, (expression, max_order)) in cases.iter().enumerate() {
+            let function = Rat::parse(ctx.clone(), expression).unwrap();
+            let expansion = series_expansion(&function, 0, *max_order).unwrap();
+
+            // A truncation through x^m differs from the original rational
+            // function only at Laurent orders strictly greater than m.
+            let truncation_error = expansion.try_sub(&function).unwrap();
+            assert!(
+                truncation_error.is_zero() || truncation_error.pole_degree(0).unwrap() > *max_order,
+                "truncation order, case {case_index}: {expression}"
+            );
+
+            // Independently multiply the returned series by the canonical
+            // denominator. The Cauchy recurrence must reconstruct every
+            // numerator coefficient through d_min + m.
+            let denominator_min = function.denominator().min_exponent(0).unwrap();
+            let denominator = Rat::from_poly(function.denominator().clone());
+            let numerator = Rat::from_poly(function.numerator().clone());
+            let reconstruction_error = expansion
+                .try_mul(&denominator)
+                .unwrap()
+                .try_sub(&numerator)
+                .unwrap();
+            assert!(
+                reconstruction_error.is_zero()
+                    || reconstruction_error.pole_degree(0).unwrap() > denominator_min + max_order,
+                "denominator multiply-back, case {case_index}: {expression}"
+            );
+            assert_eq!(
+                reconstruction_error,
+                truncation_error.try_mul(&denominator).unwrap(),
+                "multiply-back identity, case {case_index}: {expression}"
+            );
+        }
+    }
 }

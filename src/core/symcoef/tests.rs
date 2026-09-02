@@ -108,7 +108,10 @@ fn formatting_is_deterministic_and_matches_hyperflint() {
 
     let coefficient = SymCoef::from_monomials(ctx, vec![symbolic]);
     let formatted = coefficient.to_string();
-    assert!(formatted.contains("MZV(3)"));
+    assert!(
+        formatted.contains("MZV(3)"),
+        "formatted coefficient: {formatted}"
+    );
     assert!(formatted.contains("*Pi^2*I*Log[2]*Log[7]^2"));
     assert!(formatted.contains("*delta[x]*delta[z]"));
     assert_eq!(
@@ -153,7 +156,11 @@ fn rational_scaling_and_unwrap() {
     let scaled = SymCoef::pi_factor(ctx.clone())
         .try_mul_rat(&rat(&ctx, "6*mzv_2"))
         .unwrap();
-    assert!(scaled.to_string().contains("MZV(2)"));
+    let formatted = scaled.to_string();
+    assert!(
+        formatted.contains("MZV(2)"),
+        "formatted coefficient: {formatted}"
+    );
     assert!(!scaled.is_rat());
     assert!(scaled.as_rat().is_err());
     assert!(SymCoef::zero(ctx.clone()).is_rat());

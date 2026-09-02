@@ -5,6 +5,7 @@ edition = "2024"
 rust-version = "1.89"
 license-file = "DISTRIBUTION-LICENSE.md"
 description = "A Rust port of HyperFLINT backed by Symbolica"
+publish = false
 
 [lib]
 name = "hyperbolica"
@@ -17,7 +18,7 @@ python = ["dep:pyo3", "symbolica/python_export"]
 # Use this feature for maturin/wheel builds. Keeping `extension-module` out of
 # `python` lets Rust test binaries and Symbolica community aggregators link an
 # embedded interpreter normally.
-python-extension = ["python", "pyo3/extension-module"]
+python-extension = ["python", "pyo3/extension-module", "pyo3/abi3-py310"]
 
 [[bin]]
 name = "hyperflint"

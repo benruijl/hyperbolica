@@ -422,6 +422,47 @@ hf_semantic_response "$2" '[]' '[]' '["result"]' '["x","y"]' "$3"
             self.assertEqual(changed.returncode, 0, changed.stderr.decode())
             self.assertNotEqual(outputs[0], changed.stdout)
 
+    def test_failed_canonical_response_replacement_is_not_silently_accepted(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            response = directory / "response.json"
+            response.write_bytes(compact_json({"op": "rat_add", "result": "x+x"}))
+            parser = directory / "semantic-parser"
+            parser.write_text(
+                "#!/bin/sh\nprintf '%s\\n' "
+                "'{\"op\":\"parse_expr\",\"canonical\":\"2*x\"}'\n",
+                encoding="utf-8",
+            )
+            parser.chmod(0o755)
+
+            # Differential calls the helper underneath `if !`, a context in
+            # which Bash suppresses implicit `errexit` inside the function.
+            # A failed atomic replacement must therefore be checked explicitly.
+            command = """
+set -u -o pipefail
+source "$1"
+mv() { return 73; }
+hf_semantic_response "$2" '[]' '[]' '["result"]' '["x"]' "$3"
+"""
+            completed = subprocess.run(
+                [
+                    "bash",
+                    "-c",
+                    command,
+                    "semantic-comparison-test",
+                    str(RESPONSE_COMPARISON_SCRIPT),
+                    str(response),
+                    str(parser),
+                ],
+                cwd=REPOSITORY,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                timeout=5,
+                check=False,
+            )
+            self.assertNotEqual(completed.returncode, 0)
+            self.assertEqual(completed.stdout, b"")
+
 
 class PairedStatisticsTests(unittest.TestCase):
     def test_single_pair_has_a_defined_bootstrap_bound(self) -> None:
@@ -493,6 +534,43 @@ class PairedStatisticsTests(unittest.TestCase):
         self.assertIn(("severe_tail", "slow_tail"), gates)
         self.assertIn(("peak_rss", "normal"), gates)
         self.assertIn(("peak_rss", "slow_tail"), gates)
+
+    def test_peak_rss_override_is_narrow_and_auditable(self) -> None:
+        document = stats_input(
+            paired_samples(
+                {"ordinary": 1.0, "dense parameter resultant": 1.0},
+                rust_rss_ratio=1.50,
+            ),
+            max_rss_ratio=1.25,
+        )
+        document["thresholds"]["max_rss_ratio_overrides"] = {  # type: ignore[index]
+            "dense parameter resultant": {
+                "limit": 1.6,
+                "reason": "accepted dense-workspace exception",
+            }
+        }
+        completed, result = run_script(STATS_SCRIPT, [], input_value=document)
+        self.assertEqual(completed.returncode, 1)
+        self.assertEqual(
+            [failure["workload"] for failure in result["failures"]],
+            ["ordinary"],
+        )
+        self.assertEqual(
+            result["workloads"]["dense parameter resultant"]["peak_rss_override"],
+            {
+                "limit": 1.6,
+                "reason": "accepted dense-workspace exception",
+            },
+        )
+
+    def test_peak_rss_override_must_name_a_measured_workload(self) -> None:
+        document = stats_input(paired_samples({"ordinary": 1.0}))
+        document["thresholds"]["max_rss_ratio_overrides"] = {  # type: ignore[index]
+            "missing": {"limit": 2.0, "reason": "invalid dead waiver"}
+        }
+        completed, result = run_script(STATS_SCRIPT, [], input_value=document)
+        self.assertEqual(completed.returncode, 2)
+        self.assertIn("absent workloads", result["error"])
 
     def test_global_upper_confidence_bound_is_a_hard_gate(self) -> None:
         completed, result = run_script(
@@ -594,6 +672,11 @@ class BenchmarkDriverTests(unittest.TestCase):
                 "backend_profiles": {
                     "rust": "release-lto",
                     "cpp_oracle": "release-portable",
+                },
+                "required_symbolica": {
+                    "revision": "3" * 40,
+                    "branch": "dev",
+                    "remote": "https://github.com/symbolica-dev/symbolica.git",
                 },
                 "required_cpp_revision": "2" * 40,
                 "required_cpp_cmake": {
@@ -853,6 +936,9 @@ class QualificationPolicyTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory()
         self.directory = Path(self.temporary.name)
+        self.source_directory = self.directory / "source-tree"
+        self.symbolica_directory = self.source_directory / "vendor" / "symbolica"
+        self.symbolica_directory.mkdir(parents=True)
         self.analysis = self._analysis()
         self.policy = self._policy()
         self.corpus = {
@@ -901,6 +987,11 @@ class QualificationPolicyTests(unittest.TestCase):
                 "backend_profiles": {
                     "rust": "release-lto",
                     "cpp_oracle": "release-portable",
+                },
+                "required_symbolica": {
+                    "revision": "3" * 40,
+                    "branch": "dev",
+                    "remote": "https://github.com/symbolica-dev/symbolica.git",
                 },
                 "required_cpp_revision": "2" * 40,
                 "required_cpp_cmake": {
@@ -956,7 +1047,15 @@ class QualificationPolicyTests(unittest.TestCase):
             "manifest_sha256": ("c" if is_rust else "d") * 64,
         }
         build["built_by_driver"] = True
-        if not is_rust:
+        if is_rust:
+            build["symbolica"] = {
+                "source": str(self.symbolica_directory),
+                "revision": "3" * 40,
+                "branch": "dev",
+                "remote": "https://github.com/symbolica-dev/symbolica.git",
+                "clean": True,
+            }
+        else:
             cache = self.directory / "CMakeCache.txt"
             cache.write_text("synthetic locked CMake cache\n", encoding="utf-8")
             build["binary_version"] = (
@@ -976,7 +1075,7 @@ class QualificationPolicyTests(unittest.TestCase):
                 "cli_static_deps": "OFF",
             }
         return {
-            "source": "/source/tree",
+            "source": str(self.source_directory),
             "revision": revision,
             "binary": str(binary),
             "binary_sha256": hashlib.sha256(binary.read_bytes()).hexdigest(),
@@ -1038,6 +1137,7 @@ class QualificationPolicyTests(unittest.TestCase):
                     "rustc": "rustc 1.90.0",
                     "cargo": "cargo 1.90.0",
                 }
+                manifest["symbolica"] = build["symbolica"]  # type: ignore[index]
             else:
                 manifest["binary_version"] = build["binary_version"]  # type: ignore[index]
                 manifest["cmake"] = build["cmake"]  # type: ignore[index]
@@ -1121,6 +1221,17 @@ class QualificationPolicyTests(unittest.TestCase):
         }
         self._materialize_artifacts(metadata)
         return metadata
+
+    def _synchronize_rust_manifest(self, metadata: dict[str, object]) -> None:
+        rust = metadata["rust"]  # type: ignore[index]
+        build = rust["build"]  # type: ignore[index]
+        manifest_path = Path(build["manifest"])  # type: ignore[index]
+        manifest = json.loads(manifest_path.read_bytes())
+        manifest["symbolica"] = copy.deepcopy(build["symbolica"])
+        manifest_path.write_bytes(compact_json(manifest))
+        build["manifest_sha256"] = hashlib.sha256(  # type: ignore[index]
+            manifest_path.read_bytes()
+        ).hexdigest()
 
     def _verify(
         self, metadata: dict[str, object], mode: str
@@ -1221,6 +1332,81 @@ class QualificationPolicyTests(unittest.TestCase):
         self.assertEqual(completed.returncode, 1)
         self.assertIn(
             "rust_manifest_profile",
+            {deviation["code"] for deviation in result["deviations"]},
+        )
+
+    def test_symbolica_revision_is_bound_to_policy_and_manifest(self) -> None:
+        metadata = copy.deepcopy(self.metadata)
+        rust_build = metadata["rust"]["build"]  # type: ignore[index]
+        rust_build["symbolica"]["revision"] = "4" * 40  # type: ignore[index]
+        completed, result = self._verify(metadata, "qualification")
+        self.assertEqual(completed.returncode, 1)
+        codes = {deviation["code"] for deviation in result["deviations"]}
+        self.assertIn("rust_symbolica_revision_required", codes)
+        self.assertIn("rust_manifest_symbolica", codes)
+
+    def test_symbolica_clean_requires_a_true_json_boolean(self) -> None:
+        metadata = copy.deepcopy(self.metadata)
+        rust_build = metadata["rust"]["build"]  # type: ignore[index]
+        rust_build["symbolica"]["clean"] = 1  # type: ignore[index]
+        self._synchronize_rust_manifest(metadata)
+        completed, result = self._verify(metadata, "qualification")
+        self.assertEqual(completed.returncode, 1)
+        self.assertIn(
+            "rust_symbolica_clean",
+            {deviation["code"] for deviation in result["deviations"]},
+        )
+
+    def test_symbolica_source_is_bound_to_the_rust_source_tree(self) -> None:
+        metadata = copy.deepcopy(self.metadata)
+        replacement = self.directory / "unrelated-symbolica"
+        replacement.mkdir()
+        rust_build = metadata["rust"]["build"]  # type: ignore[index]
+        rust_build["symbolica"]["source"] = str(replacement.resolve())  # type: ignore[index]
+        self._synchronize_rust_manifest(metadata)
+        completed, result = self._verify(metadata, "qualification")
+        self.assertEqual(completed.returncode, 1)
+        self.assertIn(
+            "rust_symbolica_expected_source",
+            {deviation["code"] for deviation in result["deviations"]},
+        )
+
+    def test_nonexistent_symbolica_source_cannot_be_coordinately_recorded(self) -> None:
+        metadata = copy.deepcopy(self.metadata)
+        replacement = self.directory / "missing-symbolica"
+        rust_build = metadata["rust"]["build"]  # type: ignore[index]
+        rust_build["symbolica"]["source"] = str(replacement)  # type: ignore[index]
+        self._synchronize_rust_manifest(metadata)
+        completed, result = self._verify(metadata, "qualification")
+        self.assertEqual(completed.returncode, 1)
+        self.assertIn(
+            "rust_symbolica_source",
+            {deviation["code"] for deviation in result["deviations"]},
+        )
+
+    def test_symbolica_branch_is_bound_to_the_policy(self) -> None:
+        metadata = copy.deepcopy(self.metadata)
+        rust_build = metadata["rust"]["build"]  # type: ignore[index]
+        rust_build["symbolica"]["branch"] = "release"  # type: ignore[index]
+        self._synchronize_rust_manifest(metadata)
+        completed, result = self._verify(metadata, "qualification")
+        self.assertEqual(completed.returncode, 1)
+        self.assertIn(
+            "rust_symbolica_branch_required",
+            {deviation["code"] for deviation in result["deviations"]},
+        )
+
+    def test_symbolica_remote_is_bound_to_the_policy(self) -> None:
+        metadata = copy.deepcopy(self.metadata)
+        rust_build = metadata["rust"]["build"]  # type: ignore[index]
+        rust_build["symbolica"]["remote"] = (  # type: ignore[index]
+            "https://example.invalid/fork.git"
+        )
+        self._synchronize_rust_manifest(metadata)
+        completed, result = self._verify(metadata, "qualification")
+        self.assertEqual(completed.returncode, 1)
+        self.assertIn(
+            "rust_symbolica_remote_required",
             {deviation["code"] for deviation in result["deviations"]},
         )
 
@@ -1349,6 +1535,7 @@ class QualificationPolicyTests(unittest.TestCase):
             binding["cpp_manifest_sha256"],
             self.metadata["cpp_oracle"]["build"]["manifest_sha256"],  # type: ignore[index]
         )
+        self.assertEqual(binding["symbolica_revision"], "3" * 40)
 
     def test_fixture_bytes_are_bound_independently_of_workload_names(self) -> None:
         metadata = copy.deepcopy(self.metadata)
@@ -1397,6 +1584,9 @@ class QualificationPolicyTests(unittest.TestCase):
     def test_cpp_setup_commands_use_the_credential_scrubber(self) -> None:
         source = DRIVER_SCRIPT.read_text(encoding="utf-8")
         self.assertIn(
+            "env -u SYMBOLICA_LICENSE -u SYMBOLICA_LICENSE_SERVER --", source
+        )
+        self.assertIn(
             'without_symbolica_license "$cmake_bin" -S "$cpp_source"', source
         )
         self.assertIn(
@@ -1405,6 +1595,25 @@ class QualificationPolicyTests(unittest.TestCase):
         )
         self.assertIn(
             'without_symbolica_license "$cpp_bin" --version', source
+        )
+
+    def test_symbolica_git_identity_is_checked_before_and_after_rust_build(self) -> None:
+        source = DRIVER_SCRIPT.read_text(encoding="utf-8")
+        audit = '"$repo_root/scripts/check-pure-symbolica.sh"'
+        self.assertEqual(source.count(audit), 2)
+        first_audit = source.index(audit)
+        second_audit = source.index(audit, first_audit + len(audit))
+        rust_build = source.index(
+            '"$cargo_bin" build --locked --release --bin hyperflint', first_audit
+        )
+        self.assertLess(first_audit, rust_build)
+        self.assertLess(rust_build, second_audit)
+        self.assertGreaterEqual(source.count("rev-parse --show-toplevel"), 3)
+        self.assertIn(
+            '[[ "$symbolica_git_root" == "$symbolica_source" ]]', source
+        )
+        self.assertIn(
+            '"$symbolica_git_root_after" == "$symbolica_git_root"', source
         )
 
 

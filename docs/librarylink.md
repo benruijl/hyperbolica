@@ -38,18 +38,40 @@ buffer and returns zero.  Inputs are disowned through
 missing backends, null slots, and malformed backend results cannot unwind across
 the C boundary.
 
-## Build and stage
+## Build and local stage
 
-Build both shared libraries and place them in the same directory with:
+Build the release CLI, stable C-ABI backend, and both-library LibraryLink
+layout with:
 
 ```bash
-scripts/build-librarylink.sh
+scripts/stage-local.sh
 ```
 
-An optional first argument selects a staging directory. The equivalent manual
-builds are `cargo build --release --lib` and
-`cargo build --release --manifest-path librarylink/Cargo.toml`; copy their two
-shared-library outputs together afterward.
+The default output is `target/local-stage`; an optional first argument selects
+another directory. The adapter is stamped for the pinned SubTropica `1.2.13`
+loader by default. The stage also contains both C headers, Hyperbolica's MIT
+license, the distribution warning, Symbolica's controlling license, and
+`stage-metadata.json`. That metadata deliberately says `redistributable:
+false`: this is a convenient local installation/test layout, not a release
+package or permission to redistribute Symbolica.
+
+The destination must be absent or empty. Artifacts are assembled in a private
+directory, the destination is rechecked after both builds, and publication is
+no-clobber plus byte verification; a concurrent file is preserved and makes
+the staging command fail.
+
+Override the loader version only when targeting a different known-compatible
+SubTropica checkout:
+
+```bash
+HYPERBOLICA_SUBTROPICA_VERSION=1.2.14 scripts/stage-local.sh
+```
+
+`LOCAL_STAGE_OUTPUT`, `HYPERBOLICA_TARGET_DIR`, and
+`HYPERBOLICA_LIBRARYLINK_TARGET_DIR` provide explicit paths for automation.
+The older `scripts/build-librarylink.sh` helper remains available when only the
+two shared libraries are wanted, but it does not create the unified local
+layout.
 
 Use `.dylib` on macOS and `hyperbolica.dll` /
 `hyperflint_librarylink.dll` on Windows.  Same-directory discovery is the
@@ -58,8 +80,8 @@ overrides discovery and is useful for development or a nonstandard package
 layout.
 
 Pinned SubTropica rejects a LibraryLink library unless `hf_version[]` equals
-its own `$SubTropicaVersion` (`1.2.13` at the pinned commit).  Stamp a compatible
-adapter at build time with:
+its own `$SubTropicaVersion` (`1.2.13` at the pinned commit). For a manual
+adapter build, stamp that compatible version with:
 
 ```bash
 HYPERBOLICA_SUBTROPICA_VERSION=1.2.13 \
@@ -85,13 +107,15 @@ Run the complete compile/export/marshalling gate:
 scripts/check-librarylink.sh
 ```
 
-When a Symbolica license is available, add
-`HYPERBOLICA_LIBRARYLINK_LICENSED_TEST=1` to exercise a successful native LR
-request as well as the license-independent malformed-input paths. The licensed
-portion mirrors all six strategy rows from upstream's
+When a Symbolica license is available in `SYMBOLICA_LICENSE` or
+`SYMBOLICA_LICENSE_SERVER`, the script automatically exercises successful
+native calls to all four JSON-backed LibraryLink functions as well as the
+license-independent malformed-input paths. The licensed LR portion mirrors all
+six strategy rows from upstream's
 `test_find_lr_orders_strategy_roundtrip_librarylink.cpp` (`LR_NoOpt`,
-`LR_OptOrdered`, `Fubini_Lungo`, and `Fubini_Espresso`). The script does not
-read or print license values.
+`LR_OptOrdered`, `Fubini_Lungo`, and `Fubini_Espresso`); the additional rows
+cover factor-table construction, LR scanning, and a complete convergent
+integration. The script does not print license values.
 
 After staging, set `HYPERBOLICA_LIBRARYLINK` to the adapter path and run
 `wolframscript -file librarylink/examples/load.wl`.  The example binds all six

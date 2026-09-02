@@ -1,6 +1,6 @@
 {"name":"mul_difference_of_squares","compare":"byte","request":{"op":"mul","a":"x+y","b":"x-y","vars":["x","y"]}}
 {"name":"gcd_shared_linear_factor","compare":"byte","request":{"op":"gcd","a":"x^2-1","b":"x^2-2*x+1","vars":["x"]}}
-{"name":"resultant_linear_substitution","compare":"byte","request":{"op":"resultant","a":"x^2+y*x+1","b":"x-y","var":"x","vars":["x","y"]}}
+{"name":"resultant_linear_substitution","compare":"semantic","semantic_fields":["result"],"reason":"the resultant is compared as a canonical Symbolica Atom so equivalent term orders are accepted","request":{"op":"resultant","a":"x^2+y*x+1","b":"x-y","var":"x","vars":["x","y"]}}
 {"name":"hyperflint_discriminant_sign","compare":"byte","request":{"op":"discriminant","expr":"a*x^2+b*x+c","var":"x","vars":["x","a","b","c"]}}
 {"name":"rational_addition","compare":"byte","request":{"op":"rat_add","a":"1/(x-1)","b":"1/(x+1)","vars":["x"]}}
 {"name":"rational_cross_cancellation","compare":"byte","request":{"op":"rat_mul","a":"(x^2-1)/(x-1)","b":"(x-1)/(x+1)","vars":["x"]}}
@@ -20,6 +20,60 @@
 {"name":"verify_order_malformed_permutation","compare":"normalized","ignore":["hf_version","timing_compute_s"],"reason":"backend version and wall time are transport metadata","request":{"op":"find_lr_orders","xvars":["x","y"],"coeff_vars":[],"groups":[["x","1+x","y"],["y","1+y","x"]],"verify_order":["x","x"]}}
 {"name":"verify_order_forbidden_dependency_carry_inert","compare":"normalized","ignore":["hf_version","timing_compute_s"],"reason":"backend version and wall time are transport metadata","request":{"op":"find_lr_orders","xvars":["x","y"],"coeff_vars":[],"groups":[["x^2*y+x+1","x","y"]],"verify_order":["x","y"],"algebraic_letters":true,"carry_discharge":true,"emit_sings":true}}
 {"name":"verify_order_e26_intersection_regression","compare":"normalized","ignore":["hf_version","timing_compute_s"],"reason":"backend version and wall time are transport metadata; every mathematical and diagnostic field remains exact","request":{"op":"find_lr_orders","schema_version_min":1,"groups":[["1 + x2","1 + x4","x5*x6 + x5*x7 + x6*x7 + x5*x6*x7 + x5*x6*x8 + x5*x7*x8 + x6*x7*x8 + x5*x9 + x7*x9 + x5*x7*x9 + x5*x8*x9 + x7*x8*x9","x5*x6*x7 + x5*x6*x8 + x5*x7*x8 + x6*x7*x8 + x5*x6*x9 + x6*x7*x9 + x5*x6*x7*x9 + x5*x8*x9 + x5*x6*x8*x9 + x7*x8*x9 + x5*x7*x8*x9 + x6*x7*x8*x9","x2","x4","x5","x6","x7","x8","x9"],["1 + x2","1 + x4","x5 + x7 + x5*x7 + x5*x8 + x7*x8","1 + x9","x6 + x9","x2","x4","x5","x6","x7","x8","x9"]],"xvars":["x2","x4","x5","x6","x7","x8","x9"],"coeff_vars":[],"verify_order":["x7","x5","x6","x9","x8","x4","x2"]}}
-{"name":"mzv_reduction","compare":"normalized","ignore":["vars"],"reason":"the Rust backend exposes its basis-plus-reachable registered MZV context while the C++ oracle echoes the requested subset","request":{"op":"apply_mzv_reductions","f":"mzv_m2","vars":["mzv_m2","mzv_2"]}}
+{"name":"mzv_reduction","compare":"semantic","semantic_fields":["result"],"ignore":["vars"],"reason":"the result is compared as a canonical Symbolica Atom while the backend-owned registered MZV context is ignored","request":{"op":"apply_mzv_reductions","f":"mzv_m2","vars":["mzv_m2","mzv_2"]}}
 {"name":"convergent_integration_step","compare":"normalized","ignore":["vars"],"reason":"the internal MZV context is backend-owned and does not affect the regulator value","request":{"op":"integration_step","var":"x","vars":["x"],"parallel":false,"check_divergences":true,"wordlist":[{"coef":"1/(x+1)^2","shuffle":[]}]}}
 {"name":"two_variable_hyperflint","compare":"normalized","ignore":["timing_compute_s","vars","algebraic_letters"],"reason":"wall time, augmented context, and an explicit null algebraic-letter field are backend metadata","request":{"op":"hyperflint","vars":["x","y"],"vars_int":["x","y"],"f":"1/((1+x)^2*(1+y)^2)","parallel":false,"check_divergences":true}}
+{"name":"dispatch_add","compare":"byte","request":{"op":"add","a":"x","b":"1","vars":["x"]}}
+{"name":"dispatch_algebraic_letters_allocate","compare":"byte","request":{"op":"algebraic_letters_allocate","polynomial":"x^2+1","var":"x","vars":["x"]}}
+{"name":"dispatch_algebraic_letters_clear","compare":"byte","request":{"op":"algebraic_letters_clear"}}
+{"name":"dispatch_algebraic_letters_show","compare":"byte","request":{"op":"algebraic_letters_show"}}
+{"name":"dispatch_back_substitute","compare":"byte","request":{"op":"back_substitute","expr":"x","vars":["x"]}}
+{"name":"dispatch_break_up_contour_sym","compare":"normalized","ignore":["vars"],"reason":"the internal standard-MZV context is backend-owned and does not affect the empty regulator result","request":{"op":"break_up_contour_sym","wl":[],"on_axis":[],"vars":["x"]}}
+{"name":"dispatch_collect_words","compare":"byte","request":{"op":"collect_words","wl":[],"vars":["x"]}}
+{"name":"dispatch_combine_wm_wp_ratios","compare":"byte","request":{"op":"combine_wm_wp_ratios","expr":"x","vars":["x"]}}
+{"name":"dispatch_concat_mul","compare":"byte","request":{"op":"concat_mul","a":[],"b":[],"vars":["x"]}}
+{"name":"dispatch_convert_1inf_to_01","compare":"byte","request":{"op":"convert_1inf_to_01","wl":[],"vars":["x"]}}
+{"name":"dispatch_convert_ab_to_zero_inf","compare":"byte","request":{"op":"convert_ab_to_zero_inf","A":"0","B":"1","wl":[],"vars":["x"]}}
+{"name":"dispatch_derivative","compare":"byte","request":{"op":"derivative","a":"x^2","var":"x","vars":["x"]}}
+{"name":"dispatch_differentiate_wordlist","compare":"byte","request":{"op":"differentiate_wordlist","wl":[],"var":"x","vars":["x"]}}
+{"name":"dispatch_diff_hlog","compare":"byte","request":{"op":"diff_hlog","z":"x","word":[],"var":"x","vars":["x"]}}
+{"name":"dispatch_diff_mpl","compare":"byte","request":{"op":"diff_mpl","ns":[1],"zs":["x"],"var":"x","vars":["x"]}}
+{"name":"dispatch_divexact","compare":"byte","request":{"op":"divexact","a":"x^2","b":"x","vars":["x"]}}
+{"name":"dispatch_eval","compare":"byte","request":{"op":"eval","a":"x+1","values":["2"],"vars":["x"]}}
+{"name":"dispatch_expand_inf_word","compare":"byte","request":{"op":"expand_inf_word","word":[],"min_order":0}}
+{"name":"dispatch_expand_zero_word","compare":"byte","request":{"op":"expand_zero_word","word":[],"min_order":0}}
+{"name":"dispatch_find_lr_orders_scan","compare":"normalized","ignore":["hf_version","timing_compute_s"],"reason":"backend version and wall time are transport metadata","request":{"op":"find_lr_orders_scan","xvars":["x"],"groups":[["x"]],"exps":[[[-1,0]]]}}
+{"name":"dispatch_hlog_series","compare":"byte","request":{"op":"hlog_series","arg":"1","word":[],"var":"x","order":0,"vars":["x"]}}
+{"name":"dispatch_hlog_zero_expand","compare":"byte","request":{"op":"hlog_zero_expand","arg":"x","word":[],"order":0,"vars":["x"]}}
+{"name":"dispatch_mpl_series","compare":"byte","request":{"op":"mpl_series","ns":[],"zs":[],"var":"x","order":0,"vars":["x"]}}
+{"name":"dispatch_mpl_sum","compare":"byte","request":{"op":"mpl_sum","ns":[1],"zs":["x"],"max_n":1}}
+{"name":"dispatch_neg","compare":"byte","request":{"op":"neg","a":"x","vars":["x"]}}
+{"name":"dispatch_pole_degree","compare":"byte","request":{"op":"pole_degree","f":"1/x^2","var":"x","vars":["x"]}}
+{"name":"dispatch_rat_div","compare":"byte","request":{"op":"rat_div","a":"x","b":"x+1","vars":["x"]}}
+{"name":"dispatch_rat_residue","compare":"byte","request":{"op":"rat_residue","f":"1/x","var":"x","vars":["x"]}}
+{"name":"dispatch_reg0","compare":"byte","request":{"op":"reg0","wl":[],"vars":["x"]}}
+{"name":"dispatch_reg_head","compare":"byte","request":{"op":"reg_head","wl":[],"vars":["x"]}}
+{"name":"dispatch_reg_tail","compare":"byte","request":{"op":"reg_tail","wl":[],"vars":["x"]}}
+{"name":"dispatch_regzero_word","compare":"byte","request":{"op":"regzero_word","word":[],"vars":["x"]}}
+{"name":"dispatch_shuffle_product","compare":"byte","request":{"op":"shuffle_product","a":[],"b":[],"vars":["x"]}}
+{"name":"dispatch_shuffle_symbolic","compare":"byte","request":{"op":"shuffle_symbolic","a":[],"b":[],"vars":["x"]}}
+{"name":"dispatch_simplify_with_vieta","compare":"byte","request":{"op":"simplify_with_vieta","expr":"x","vars":["x"]}}
+{"name":"dispatch_sub","compare":"byte","request":{"op":"sub","a":"x","b":"1","vars":["x"]}}
+{"name":"dispatch_sym_arith","compare":"normalized","ignore":["vars"],"reason":"the internal standard-MZV context is backend-owned and does not affect the exact symbolic result","request":{"op":"sym_arith","mode":"add","a":[{"prefactor":"1"}],"b":[{"prefactor":"2"}],"vars":["x"]}}
+{"name":"dispatch_zero_inf_period","compare":"normalized","ignore":["vars"],"reason":"the internal standard-MZV context is backend-owned and does not affect the exact period result","request":{"op":"zero_inf_period","word":[],"vars":["x"]}}
+{"name":"dispatch_zero_one_period","compare":"normalized","ignore":["vars"],"reason":"the internal standard-MZV context is backend-owned and does not affect the exact period result","request":{"op":"zero_one_period","word":[],"vars":["x"]}}
+{"name":"dispatch_break_up_contour","compare":"normalized","ignore":["vars"],"reason":"the internal standard-MZV context is backend-owned and does not affect the empty regulator result","request":{"op":"break_up_contour","wl":[],"on_axis":[],"vars":["x"]}}
+{"name":"dispatch_convert_zero_one","compare":"byte","request":{"op":"convert_zero_one","wl":[{"coef":"1","word":["0","1"]}],"vars":["x"]}}
+{"name":"dispatch_evaluate_periods","compare":"normalized","ignore":["vars"],"reason":"the internal standard-MZV context is backend-owned and does not affect the empty regulator result","request":{"op":"evaluate_periods","regulator":[],"vars":["x"]}}
+{"name":"dispatch_factor","compare":"byte","request":{"op":"factor","expr":"x^2-1","vars":["x"]}}
+{"name":"dispatch_factor_table","compare":"normalized","ignore":["hf_version"],"ignore_recursive":["t_build_s","trial_s","fallback_s"],"reason":"backend version and nested phase timers are transport telemetry; every factor-table object and count remains exact","request":{"op":"factor_table","xvars":["x"],"coeff_vars":[],"groups":[["x"]],"order":["x"]}}
+{"name":"dispatch_fibration_basis","compare":"normalized","ignore":["vars"],"reason":"the internal standard-MZV context is backend-owned and does not affect the empty fibration basis","request":{"op":"fibration_basis","vars":["x"],"vars_int":[],"wordlist":[]}}
+{"name":"dispatch_pow","compare":"byte","request":{"op":"pow","a":"x+1","n":2,"vars":["x"]}}
+{"name":"dispatch_rat_sub","compare":"byte","request":{"op":"rat_sub","a":"x","b":"1","vars":["x"]}}
+{"name":"dispatch_rat_sum","compare":"byte","request":{"op":"rat_sum","terms":[["1","x"],["1","x"]],"vars":["x"]}}
+{"name":"dispatch_reglim_word","compare":"normalized","ignore":["vars"],"reason":"the internal standard-MZV context is backend-owned and does not affect the exact empty-word limit","request":{"op":"reglim_word","word":[],"var":"x","vars":["x"]}}
+{"name":"dispatch_series_expansion","compare":"byte","request":{"op":"series_expansion","f":"1/(1-x)","var":"x","max_order":2,"vars":["x"]}}
+{"name":"dispatch_sym_reduce","compare":"normalized","ignore":["vars"],"reason":"the internal standard-MZV context is backend-owned and does not affect the exact symbolic result","request":{"op":"sym_reduce","a":[{"prefactor":"1"}],"vars":["x"]}}
+{"name":"dispatch_test_zero_function","compare":"normalized","ignore":["vars"],"reason":"the internal standard-MZV context is backend-owned and does not affect the empty zero test","request":{"op":"test_zero_function","regulator":[],"vars":["x"]}}
+{"name":"dispatch_transform_shuffle","compare":"normalized","ignore":["vars"],"reason":"the internal standard-MZV context is backend-owned and does not affect the empty shuffle transform","request":{"op":"transform_shuffle","wordlist":[],"var":"x","vars":["x"]}}
+{"name":"dispatch_transform_word","compare":"normalized","ignore":["vars"],"reason":"the internal standard-MZV context is backend-owned and does not affect the empty word transform","request":{"op":"transform_word","word":[],"var":"x","vars":["x"]}}

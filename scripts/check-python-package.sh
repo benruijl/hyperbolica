@@ -27,6 +27,7 @@ trap 'rm -rf -- "$package_dir"' EXIT
 
 "$maturin_bin" build \
     --locked \
+    --release \
     --interpreter "$python_bin" \
     --out "$package_dir"
 
@@ -38,6 +39,10 @@ import zipfile
 directory = Path(sys.argv[1])
 wheels = sorted(directory.glob("hyperbolica-*.whl"))
 assert len(wheels) == 1, f"expected one Hyperbolica wheel, found {wheels}"
+assert "-cp310-abi3-" in wheels[0].name, (
+    "wheel must retain the declared Python 3.10 floor through a cp310-abi3 tag: "
+    f"{wheels[0].name}"
+)
 
 with zipfile.ZipFile(wheels[0]) as archive:
     names = set(archive.namelist())
@@ -45,6 +50,12 @@ with zipfile.ZipFile(wheels[0]) as archive:
     assert len(metadata_files) == 1, f"expected one METADATA file, found {metadata_files}"
     metadata_path = metadata_files[0]
     metadata = archive.read(metadata_path).decode("utf-8")
+    wheel_files = [name for name in names if name.endswith(".dist-info/WHEEL")]
+    assert len(wheel_files) == 1, f"expected one WHEEL file, found {wheel_files}"
+    wheel_metadata = archive.read(wheel_files[0]).decode("utf-8")
+    assert any(
+        line.startswith("Tag: cp310-abi3-") for line in wheel_metadata.splitlines()
+    ), f"WHEEL metadata does not declare a cp310-abi3 tag:\n{wheel_metadata}"
 
 required = {
     "hyperbolica/__init__.py",
@@ -58,12 +69,17 @@ dist_info = metadata_path.rsplit("/", 1)[0]
 required_licenses = {
     f"{dist_info}/licenses/DISTRIBUTION-LICENSE.md",
     f"{dist_info}/licenses/LICENSE",
+    f"{dist_info}/licenses/vendor/symbolica/License.md",
 }
 missing_licenses = required_licenses - names
 assert not missing_licenses, (
     f"wheel is missing required license files: {sorted(missing_licenses)}"
 )
-for license_file in ("DISTRIBUTION-LICENSE.md", "LICENSE"):
+for license_file in (
+    "DISTRIBUTION-LICENSE.md",
+    "LICENSE",
+    "vendor/symbolica/License.md",
+):
     assert f"License-File: {license_file}" in metadata, (
         f"METADATA does not declare {license_file}"
     )

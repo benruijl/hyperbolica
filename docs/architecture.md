@@ -163,10 +163,13 @@ gate checks dependencies, imports, and forbidden solver subprocesses. External
 C++ HyperFLINT is permitted only in test/benchmark shell harnesses, where it is
 an independently executed oracle.
 
-Vendored Symbolica is a reproducible source snapshot, including the improved
-resultant implementation requested for this port. Changes needed by
-Hyperbolica should be made in that tracked snapshot and documented, never in
-the ignored original checkout.
+Symbolica is a reproducible, pinned checkout of the official `dev`
+branch at `vendor/symbolica`. The checkout itself is ignored; its exact
+clean revision is tracked under `vendor/` and enforced by the purity gate. The
+three retained patch files are historical artifacts against predecessor
+`bd0c137`; they are not applied to the current checkout. Any future local
+Symbolica change must have an explicit base revision, patch artifact, and hash
+rather than relying on unrecorded checkout state.
 
 ## Verification layers
 

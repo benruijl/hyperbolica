@@ -96,6 +96,22 @@ def _deviation(
     deviations.append(record)
 
 
+def _json_equal(actual: object, expected: object) -> bool:
+    """Compare JSON values without treating booleans as the integers 0 and 1."""
+    if isinstance(actual, bool) or isinstance(expected, bool):
+        return type(actual) is bool and type(expected) is bool and actual is expected
+    if isinstance(actual, dict) and isinstance(expected, dict):
+        return set(actual) == set(expected) and all(
+            _json_equal(actual[key], expected[key]) for key in actual
+        )
+    if isinstance(actual, list) and isinstance(expected, list):
+        return len(actual) == len(expected) and all(
+            _json_equal(actual_item, expected_item)
+            for actual_item, expected_item in zip(actual, expected)
+        )
+    return actual == expected
+
+
 def _expect_equal(
     deviations: list[dict[str, Any]],
     code: str,
@@ -103,7 +119,7 @@ def _expect_equal(
     actual: object,
     expected: object,
 ) -> None:
-    if actual != expected:
+    if not _json_equal(actual, expected):
         _deviation(deviations, code, message, actual=actual, expected=expected)
 
 
@@ -462,6 +478,13 @@ def _validate_build_manifest(
                 "rust_manifest_tools",
                 "Rust build manifest tool versions are absent",
             )
+        _expect_equal(
+            deviations,
+            "rust_manifest_symbolica",
+            "Rust build manifest Symbolica provenance differs from metadata",
+            value.get("symbolica"),
+            build.get("symbolica"),
+        )
     else:
         _expect_equal(
             deviations,
@@ -709,6 +732,16 @@ def _requirements(policy: Mapping[str, Any]) -> tuple[str, Mapping[str, Any]]:
     thresholds = _mapping(
         requirements.get("thresholds"), "policy.requirements.thresholds"
     )
+    allowed_thresholds = {
+        "global_upper_ci",
+        "max_workload_ratio",
+        "max_rss_ratio",
+        "max_rss_ratio_overrides",
+    }
+    if set(thresholds) - allowed_thresholds:
+        raise PolicyInputError(
+            "policy.requirements.thresholds contains unsupported fields"
+        )
     for name in ("global_upper_ci", "max_workload_ratio", "max_rss_ratio"):
         value = thresholds.get(name)
         if (
@@ -720,6 +753,31 @@ def _requirements(policy: Mapping[str, Any]) -> tuple[str, Mapping[str, Any]]:
             raise PolicyInputError(
                 f"policy.requirements.thresholds.{name} must be positive"
             )
+    rss_overrides = _mapping(
+        thresholds.get("max_rss_ratio_overrides", {}),
+        "policy.requirements.thresholds.max_rss_ratio_overrides",
+    )
+    for workload, value in rss_overrides.items():
+        _text(workload, "peak-RSS override workload")
+        override = _mapping(
+            value,
+            f"policy.requirements.thresholds.max_rss_ratio_overrides[{workload!r}]",
+        )
+        if set(override) != {"limit", "reason"}:
+            raise PolicyInputError(
+                "each peak-RSS override must contain exactly limit and reason"
+            )
+        limit = override.get("limit")
+        if (
+            isinstance(limit, bool)
+            or not isinstance(limit, (int, float))
+            or not math.isfinite(limit)
+            or limit <= 0
+        ):
+            raise PolicyInputError(
+                f"peak-RSS override for {workload!r} must have a positive limit"
+            )
+        _text(override.get("reason"), f"peak-RSS override for {workload!r} reason")
     profiles = _mapping(
         requirements.get("backend_profiles"),
         "policy.requirements.backend_profiles",
@@ -737,6 +795,31 @@ def _requirements(policy: Mapping[str, Any]) -> tuple[str, Mapping[str, Any]]:
         raise PolicyInputError(
             "policy.requirements.required_cpp_revision must be a full Git object ID"
         )
+    required_symbolica = _mapping(
+        requirements.get("required_symbolica"),
+        "policy.requirements.required_symbolica",
+    )
+    if set(required_symbolica) != {"revision", "branch", "remote"}:
+        raise PolicyInputError(
+            "policy.requirements.required_symbolica must contain exactly "
+            "revision, branch, and remote"
+        )
+    required_symbolica_revision = _text(
+        required_symbolica.get("revision"),
+        "policy.requirements.required_symbolica.revision",
+    )
+    if not REVISION_PATTERN.fullmatch(required_symbolica_revision):
+        raise PolicyInputError(
+            "policy.requirements.required_symbolica.revision must be a full Git object ID"
+        )
+    _text(
+        required_symbolica.get("branch"),
+        "policy.requirements.required_symbolica.branch",
+    )
+    _text(
+        required_symbolica.get("remote"),
+        "policy.requirements.required_symbolica.remote",
+    )
     required_cpp_cmake = _mapping(
         requirements.get("required_cpp_cmake"),
         "policy.requirements.required_cpp_cmake",
@@ -945,6 +1028,132 @@ def _backend_provenance_deviations(
             )
 
 
+def _symbolica_provenance_deviations(
+    deviations: list[dict[str, Any]],
+    rust_provenance: object,
+    required: object,
+) -> None:
+    if not isinstance(rust_provenance, dict):
+        return
+    build = rust_provenance.get("build")
+    if not isinstance(build, dict):
+        return
+    value = build.get("symbolica")
+    if not isinstance(value, dict):
+        _deviation(
+            deviations,
+            "rust_symbolica_provenance",
+            "Rust build has no Symbolica source provenance",
+        )
+        return
+    expected_fields = {"source", "revision", "branch", "remote", "clean"}
+    if set(value) != expected_fields:
+        _deviation(
+            deviations,
+            "rust_symbolica_schema",
+            "Rust Symbolica provenance has unexpected fields",
+            actual=sorted(value),
+            expected=sorted(expected_fields),
+        )
+    source = value.get("source")
+    canonical_source: Path | None = None
+    if not isinstance(source, str) or not source:
+        _deviation(
+            deviations,
+            "rust_symbolica_source",
+            "Rust Symbolica source path is absent",
+            actual=source,
+        )
+    elif not Path(source).is_absolute():
+        _deviation(
+            deviations,
+            "rust_symbolica_source",
+            "Rust Symbolica source path is not absolute",
+            actual=source,
+        )
+    else:
+        try:
+            canonical_source = Path(source).resolve(strict=True)
+        except (OSError, RuntimeError) as error:
+            _deviation(
+                deviations,
+                "rust_symbolica_source",
+                "Rust Symbolica source path cannot be resolved",
+                actual={"path": source, "error": str(error)},
+            )
+        else:
+            if not canonical_source.is_dir():
+                _deviation(
+                    deviations,
+                    "rust_symbolica_source",
+                    "Rust Symbolica source path is not a directory",
+                    actual=source,
+                )
+            if source != str(canonical_source):
+                _deviation(
+                    deviations,
+                    "rust_symbolica_source_canonical",
+                    "Rust Symbolica source path was not recorded canonically",
+                    actual=source,
+                    expected=str(canonical_source),
+                )
+
+    rust_source = rust_provenance.get("source")
+    expected_source: Path | None = None
+    if (
+        isinstance(rust_source, str)
+        and rust_source
+        and Path(rust_source).is_absolute()
+    ):
+        try:
+            canonical_rust_source = Path(rust_source).resolve(strict=True)
+            expected_source = (canonical_rust_source / "vendor" / "symbolica").resolve(
+                strict=True
+            )
+        except (OSError, RuntimeError) as error:
+            _deviation(
+                deviations,
+                "rust_symbolica_expected_source",
+                "The Symbolica source selected by the Rust tree cannot be resolved",
+                actual={"rust_source": rust_source, "error": str(error)},
+            )
+    if canonical_source is not None and expected_source is not None:
+        _expect_equal(
+            deviations,
+            "rust_symbolica_expected_source",
+            "Rust Symbolica provenance does not name rust.source/vendor/symbolica",
+            str(canonical_source),
+            str(expected_source),
+        )
+    revision = value.get("revision")
+    if not isinstance(revision, str) or not REVISION_PATTERN.fullmatch(revision):
+        _deviation(
+            deviations,
+            "rust_symbolica_revision",
+            "Rust Symbolica revision is not a clean full Git object ID",
+            actual=revision,
+        )
+    clean = value.get("clean")
+    if type(clean) is not bool or clean is not True:
+        _deviation(
+            deviations,
+            "rust_symbolica_clean",
+            "Rust Symbolica checkout was not recorded as a clean JSON boolean",
+            actual=clean,
+            expected=True,
+        )
+    if not isinstance(required, dict):
+        return
+    for field in ("revision", "branch", "remote"):
+        _expect_equal(
+            deviations,
+            f"rust_symbolica_{field}_required",
+            f"Rust Symbolica {field} differs from the locked policy",
+            value.get(field),
+            required.get(field),
+        )
+
+
 def verify(
     metadata_value: object,
     policy_value: object,
@@ -964,6 +1173,13 @@ def verify(
     analysis = _mapping(analysis_value, "analysis")
     policy_id, requirements = _requirements(policy)
     qualification_workloads, fixture_sha256 = _qualification_workloads(corpus)
+    rss_overrides = requirements["thresholds"].get("max_rss_ratio_overrides", {})
+    unknown_rss_overrides = set(rss_overrides) - set(qualification_workloads)
+    if unknown_rss_overrides:
+        raise PolicyInputError(
+            "peak-RSS overrides name non-qualification workloads: "
+            + ", ".join(sorted(unknown_rss_overrides))
+        )
     deviations: list[dict[str, Any]] = []
 
     _expect_equal(
@@ -1182,6 +1398,11 @@ def verify(
         require_driver_build=True,
         required_cmake=requirements.get("required_cpp_cmake"),
     )
+    _symbolica_provenance_deviations(
+        deviations,
+        metadata.get("rust"),
+        requirements.get("required_symbolica"),
+    )
     rust_provenance = metadata.get("rust")
     cpp_provenance = metadata.get("cpp_oracle")
     if isinstance(rust_provenance, dict) and isinstance(cpp_provenance, dict):
@@ -1308,12 +1529,18 @@ def verify(
                 result.get("geometric_mean_ratio"),
                 locked_thresholds["max_workload_ratio"],
             )
+            rss_override = locked_thresholds.get("max_rss_ratio_overrides", {}).get(name)
+            rss_limit = (
+                rss_override["limit"]
+                if isinstance(rss_override, dict)
+                else locked_thresholds["max_rss_ratio"]
+            )
             _expect_ratio_at_most(
                 deviations,
                 "peak_rss",
                 f"{name!r} exceeds the locked peak-RSS threshold",
                 result.get("peak_rss_ratio"),
-                locked_thresholds["max_rss_ratio"],
+                rss_limit,
             )
             order = result.get("order")
             if not isinstance(order, dict):
@@ -1341,9 +1568,7 @@ def verify(
                 )
 
     would_qualify = not deviations
-    artifacts_mapping = (
-        artifacts if isinstance(artifacts, dict) else {}
-    )
+    artifacts_mapping = artifacts if isinstance(artifacts, dict) else {}
     rust = metadata.get("rust")
     rust_mapping = rust if isinstance(rust, dict) else {}
     rust_build = rust_mapping.get("build")
@@ -1364,6 +1589,11 @@ def verify(
         "cpp_manifest_sha256": cpp_build_mapping.get("manifest_sha256"),
         "rust_binary_sha256": rust_mapping.get("binary_sha256"),
         "cpp_binary_sha256": cpp_mapping.get("binary_sha256"),
+        "symbolica_revision": (
+            rust_build_mapping.get("symbolica", {}).get("revision")
+            if isinstance(rust_build_mapping.get("symbolica"), dict)
+            else None
+        ),
     }
     if mode == "qualification":
         return {
@@ -1427,7 +1657,8 @@ def _parser() -> argparse.ArgumentParser:
             "recomputed from the sample JSON. "
             "POLICY requires schema, policy_id, locked, and requirements "
             "containing minimum_pairs_per_workload, warmup_runs, threads, bootstrap_"
-            "samples, seed, thresholds, backend_profiles, required_cpp_revision, "
+            "samples, seed, thresholds, backend_profiles, required_symbolica, "
+            "required_cpp_revision, "
             "required_cpp_cmake, cpuset, environment_allowlist, performance_environment, "
             "clock, rusage, order, affinity_scope, and samples_include_process_startup. "
             "CORPUS requires fixture_"

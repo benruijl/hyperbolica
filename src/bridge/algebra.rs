@@ -19,7 +19,6 @@ use crate::algebra::linear_factors::{LinearFactorOptions, linear_factors_with_op
 use crate::algebra::partial_fractions::{PartialFractionOptions, partial_fractions_with_options};
 use crate::core::{Poly, PolyCtx, Rat};
 use crate::error::{Error, Result};
-use crate::symbols::legacy;
 
 pub(super) fn evaluate(request: &Value, op: &str) -> Option<Result<Value>> {
     matches!(
@@ -292,8 +291,8 @@ fn evaluate_supported(request: &Value, op: &str) -> Result<Value> {
                 .iter()
                 .map(|factor| {
                     (
-                        legacy::format_expression(factor.pole.native().numerator.to_expression()),
-                        legacy::format_expression(factor.pole.native().denominator.to_expression()),
+                        wire_poly(factor.pole.numerator()),
+                        wire_poly(factor.pole.denominator()),
                         factor,
                     )
                 })
@@ -331,7 +330,7 @@ fn evaluate_supported(request: &Value, op: &str) -> Result<Value> {
                 .collect::<Vec<_>>();
             let mut response = json!({
                 "op": op,
-                "constant": wire_poly(&factors.constant),
+                "constant": wire_poly(&factors.legacy_constant),
                 "linear": linear,
                 "nonlinear": nonlinear,
                 "vars": wire_context_variables(&ctx),

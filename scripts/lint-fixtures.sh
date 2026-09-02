@@ -104,14 +104,30 @@ lint_differential() {
         if ! jq -e '
             def allowed_keys:
                 ["name", "compare", "request", "ignore", "reason",
-                 "ignore_recursive", "permutation_field", "permutation_values"];
+                 "ignore_recursive", "permutation_field", "permutation_values",
+                 "semantic_fields"];
             def strings_unique:
                 type == "array" and all(.[]; type == "string" and length > 0)
                 and (length == (unique | length));
             def allowed_ignored:
                 if .request.op == "find_lr_orders" then
                     ["hf_version", "timing_compute_s", "score", "best_order"]
+                elif .request.op == "find_lr_orders_scan" then
+                    ["hf_version", "timing_compute_s"]
+                elif .request.op == "factor_table" then ["hf_version"]
                 elif .request.op == "apply_mzv_reductions" then ["vars"]
+                elif .request.op == "break_up_contour"
+                    or .request.op == "break_up_contour_sym"
+                    or .request.op == "evaluate_periods"
+                    or .request.op == "fibration_basis"
+                    or .request.op == "reglim_word"
+                    or .request.op == "sym_arith"
+                    or .request.op == "sym_reduce"
+                    or .request.op == "test_zero_function"
+                    or .request.op == "transform_shuffle"
+                    or .request.op == "transform_word"
+                    or .request.op == "zero_inf_period"
+                    or .request.op == "zero_one_period" then ["vars"]
                 elif .request.op == "integration_step" then ["vars"]
                 elif .request.op == "hyperflint" then
                     ["timing_compute_s", "vars", "algebraic_letters"]
@@ -120,19 +136,27 @@ lint_differential() {
                 if .request.op == "factor_table" then
                     ["t_build_s", "trial_s", "fallback_s"]
                 else [] end;
+            def allowed_semantic:
+                .request.op as $op |
+                if (["rat_add", "mul", "gcd", "resultant", "rat_sum",
+                     "series_expansion", "apply_mzv_reductions"] |
+                    index($op)) != null then ["result"] else [] end;
             ((keys_unsorted - allowed_keys) | length == 0)
-            and (.compare == "byte" or .compare == "normalized")
+            and (.compare == "byte" or .compare == "normalized" or
+                 .compare == "semantic")
             and (
                 if .compare == "byte" then
                     (has("ignore") | not)
                     and (has("ignore_recursive") | not)
                     and (has("reason") | not)
+                    and (has("semantic_fields") | not)
                     and (has("permutation_field") | not)
                     and (has("permutation_values") | not)
-                else
+                elif .compare == "normalized" then
                     (.ignore | strings_unique and length > 0)
                     and ((.ignore_recursive // []) | strings_unique)
                     and (.reason | type == "string" and length > 0)
+                    and (has("semantic_fields") | not)
                     and ([.ignore[] as $key | allowed_ignored | index($key)] |
                          all(.[]; . != null))
                     and ([((.ignore_recursive // [])[]) as $key |
@@ -149,6 +173,20 @@ lint_differential() {
                             and ((.permutation_values | sort) == (.request.xvars | sort))
                         else true end
                     )
+                else
+                    (.semantic_fields | strings_unique and length > 0)
+                    and ([.semantic_fields[] as $key |
+                          allowed_semantic | index($key)] | all(.[]; . != null))
+                    and (.request.vars | strings_unique and length > 0)
+                    and ((.ignore // []) | strings_unique)
+                    and ((.ignore_recursive // []) | strings_unique)
+                    and (.reason | type == "string" and length > 0)
+                    and ([((.ignore // [])[]) as $key |
+                          allowed_ignored | index($key)] | all(.[]; . != null))
+                    and ([((.ignore_recursive // [])[]) as $key |
+                          allowed_recursive | index($key)] | all(.[]; . != null))
+                    and (has("permutation_field") | not)
+                    and (has("permutation_values") | not)
                 end
             )
         ' >/dev/null <<<"$line"; then

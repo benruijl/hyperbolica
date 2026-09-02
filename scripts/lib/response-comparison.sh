@@ -116,12 +116,17 @@ hf_semantic_response() {
                 status=1
                 break
             fi
-            mv -- "$next" "$working"
+            if ! mv -- "$next" "$working"; then
+                status=1
+                break
+            fi
         done < <(jq -r '.[]' <<<"$fields")
     fi
 
     if ((status == 0)); then
-        cat -- "$working"
+        if ! cat -- "$working"; then
+            status=1
+        fi
     fi
     rm -rf -- "$temporary"
     return "$status"

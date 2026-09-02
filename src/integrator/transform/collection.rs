@@ -337,7 +337,7 @@ pub fn canonicalize_regulator_sym(regulator: &RegulatorSym) -> Result<RegulatorS
 pub fn regulator_content_key(regulator: &Regulator) -> Result<String> {
     let mut output = String::new();
     for term in canonicalize_regulator(regulator)? {
-        output.push_str(&term.coef.to_atom().to_string());
+        output.push_str(&crate::symbols::plain_atom_string(term.coef.to_atom()));
         output.push('\u{3}');
         output.push_str(&regkey_content_key(&term.key));
         output.push('\u{4}');

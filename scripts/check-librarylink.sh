@@ -82,7 +82,13 @@ adapter_dir=$(cd -- "$(dirname -- "$adapter")" && pwd)
 "$cxx_bin" -std=c++17 -Wall -Wextra -Werror -pedantic -fsyntax-only \
     -I"$include_dir" "$cpp_source"
 
-HYPERBOLICA_LIBRARY_PATH="$backend" "$scratch/librarylink-smoke"
+if [[ -n ${SYMBOLICA_LICENSE:-} || -n ${SYMBOLICA_LICENSE_SERVER:-} ]]; then
+    HYPERBOLICA_LIBRARY_PATH="$backend" \
+        HYPERBOLICA_LIBRARYLINK_LICENSED_TEST=1 \
+        "$scratch/librarylink-smoke"
+else
+    HYPERBOLICA_LIBRARY_PATH="$backend" "$scratch/librarylink-smoke"
+fi
 
 # Verify the relocatable production layout independently of the environment
 # override: both libraries are co-located and the adapter finds its sibling

@@ -4,7 +4,7 @@ Hyperbolica is a Rust port of
 [SubTropica/HyperFLINT](https://github.com/SubTropica/SubTropica/tree/main/HyperFLINT)
 for exact hyperlogarithmic integration and linear-reducibility analysis. Its
 production API accepts Symbolica `Atom` values directly, and its only computer
-algebra backend is the official Symbolica `dev_poly` checkout in
+algebra backend is the official Symbolica `dev` checkout in
 `vendor/symbolica`.
 
 The port is under active development. The Rust core, typed Atom API, JSON
@@ -31,13 +31,12 @@ Run the dependency and source audit with:
 scripts/check-pure-symbolica.sh
 ```
 
-The exact revision, checkout command, and small local Symbolica patch are
-recorded in
+The exact clean upstream revision and checkout command are recorded in
 [`vendor/SYMBOLICA_SNAPSHOT.md`](vendor/SYMBOLICA_SNAPSHOT.md). The former
 `vendor/symbolica-src` source copy is retained only as a historical audit
 artifact and is not selected by Cargo.
 
-The current symbolized profiling record, including resultant-backend and
+The historical symbolized diagnostic profile, including resultant-backend and
 partial-fraction hotspots, is in
 [`docs/performance-profile.md`](docs/performance-profile.md).
 
@@ -46,14 +45,15 @@ partial-fraction hotspots, is in
 Rust 1.89 or newer is required.
 
 ```sh
-git clone --branch dev_poly --single-branch \
+git clone --branch dev --single-branch \
   https://github.com/symbolica-dev/symbolica.git vendor/symbolica
-git -C vendor/symbolica checkout 76e3eb630abcc4d597463d759a0b40fedb57b764
-git -C vendor/symbolica switch -C dev_poly
-git -C vendor/symbolica apply ../symbolica-dev_poly.patch
+git -C vendor/symbolica checkout 0b57776bf911faeea7e28ea133706fb03740ffeb
+git -C vendor/symbolica switch -C dev
 cargo build --release
-cargo test --all-targets
-cargo clippy --all-targets -- -D warnings
+cargo test --locked --lib --tests --bins --examples
+cargo test --locked --benches
+cargo clippy --locked --all-targets --all-features -- -D warnings
+scripts/check-examples.sh
 ```
 
 Symbolica's unlicensed mode permits one process and one core. On an unlicensed
@@ -62,6 +62,11 @@ machine, use the serialized harness instead of Cargo's parallel test runner:
 ```sh
 scripts/test-unlicensed.sh
 ```
+
+The harness actively removes both Symbolica credential variables, runs every
+test in its own single-threaded process, and forces bridge requests onto the
+serial path. Direct integration consults Symbolica's licensed thread limit
+before entering its Rayon branch.
 
 If another Symbolica process already owns the machine-wide community-license
 port, compilation and `--no-run` checks still work, but executing Symbolica
@@ -171,6 +176,17 @@ printf '%s\n' \
   | cargo run --release --bin hyperflint -- eval-json
 ```
 
+The upstream memory-control setting is also supported for full integration:
+
+```sh
+HF_MAX_THREADS_PER_CALL=1 cargo run --release --bin hyperflint -- eval-json \
+  <<<'{"op":"hyperflint","vars":["x"],"vars_int":["x"],"f":"1/(1+x)^2"}'
+```
+
+It caps only `hyperflint` requests and is request-scoped, including through the
+C ABI and LibraryLink adapter. Exact parsing and concurrency behavior are
+documented in [`tests/COMPATIBILITY.md`](tests/COMPATIBILITY.md).
+
 The accepted JSON operations and oracle workflow are documented in
 [`tests/COMPATIBILITY.md`](tests/COMPATIBILITY.md). This adapter deliberately
 does not define the production Rust API.
@@ -180,11 +196,15 @@ does not define the production Rust API.
 An isolated `librarylink/` crate implements the nine-symbol surface loaded by
 the pinned SubTropica release. It is a separate dynamic library because the
 upstream LibraryLink callbacks and stable C ABI reuse several names with
-incompatible signatures. Build and stage both Symbolica-backed libraries with
-`scripts/build-librarylink.sh`; verify exports, C/C++ ABI layout, lifecycle,
-UTF-8 marshalling, and the six upstream LR strategy rows with
-`scripts/check-librarylink.sh`. See [`docs/librarylink.md`](docs/librarylink.md)
-for version stamping and a `LibraryFunctionLoad` example.
+incompatible signatures. Build one local development stage containing the CLI,
+stable C-ABI backend, LibraryLink adapter, headers, and license notices with
+`scripts/stage-local.sh`. The adapter defaults to the pinned SubTropica
+compatibility version `1.2.13`; the stage metadata records that value and marks
+the bundle non-redistributable. Verify exports, C/C++ ABI layout, lifecycle,
+UTF-8 marshalling, and—with a Symbolica license set—the six upstream LR
+strategy rows with `scripts/check-librarylink.sh`. See
+[`docs/librarylink.md`](docs/librarylink.md) for version stamping and a
+`LibraryFunctionLoad` example.
 
 ## Performance verification
 
@@ -212,14 +232,19 @@ BENCHMARK_MODE=qualification \
 
 The locked qualification gate uses 12 adjacent, balanced backend pairs for
 each workload, a stratified bootstrap upper confidence bound, a severe
-per-workload limit, and a peak-RSS limit. It requires the complete checked-in
+per-workload limit, and a peak-RSS limit. The ordinary RSS limit remains
+1.25; the dense resultant alone has a documented 1.60 override recording the
+accepted exact-division workspace tradeoff. It requires the complete checked-in
 corpus, sanitized one-thread child environments, fixed CPU affinity, clean
-source revisions, the LTO Rust profile, and upstream's optimized
-`release-portable` C++ profile. Qualification builds Rust in a fresh isolated
-target directory and clean-builds the pinned C++ source in a fresh CMake tree;
-the supplied C++ path is used only to locate that source checkout. The default
-mode is exploratory and can never claim qualification. No parity claim may be
-made from compilation, an exploratory run, or a failed/missing qualification
+root and nested Symbolica source revisions, the LTO Rust profile, and
+upstream's optimized `release-portable` C++ profile. Qualification first runs
+the pure-Symbolica gate and binds the nested checkout provenance into the Rust
+build manifest. After building Rust in a fresh isolated target directory, it
+reruns that audit and rejects any revision, branch, remote, or worktree-root
+change. It then clean-builds the pinned C++ source in a fresh CMake tree; the
+supplied C++ path is used only to locate that source checkout. The default mode
+is exploratory and can never claim qualification. No parity claim may be made
+from compilation, an exploratory run, or a failed/missing qualification
 artifact; see
 [`docs/verification.md`](docs/verification.md).
 

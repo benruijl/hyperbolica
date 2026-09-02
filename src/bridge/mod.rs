@@ -8,6 +8,7 @@ mod narrow;
 mod reduction;
 mod series;
 mod symcoef;
+mod thread_budget;
 mod wire;
 mod words;
 
@@ -20,6 +21,15 @@ pub const SCHEMA_VERSION: u64 = 2;
 /// Evaluate one JSON request and return a protocol response.
 pub fn evaluate(request: &Value) -> Result<Value> {
     let op = wire::string_field(request, "op")?;
+
+    // The pinned C++ compatibility handler applies
+    // HF_MAX_THREADS_PER_CALL only to hyperflint_sym. Keep that exact scope,
+    // while using a request-local Rayon pool instead of process-global state.
+    if op == "hyperflint" {
+        return thread_budget::with_max_threads_per_call(|force_serial| {
+            evaluate_hyperflint(request, force_serial)
+        });
+    }
 
     if let Some(response) = words::evaluate(request, op) {
         return response;
@@ -44,6 +54,19 @@ pub fn evaluate(request: &Value) -> Result<Value> {
     }
 
     Err(Error::InvalidInput(format!("unknown op `{op}`")))
+}
+
+fn evaluate_hyperflint(request: &Value, force_serial: bool) -> Result<Value> {
+    if force_serial {
+        let mut serial_request = request.clone();
+        serial_request
+            .as_object_mut()
+            .expect("a request with a string op is a JSON object")
+            .insert("parallel".into(), Value::Bool(false));
+        return integration::evaluate(&serial_request, "hyperflint")
+            .expect("integration bridge recognizes hyperflint");
+    }
+    integration::evaluate(request, "hyperflint").expect("integration bridge recognizes hyperflint")
 }
 
 pub fn evaluate_json(input: &str) -> Result<String> {
@@ -137,5 +160,26 @@ mod tests {
         }))
         .unwrap();
         assert_eq!(ignored_contour_metadata["result"], json!([]));
+    }
+
+    #[test]
+    fn serial_thread_budget_overrides_parallel_request_without_mutating_it() {
+        let request = json!({
+            "op": "hyperflint",
+            "vars": ["x"],
+            "vars_int": ["x"],
+            "f": "1/(x+1)^2",
+            "parallel": true,
+            "check_divergences": true,
+        });
+        let response = thread_budget::with_effective_thread_limit(1, |force_serial| {
+            assert!(force_serial);
+            evaluate_hyperflint(&request, force_serial)
+        })
+        .unwrap();
+
+        assert_ne!(response["failed"], true);
+        assert_eq!(response["result"], json!([{"coef": "1", "key": []}]));
+        assert_eq!(request["parallel"], true);
     }
 }

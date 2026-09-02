@@ -214,7 +214,26 @@ fn linear_factor_wire_order_matches_numeric_and_symbolic_flint_oracles() {
         "linear_factors",
     )
     .unwrap();
-    assert_eq!(scaled["linear"], json!([[1, "-1", "2"], [1, "-1", "3"]]));
+    assert_eq!(scaled["constant"], "1");
+    assert_eq!(
+        scaled["linear"],
+        json!([[1, "-1/2", "1"], [1, "-1/3", "1"]])
+    );
+
+    let repeated_scaled = evaluate_supported(
+        &json!({
+            "poly": "(x-1)^2*(2*x+3)",
+            "var": "x",
+            "vars": ["x"]
+        }),
+        "linear_factors",
+    )
+    .unwrap();
+    assert_eq!(repeated_scaled["constant"], "1");
+    assert_eq!(
+        repeated_scaled["linear"],
+        json!([[1, "-3/2", "1"], [2, "1", "1"]])
+    );
 }
 
 #[test]

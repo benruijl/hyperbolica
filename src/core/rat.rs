@@ -11,6 +11,8 @@ mod traits;
 mod typed_ops;
 
 #[cfg(test)]
+mod property_tests;
+#[cfg(test)]
 mod tests;
 
 use std::sync::{Arc, OnceLock};

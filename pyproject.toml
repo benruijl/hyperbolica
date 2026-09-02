@@ -9,6 +9,7 @@ description = "Pure-Symbolica exact hyperlogarithm integration"
 readme = "README.md"
 requires-python = ">=3.10"
 license = { file = "DISTRIBUTION-LICENSE.md" }
+license-files = ["DISTRIBUTION-LICENSE.md", "LICENSE", "vendor/symbolica/License.md"]
 classifiers = [
   "Programming Language :: Python :: 3",
   "Programming Language :: Rust",

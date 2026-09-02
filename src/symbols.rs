@@ -11,6 +11,7 @@ mod mpl;
 mod word;
 
 use symbolica::prelude::{Atom, AtomCore, AtomView, Symbol, get_symbol, initialize, symbol};
+use symbolica::printer::PrintOptions;
 
 pub use hlog::Hlog;
 pub use mpl::Mpl;
@@ -128,6 +129,16 @@ pub fn period_atom(index: u32) -> Atom {
 /// Return the centrally registered `Log2` atom.
 pub fn log_two_atom() -> Atom {
     heads().log_two.to_atom()
+}
+
+/// Format a native Atom as stable plain text, independent of terminal color.
+///
+/// Symbolica's default [`std::fmt::Display`] output follows stdout's TTY
+/// state and may insert ANSI styling. Internal keys, stored context names,
+/// and machine-readable output must instead select the file printer
+/// explicitly.
+pub(crate) fn plain_atom_string(atom: impl AtomCore) -> String {
+    atom.printer(PrintOptions::file_no_namespace()).to_string()
 }
 
 /// Whether an indeterminate is a constant owned by Hyperbolica.

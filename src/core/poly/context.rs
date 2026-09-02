@@ -4,7 +4,7 @@ use symbolica::prelude::{Atom, AtomView, PolyVariable, Symbol};
 
 use super::PolyCtx;
 use crate::error::{Error, Result};
-use crate::symbols::SYMBOL_NAMESPACE;
+use crate::symbols::{SYMBOL_NAMESPACE, plain_atom_string};
 
 impl PolyCtx {
     pub fn new<I, S>(variables: I) -> Result<Arc<Self>>
@@ -81,6 +81,11 @@ impl PolyCtx {
     where
         I: IntoIterator<Item = Atom>,
     {
+        let indeterminates = indeterminates.into_iter().collect::<Vec<_>>();
+        let names = indeterminates
+            .iter()
+            .map(plain_atom_string)
+            .collect::<Vec<_>>();
         let variables = indeterminates
             .into_iter()
             .map(|atom| PolyVariable::try_from(atom).map_err(Error::InvalidInput))
@@ -93,10 +98,6 @@ impl PolyCtx {
                 )));
             }
         }
-        let names = variables
-            .iter()
-            .map(ToString::to_string)
-            .collect::<Vec<_>>();
         Ok(Arc::new(Self {
             names: Arc::new(names),
             variables: Arc::new(variables),

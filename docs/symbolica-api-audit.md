@@ -1,14 +1,14 @@
 # Symbolica public-API audit and migration map
 
-Status: source audit of the selected Symbolica checkout used by this repository, updated 2026-09-01.
+Status: source audit of the selected Symbolica checkout used by this repository, updated 2026-09-02.
 
 This document is a migration decision record, not a claim that an API name alone makes a replacement correct or faster. Every positive capability below was checked in the public Rust source, including the implementation bounds and relevant tests. Performance statements marked *expected* are hypotheses that must pass the benchmark gates near the end of this document.
 
 ## Scope and verdict vocabulary
 
-The selected dependency is Symbolica 2.2.0 from the official `dev_poly` branch
+The selected dependency is Symbolica 2.2.0 from the official `dev` branch
 at `vendor/symbolica`, audited at
-`76e3eb630abcc4d597463d759a0b40fedb57b764`. The copied
+`0b57776bf911faeea7e28ea133706fb03740ffeb`. The copied
 `vendor/symbolica-src` tree is archival and is not selected by Cargo. Source
 anchors below are relative to `vendor/symbolica/src` unless a different root
 is stated.
@@ -20,16 +20,16 @@ is stated.
 
 The audit covered `src/**`, Symbolica's Rust source and in-tree tests, and public trait bounds. A negative text search is evidence only for this exact 2.2.0 snapshot; it is not a claim about every Symbolica release.
 
-## Executive migration order
+## Original migration order and current status
 
-1. **P0 — enforce the Atom/symbol contract and fix correctness.** Keep public input as a concrete `Atom`; use `AtomView` internally. Register every library-owned head once in `src/symbols.rs`. Represent indexed objects as function indeterminates such as `Wm(1)`, `MZV(3,5)`, and `Period(7)`, never as dynamically minted string symbols. Change `heads()` to lookup the initialized symbols with `get_symbol!` instead of rebuilding through `symbol!` on every call. Fix the missing conventional discriminant sign described below.
-2. **P1 — make native rational polynomials the core.** Replace `Rat { Poly<Q>, Poly<Q> }` with a checked newtype around `RationalPolynomial<IntegerRing, u16>`. Preserve `PolyCtx`, errors, signed powers, and Atom conversion at the wrapper. This removes duplicated normalization, denominator-GCD addition, cross-cancelled multiplication, quotient-rule differentiation, and partial-fraction conversion round trips.
-3. **P1 — finish the direct native partial-fraction path.** Call `apart_factored_denominators` on the new native `Rat` storage. Retain HyperFLINT-shaped linear-pole validation, scaling, ordering tests, and reconstruction tests.
-4. **P1 — replace duplicated polynomial primitives.** `Poly` is already a wrapper around Symbolica. Route substitution, evaluation, integration, exact division, GCD, factorization, and resultants directly to the public typed APIs and remove string round trips. Retain only context/error policy and domain-specific proportional normalization.
-5. **P1 — implement the pure-Symbolica Euler backend.** Replace HyperFLINT's `msolve` process, file protocol, and output parser with `GroebnerBasis<Zp, _, GrevLexOrder>::new`; retain the DK sector construction, randomized specialization, finite-field constraint-root choice, staircase count, memoization, and conservative voting rules. Benchmark F4 kernel time separately from removed process/serialization overhead.
+1. **P0 — enforce the Atom/symbol contract and fix correctness. Implemented.** Public input is a concrete `Atom`, library heads are registered once, indexed objects are function indeterminates, and the conventional discriminant sign is covered by tests.
+2. **P1 — make native rational polynomials the core. Implemented.** `Rat` is a checked newtype around `RationalPolynomial<IntegerRing, u16>`; `PolyCtx`, typed errors, signed powers, lazy compatibility views, and Atom conversion remain in the wrapper.
+3. **P1 — finish the direct native partial-fraction path. Implemented.** The native storage calls `apart_factored_denominators`; HyperFLINT-shaped linear-pole validation, scaling, ordering, and reconstruction remain in the adapter.
+4. **P1 — replace duplicated polynomial primitives. Implemented.** Substitution, evaluation, integration, exact division, GCD, factorization, and resultants route to public typed Symbolica APIs without internal string round trips.
+5. **P1 — implement the pure-Symbolica Euler backend. Implemented.** Native `GroebnerBasis<Zp, _, GrevLexOrder>` replaces the `msolve` process protocol while retaining DK sector construction, randomized specialization, constraint-root selection, staircase counting, memoization, and conservative voting.
 6. **P2 — integrate Symbolica expression hooks.** **Implemented.** Native derivative and conservative series callbacks are registered for the `Hlog` and `Mpl` heads. Typed word algorithms remain on the integration hot path; arbitrary canonical Atom expressions use Symbolica's chain rule and series engine.
 7. **P2 — treat native Atom series and algebraic roots as oracles first.** They are broader than the current code, but Atom conversion and generic algebraic-field machinery may cost more than the specialized rational recurrences/Vieta reductions. Delete the old paths only after correctness and performance gates pass.
-8. **P2/P3 — replace string keys and parsers at boundaries.** Use native `Atom`, `PolyVariable`, polynomial/RP `Eq + Hash`, and typed word keys. Keep JSON/C/Python string parsing only as compatibility transport, never as internal CAS.
+8. **P2/P3 — replace string keys and parsers at boundaries. Partially implemented.** Hot semantic keys use native structural values and collision-checked buckets. JSON/C compatibility still parses and formats strings by design; those strings do not become internal CAS identity.
 
 ## Build purity: the selected build has no FLINT path
 
@@ -40,7 +40,7 @@ symbolica = { path = "vendor/symbolica", default-features = false,
               features = ["faster_alloc", "integer-gmp", "float-mpfr"] }
 ```
 
-This is at `Cargo.toml:31`. In the selected manifest, the default feature set includes `native_code_generation`, but defaults are disabled here (`vendor/symbolica/Cargo.toml:38-72`). FLINT appears only as the optional dependency behind `flint_benchmarks` and `flint_system_benchmarks` (`vendor/symbolica/Cargo.toml:88-92,136-142`). Neither feature is selected. The optional root `python` feature adds Symbolica's `python_export`; that feature's dependency list is at `vendor/symbolica/Cargo.toml:61-72` and does not select a FLINT feature.
+This is at `Cargo.toml:32`. In the selected manifest, the default feature set includes `native_code_generation`, but defaults are disabled here (`vendor/symbolica/Cargo.toml:38-45`). FLINT appears only as the optional dependency behind `flint_benchmarks` and `flint_system_benchmarks` (`vendor/symbolica/Cargo.toml:87-92,138`). Neither feature is selected. The optional root `python` feature adds Symbolica's `python_export`; that feature's dependency list is at `vendor/symbolica/Cargo.toml:70-77` and does not select a FLINT feature.
 
 Both of these checks report that `flint3-sys` is absent:
 
@@ -52,7 +52,7 @@ cargo tree -e features -i flint3-sys --features python
 error: package ID specification `flint3-sys` did not match any packages
 ```
 
-`Cargo.lock` also has no `flint3-sys` package. GMP and MPFR are the selected integer/float arithmetic backends through `rug`; they are not CAS replacements and do not introduce FLINT. Native code generation/JIT is also not selected. The evaluator remains available, but JIT/export modules are gated by `native_code_generation` (`evaluate.rs:7-45`).
+`Cargo.lock` also has no `flint3-sys` package. GMP and MPFR are the selected integer/float arithmetic backends through `rug`; they are not CAS replacements and do not introduce FLINT. Native code generation/JIT is also not selected. The evaluator remains available, but JIT/export modules are gated by `native_code_generation` (`evaluate.rs:7-46`).
 
 Required CI guard: run both `cargo tree` checks above and fail if `flint3-sys` enters either the default or Python graph. Also reject `flint_benchmarks` and `flint_system_benchmarks` in release feature matrices.
 
@@ -69,12 +69,12 @@ Required CI guard: run both `cargo tree` checks above and fail if `flint3-sys` e
 | Child/term traversal | `terms`, `children`, and `visitor` (`atom/core.rs:2140-2161,2214-2253`); `AtomTreeIterator` (`id.rs:6309-6355`) | Several scanners/tokenizers/string walkers | **REPLACE** Atom-level scanners. A typed word iterator is domain logic and remains. |
 | Symbol/indeterminate discovery | `get_all_symbols`, `get_all_indeterminates`, `contains_symbol`, `contains` (`atom/core.rs:1707-1765`) | `bridge/wire.rs::scan_identifiers`, parser variable collection, and some string-token code | **REPLACE** for Atom inputs. Use `enter_functions` deliberately: `false` treats a function call as an indeterminate; `true` also descends into its arguments. |
 | Canonical equality/order/hash | Native `Eq`, `Hash`, `Ord` on `Atom` (`atom.rs:3213-3225`) and `Eq`/comparison on `AtomView` (`atom.rs:2408-2435`) | Canonical strings are used as cache keys in words/regulators/tables | **REPLACE** internal string keys with typed Atom/word keys. Formatting is not an identity representation. |
-| Bulk arithmetic/canonicalization | Normalizing operators in `atom/ops.rs`; `Atom::add_many` is an n-way merge and `mul_many` normalizes once (`atom.rs:4457-4492`); `FunctionBuilder::finish` normalizes (`atom.rs:3510-3597`) | Repeated Atom addition/multiplication in output conversion | **REPLACE** bulk folds with `add_many`/`mul_many`; expected to reduce intermediate allocations. Typed polynomial arithmetic should stay typed rather than detouring through Atom. |
+| Bulk arithmetic/canonicalization | Normalizing operators in `atom/ops.rs`; `Atom::add_many` is an n-way merge and `mul_many` normalizes once (`atom.rs:4472-4509`); `FunctionBuilder::finish` normalizes (`atom.rs:3510-3597`) | Repeated Atom addition/multiplication in output conversion | **REPLACE** bulk folds with `add_many`/`mul_many`; expected to reduce intermediate allocations. Typed polynomial arithmetic should stay typed rather than detouring through Atom. |
 | General CAS rewrites | `together`, `apart`, `apart_multivariate`, `cancel`, `factor`, `factor_complex`, `factor_in_extension` (`atom/core.rs:395-520`) | Some boundary code re-parses and normalizes rational text | **WRAP** for general user expressions; use typed polynomial/RP APIs in hot kernels. `apart_multivariate` explicitly computes a Gröbner basis and may be slow (`atom/core.rs:426-450`). |
 
 ### Centralized symbols and hooks
 
-`initialize!` registers a module-scope `StateInitializer` with dependency ordering (`state.rs:203-253`); the global mappings and thread-local recyclable workspace are at `state.rs:266-282`. `symbol!` builds or fetches symbols through `SymbolBuilder` (`atom.rs:4021-4122`), while `get_symbol!` is lookup-only and returns `Option<Symbol>` (`atom.rs:4215-4240`). `symbol_group!` is available for mutually dependent hooks (`atom.rs:4242-4297`).
+`initialize!` registers a module-scope `StateInitializer` with dependency ordering (`state.rs:203-253`); the global mappings and thread-local recyclable workspace are at `state.rs:266-282`. `symbol!` builds or fetches symbols through `SymbolBuilder` (`atom.rs:4036-4137`), while `get_symbol!` is lookup-only and returns `Option<Symbol>` (`atom.rs:4242-4255`). `symbol_group!` is available for mutually dependent hooks (`atom.rs:4293-4297`).
 
 `SymbolBuilder` supplies the exact public extension points Hyperbolica needs:
 
@@ -94,7 +94,7 @@ rg -n '(PolyCtx::new|symbol!|Symbol::parse)[^\n]*"(mzv_[m0-9]|Log2"|Wm_[0-9]|Wp_
   src --glob '!bridge/**' --glob '!symbols/legacy.rs'
 ```
 
-Verdict: **WRAP, complete for P0.** The representation is polynomial-compatible because `PolyVariable` supports `Symbol`, `Function(Symbol, Atom)`, `Power(Atom)`, and `Temporary` and implements conversion from function/power Atoms (`poly.rs:738-848`). Benchmark context construction and large MZV reductions as part of the remaining performance gates.
+Verdict: **WRAP, complete for P0.** The representation is polynomial-compatible because `PolyVariable` supports `Symbol`, `Function(Symbol, Atom)`, `Power(Atom)`, and `Temporary` and implements conversion from function/power Atoms (`poly.rs:739-849`). Benchmark context construction and large MZV reductions as part of the remaining performance gates.
 
 ### Implemented `Hlog`/`Mpl` expression hooks (P2)
 
@@ -109,7 +109,7 @@ generic `der(...)` form. The series engine expands every argument first, calls
 the custom transform, and expands/multiplies the returned pair
 (`derivative.rs:445-505`). Public `Series<AtomField>` precision, coefficient,
 term, variable, and Atom-conversion accessors are at `poly/series.rs:393-685`
-and `poly/series.rs:1434-1464`.
+and `poly/series.rs:1473-1493`.
 
 The canonical normalized encodings are:
 
@@ -125,7 +125,7 @@ when collecting rational indeterminates; it never promotes the complete list
 call to one polynomial variable.
 
 The one central `initialize!` block registers normalization, derivative, and
-series callbacks in `src/symbols.rs:32-55`. Exact partial Hlog and MPL
+series callbacks in `src/symbols.rs:33-56`. Exact partial Hlog and MPL
 formulas are in `src/symbols/hooks/derivative.rs`; coincident Hlog letters or
 endpoints, zero divisors, non-positive MPL indices, and malformed MPL arity
 leave the callback unset. Consequently unsupported singular calls remain
@@ -161,8 +161,9 @@ performance/failure boundary, not an approximation: Symbolica falls back to
 its generic series behavior. Tests cover zero and regular Hlog series,
 depth-one and depth-two MPL defining sums, the native depth-one polylog oracle,
 the weight-one logarithmic singularity, malformed arity, first-only MPL zero,
-and argument-pole deferral. Runtime execution remains part of the pending
-licensed serial gate; all hook tests are included in the compile/no-run gate.
+and argument-pole deferral. Runtime execution passes in both the licensed
+serial suite and the default-parallel library suite on the selected `dev`
+revision; the compile/no-run gate covers the same tests without a license.
 
 ### Structural equality, hashing, and cache keys
 
@@ -171,7 +172,7 @@ ordering surface before changing the LR caches. `AtomView` compares its
 canonical encoded data and implements structural `Ord` and `Hash`
 (`atom.rs:2408-2435,2655-2672`); owned `Atom` delegates `Eq`, `Hash`, and `Ord`
 to that view (`atom.rs:3213-3225`). `PolyVariable` derives structural
-`Eq + Hash + Ord`, including owned function/power Atoms (`poly.rs:738-758`).
+`Eq + Hash + Ord`, including owned function/power Atoms (`poly.rs:739-764`).
 `MultivariatePolynomial` implements structural `Eq + Hash` over coefficients,
 exponents, and the nonconstant variable map
 (`poly/polynomial.rs:1647-1687`). Symbolica itself uses those polynomial values
@@ -227,7 +228,7 @@ Namespaced-context and forced-collision regressions cover this invariant.
 The word/primitive key path has now received the same structural treatment.
 The complete relevant public surface was checked again: `PolyVariable`
 derives structural `Hash + PartialEq + Eq` across symbol, function-Atom,
-power-Atom, and temporary variants (`poly.rs:745-760`), and canonical
+power-Atom, and temporary variants (`poly.rs:746-764`), and canonical
 `RationalPolynomial` derives `PartialEq + Eq + Hash` over its native numerator
 and denominator (`domains/rational_polynomial.rs:91-96`). Those polynomials in
 turn use the coefficient/exponent arrays plus the structural variable map for
@@ -249,7 +250,7 @@ same audit before their formatted keys were removed. The decisive public
 Symbolica contracts remain `AtomView` canonical-byte `Eq + Hash + Ord`
 (`atom.rs:2408-2435,2655-2672`), owned `Atom` delegation
 (`atom.rs:3213-3225`), structural `PolyVariable` equality and hashing across
-symbol/function/power variants (`poly.rs:745-760`), canonical polynomial
+symbol/function/power variants (`poly.rs:746-760`), canonical polynomial
 `Eq + Hash` (`poly/polynomial.rs:1647-1687`), and rational-polynomial
 `Eq + Hash` (`domains/rational_polynomial.rs:91-96`). There is still no safe
 public cross-context polynomial `Ord`; `InternalOrdering` retains its
@@ -315,7 +316,7 @@ This design deliberately wraps Symbolica's public contracts instead of
 inventing a parallel key representation: owned `Atom` delegates `Eq + Hash`
 to canonical `AtomView` data (`atom.rs:2408-2435,2655-2672,3213-3225`),
 `PolyVariable` derives structural `Eq + Hash` including owned function/power
-Atoms (`poly.rs:745-760`), and `MultivariatePolynomial` compares and hashes
+Atoms (`poly.rs:746-760`), and `MultivariatePolynomial` compares and hashes
 canonical coefficient/exponent arrays plus nonconstant variable maps
 (`poly/polynomial.rs:1647-1687`). Because native constant-polynomial equality
 intentionally omits its variable map, Hyperbolica's `Poly::Eq + Hash` prefixes
@@ -332,31 +333,31 @@ is the algebraic-letter identity.
 | Atom to polynomial with Atom coefficients | `to_polynomial_in_vars<E: Exponent>` (`atom/core.rs:1354-1408`) | Use only when selected indeterminates should be variables and everything else should stay in `AtomField`. It is not a replacement for a pure-Q `Poly`. |
 | Atom to canonical RP | `try_to_rational_polynomial<R, RO, E>` (`atom/core.rs:1410-1509`). Input `R: EuclideanDomain + ConvertToRing`; output `RO: EuclideanDomain + PolynomialGCD<E>`; the target RP needs the appropriate `FromNumeratorAndDenominator` implementations | **WRAP, implemented** once at the input boundary: `Rat::from_atom` stores the resulting integer RP directly. |
 | Atom to factorized RP | `try_to_factorized_rational_polynomial` (`atom/core.rs:1511-1593`) additionally requires output polynomial `Factorize` support | Selective **WRAP** only; see factorized-RP caveats below. |
-| Typed polynomial/RP to Atom | `MultivariatePolynomial::to_expression[_into]` (`poly.rs:2277-2363`) and `RationalPolynomial::to_expression[_into]` (`poly.rs:2436-2464`) | **REPLACE** custom formatting/reparse conversion. The `_into` forms permit recyclable output storage. |
+| Typed polynomial/RP to Atom | `MultivariatePolynomial::to_expression[_into]` (`poly.rs:2278-2364`) and `RationalPolynomial::to_expression[_into]` (`poly.rs:2437-2465`) | **REPLACE** custom formatting/reparse conversion. The `_into` forms permit recyclable output storage. |
 
 ### MultivariatePolynomial
 
-`MultivariatePolynomial<F,E,O>` is a sparse, sorted, expanded representation (`poly/polynomial.rs:742-753`) with a shared ring/variable context (`poly/polynomial.rs:789-872`). Native structural equality and hashing include coefficients, exponents, and the nonconstant variable map (`poly/polynomial.rs:1647-1687`). `Poly` already stores `MultivariatePolynomial<RationalField,u16>` (`src/core/poly.rs:11-18`), so most `Poly` work is already Symbolica-backed; the right migration is to thin the wrapper, not introduce Atom arithmetic.
+`MultivariatePolynomial<F,E,O>` is a sparse, sorted, expanded representation (`poly/polynomial.rs:742-753`) with a shared ring/variable context (`poly/polynomial.rs:789-872`). Native structural equality and hashing include coefficients, exponents, and the nonconstant variable map (`poly/polynomial.rs:1647-1687`). `Poly` already stores `MultivariatePolynomial<RationalField,u16>` (`src/core/poly.rs:19-35`), so most `Poly` work is already Symbolica-backed; the right migration is to thin the wrapper, not introduce Atom arithmetic.
 
 | Current `Poly` operation | Native operation | Duplicate? | Verdict / performance note |
 |---|---|---|---|
 | zero/one/generator/int, term count, degree, bounds, coefficient | constructors and accessors (`poly/polynomial.rs:868-1120`), `degree`, `degree_bounds`, `lcoeff`, `derivative`, `coefficient` (`poly/polynomial.rs:2101-2239`) | Wrapper/validation only | **WRAP**. Keep bounds checking and Hyperbolica's zero-degree convention (`-1`) explicit. |
 | add/sub/mul/pow | native operators; `.pow(usize)` (`poly/polynomial.rs:3236`) | No independent CAS | **WRAP**. |
-| exact division and quotient/remainder | trait-selected `.try_div_exact` (`poly/polynomial.rs:5008-5012`); `quot_rem` (`poly/polynomial.rs:5088-5115`); generic `.try_div` (`poly/polynomial.rs:5139-5165`) | Thin wrapper | Prefer `try_div_exact` because the coefficient domain selects the algorithm; preserve division-by-zero errors. |
-| GCD/factor | `.gcd` (`poly/gcd.rs:3560`) backed by `PolynomialGCD` (`poly/gcd.rs:7111+`); `Factorize::{square_free_factorization,factor,is_irreducible}` (`poly/factor.rs:2369-2378`) with Z/Q/finite-field implementations | Thin wrapper | **WRAP** native only. Do not build a second GCD/factor algorithm. |
+| exact division and quotient/remainder | trait-selected `.try_div_exact` (`poly/polynomial.rs:5013-5018`); `quot_rem` (`poly/polynomial.rs:5093-5121`); generic `.try_div` (`poly/polynomial.rs:5144-5232`) | Thin wrapper | Prefer `try_div_exact` because the coefficient domain selects the algorithm; preserve division-by-zero errors. |
+| GCD/factor | `.gcd` (`poly/gcd.rs:3632-3640`) backed by `PolynomialGCD` (`poly/gcd.rs:7292+`); `Factorize::{square_free_factorization,factor,is_irreducible}` (`poly/factor.rs:2736-2745`) with Z/Q/finite-field implementations | Thin wrapper | **WRAP** native only. Do not build a second GCD/factor algorithm. |
 | substitution | `.replace(var, coefficient)`, `.replace_all`, `.replace_with_poly` (`poly/polynomial.rs:2556-2717`) | Former string-valued `Poly::substitute_rational` | **REPLACE, implemented** with typed `Rational`/`Integer`; no core formatting/reparse. |
 | evaluation | `.evaluate`, `.evaluate_with_coeff_map`, `.replace_all` (`poly/polynomial.rs:2651-2705`) | Former string-valued `Poly::evaluate_all` | **REPLACE, implemented** with typed exact return values. |
 | variable remap/transplant | `.rearrange` and `.rearrange_with_growth` (`poly/polynomial.rs:3181-3229`) | `Poly::transplant` is custom | **WRAP** native for bijective/permutation maps. Retain explicit validation/merge logic if Hyperbolica allows many-to-one maps; do not assume the native operation has that policy. |
 | split as polynomial in one/many variables | `.to_univariate`, `.to_univariate_polynomial_list`, `.to_multivariate_polynomial_list` (`poly/polynomial.rs:3306-3425`) | `Poly::coefficient_of` scans terms | **RETAIN** the direct sparse coefficient query until benchmarked. `to_univariate_polynomial_list` allocates a vector spanning min-to-max degree (`poly/polynomial.rs:3368-3401`), so it can lose badly on sparse high-degree inputs. |
-| polynomial antiderivative | `.integrate(var)` for `F: Field` (`poly/polynomial.rs:6233-6255`) | `primitive.rs` manually loops polynomial coefficients | **REPLACE** the polynomial-part loop. |
+| polynomial antiderivative | `.integrate(var)` for `F: Field` (`poly/polynomial.rs:6241-6265`) | `primitive.rs` manually loops polynomial coefficients | **REPLACE** the polynomial-part loop. |
 | proportional canonical form | content/sign helpers, but no API with HyperFLINT's exact projective convention | Domain-specific | **RETAIN** `canonical_proportional_form`, implemented with native content/leading-coefficient operations; test invariance under nonzero scalars. |
 | reciprocal-variable reversal | `.reverse()` exists, but reverses every variable, not a selected target | Current selected-variable reciprocal substitution is different | **RETAIN** the selected-variable algorithm or rebuild it from typed term iteration. Do not substitute global `.reverse()`. |
 
 ### Implemented typed polynomial operations (P1)
 
-Current status: **P1 implemented** for substitution, evaluation, polynomial integration, and context rearrangement. `Poly::substitute_rational` and `Poly::substitute_integer` call public `MultivariatePolynomial::replace`; `Poly::{evaluate_rational,evaluate_integer}` call `replace_all`; and `Poly::integrate` wraps the public field-only `MultivariatePolynomial::integrate` while checking the variable index and `u16` exponent overflow first. The exact implementation bounds are `F: Ring, E: PositiveExponent` for `replace`/`replace_all` (`poly/polynomial.rs:2474-2743`) and `F: Field, E: PositiveExponent, O: MonomialOrder` for `integrate` (`poly/polynomial.rs:6233-6257`). The vendored regression tests exercise sparse Horner replacement and cancellation (`poly/polynomial.rs:7041-7054`) and last-active-variable replacement against independent term evaluation (`poly/polynomial.rs:8200-8255`); the univariate integration test verifies derivative/integral inversion (`poly/univariate/tests.rs:137`).
+Current status: **P1 implemented** for substitution, evaluation, polynomial integration, and context rearrangement. `Poly::substitute_rational` and `Poly::substitute_integer` call public `MultivariatePolynomial::replace`; `Poly::{evaluate_rational,evaluate_integer}` call `replace_all`; and `Poly::integrate` wraps the public field-only `MultivariatePolynomial::integrate` while checking the variable index and `u16` exponent overflow first. The exact implementation bounds are `F: Ring, E: PositiveExponent` for `replace`/`replace_all` (`poly/polynomial.rs:2474-2743`) and `F: Field, E: PositiveExponent, O: MonomialOrder` for `integrate` (`poly/polynomial.rs:6241-6265`). The vendored regression tests exercise sparse Horner replacement and cancellation (`poly/polynomial.rs:7049-7062`) and last-active-variable replacement against independent term evaluation (`poly/polynomial.rs:8208-8263`); the univariate integration test verifies derivative/integral inversion (`poly/univariate/tests.rs:137`).
 
-`Rat::substitute_rational` starts from the native integer `RationalPolynomial` numerator and denominator, maps their coefficients to `Q`, invokes typed `replace`, and constructs the normalized integer RP directly. `Rat::substitute_integer` remains entirely in the integer polynomial ring. Arbitrary rational-function composition uses the public `MultivariatePolynomial::to_univariate` split (`poly/polynomial.rs:3306-3330`), maps coefficients into the public `RationalPolynomialField<IntegerRing, u16>` (`domains/rational_polynomial.rs:37-51`), and calls public Horner `UnivariatePolynomial::evaluate` (`poly/univariate.rs:989-1005`). The old MZV helper's coefficient scan, repeated powers, additions, and compatibility-view materialization were removed. None of these paths requests the lazy `Poly<Q>` views. Full rational evaluation uses the public mapped field operation on the two native polynomials with an explicit zero-denominator check; full integer evaluation uses native integer `replace_all` before constructing one `Rational`. `RationalPolynomial::evaluate_with_coeff_map` is public for `R: Ring`, `U: Field` (`domains/rational_polynomial.rs:730-746`) and its vendored finite-field test is at `domains/rational_polynomial.rs:1774-1782`. A complete public-source/test/example search found no direct partial-variable replacement method on `RationalPolynomial`; the composition above is **WRAP** over public Symbolica primitives, not an independent CAS algorithm.
+`Rat::substitute_rational` starts from the native integer `RationalPolynomial` numerator and denominator, maps their coefficients to `Q`, invokes typed `replace`, and constructs the normalized integer RP directly. `Rat::substitute_integer` remains entirely in the integer polynomial ring. Arbitrary rational-function composition uses the public `MultivariatePolynomial::to_univariate` split (`poly/polynomial.rs:3306-3330`), maps coefficients into the public `RationalPolynomialField<IntegerRing, u16>` (`domains/rational_polynomial.rs:37-51`), and calls public Horner `UnivariatePolynomial::evaluate` (`poly/univariate.rs:989-1005`). The old MZV helper's coefficient scan, repeated powers, additions, and compatibility-view materialization were removed. None of these paths requests the lazy `Poly<Q>` views. Full rational evaluation uses the public mapped field operation on the two native polynomials with an explicit zero-denominator check; full integer evaluation uses native integer `replace_all` before constructing one `Rational`. `RationalPolynomial::evaluate_with_coeff_map` is public for `R: Ring`, `U: Field` (`domains/rational_polynomial.rs:730-746`) and its vendored finite-field test is at `domains/rational_polynomial.rs:1801-1807`. A complete public-source/test/example search found no direct partial-variable replacement method on `RationalPolynomial`; the composition above is **WRAP** over public Symbolica primitives, not an independent CAS algorithm.
 
 Substitution/evaluation scalar strings are now confined to the JSON compatibility parser in `src/bridge/wire.rs`; production `Poly`/`Rat` substitution and evaluation accept Symbolica `Rational`/`Integer` values. The explicit `Poly::parse`/`Rat::parse` constructors remain legacy/test conveniences, while the production integration façade accepts `Atom`. `integrator/primitive.rs` delegates its polynomial part to `Rat::integrate_polynomial_part`, which lifts the native integer numerator/denominator once and calls `MultivariatePolynomial::integrate` without materializing compatibility views; the simple-pole/word logic and denominator policy remain Hyperbolica-specific.
 
@@ -385,14 +386,16 @@ manual monomial reconstruction duplicated that complete public operation.
 
 `UnivariatePolynomial<F: EuclideanDomain>` exposes Brown's PRS resultant and
 the generic Lazard-Ducos resultant. For rational multivariate-polynomial
-coefficients the maintained patch adds public `resultant_ducos_integer`, which
+coefficients upstream commit `4fd8443c` adds public
+`resultant_ducos_integer`, which
 clears scalar denominators and global contents once before using that current
-integer kernel, and `resultant_auto`, which owns the representation-specific
-choice between integer Ducos and CRT. Specialized public CRT reconstruction
+integer kernel, plus a public `PolynomialResultant` coefficient-domain trait.
+Its `RationalField` implementation delegates to `resultant_auto`, which owns
+the representation-specific choice between integer Ducos and CRT. Specialized public CRT reconstruction
 remains available; over a coefficient field there is `resultant_euclidean`.
 
 Hyperbolica's `Poly` stores rational rather than integer coefficients. A
-symbolized LTO strategy probe at Symbolica `dev_poly` revision `76e3eb6`
+historical symbolized LTO strategy probe at Symbolica `dev_poly` revision `76e3eb6`
 therefore compared the public kernels in that actual representation. CRT was
 6.2x faster on the locked five-variable dense fixture (`1.812 s` versus
 `11.257 s`), 7.2x faster on Symbolica's dense outer-degree 7/6 fixture
@@ -439,11 +442,11 @@ No public exact-square predicate was found. The helper named `exact_square_root`
 
 Native RP functionality and bounds:
 
-- `inv`, `pow`, and `gcd` require `R: EuclideanDomain + PolynomialGCD<E>` and a matching `FromNumeratorAndDenominator` (`domains/rational_polynomial.rs:526-570`). Hyperbolica's recorded `dev_poly` patch makes native `pow` use exponentiation by squaring (`domains/rational_polynomial.rs:540-574`). Retain only the thin checked wrapper for signed exponents and zero inversion; it should delegate nonnegative magnitudes to this public native implementation rather than duplicate its power algorithm.
-- `evaluate` exists only for `R: Field` (`domains/rational_polynomial.rs:713-720`). Integer-backed RP evaluation must use `evaluate_with_coeff_map<U: Field>` (`domains/rational_polynomial.rs:722-737`).
-- addition computes a denominator GCD, chooses a smaller multiplication arrangement, and removes the residual common factor (`domains/rational_polynomial.rs:1051-1100`); multiplication cross-cancels numerator/denominator pairs (`domains/rational_polynomial.rs:1136-1177`). These duplicate `Rat::try_add` and `Rat::try_mul` (`src/core/rat.rs:151-189`).
-- native quotient-rule `derivative` is public (`domains/rational_polynomial.rs:1193-1222`) and duplicates `Rat::derivative`.
-- when rational functions are used as a polynomial coefficient field, its `PolynomialGCD` implementation asserts that at most one outer variable is active (`domains/rational_polynomial.rs:1007-1029`). Do not generalize that coefficient-field use to multivariate outer GCDs.
+- `inv`, `pow`, and `gcd` require `R: EuclideanDomain + PolynomialGCD<E>` and a matching `FromNumeratorAndDenominator` (`domains/rational_polynomial.rs:526-573`). Symbolica commit `b8fa6b53`, now in the selected clean `dev`, makes native `pow` use exponentiation by squaring. Hyperbolica's thin checked wrapper handles signed exponents and zero inversion, then delegates nonnegative magnitudes to this public native implementation.
+- `evaluate` exists only for `R: Field` (`domains/rational_polynomial.rs:722-729`). Integer-backed RP evaluation uses `evaluate_with_coeff_map<U: Field>` (`domains/rational_polynomial.rs:731-746`).
+- addition computes a denominator GCD, chooses a smaller multiplication arrangement, and removes the residual common factor (`domains/rational_polynomial.rs:1051-1093`); multiplication cross-cancels numerator/denominator pairs (`domains/rational_polynomial.rs:1136-1170`). `Rat::try_add` and `Rat::try_mul` delegate directly to these native operators (`src/core/rat/arithmetic.rs`).
+- native quotient-rule `derivative` is public (`domains/rational_polynomial.rs:1186-1217`), and `Rat::derivative` delegates to it.
+- when rational functions are used as a polynomial coefficient field, its `PolynomialGCD` implementation asserts that at most one outer variable is active (`domains/rational_polynomial.rs:1000-1023`). Do not generalize that coefficient-field use to multivariate outer GCDs.
 
 Verdict: **REPLACE, implemented.** `Rat` stores `RationalPolynomial<IntegerRing,u16>` behind a shared `Arc` and wraps panicking preconditions with typed checks. This gives one canonical representation, native small/large multiplication choices, and direct partial fractions. The compatibility `&Poly<Q>` numerator/denominator views are projected once into a shared `OnceLock`, never on every access; native arithmetic, substitution, evaluation, differentiation, powers, and partial fractions bypass them. Changed structural normalization is tested by native RP/Atom value rather than old numerator/denominator shapes. Small-Q and shared-denominator cases remain benchmark gates.
 
@@ -451,18 +454,18 @@ Verdict: **REPLACE, implemented.** `Rat` stores `RationalPolynomial<IntegerRing,
 
 `RationalPolynomial` exposes:
 
-- `apart(var) -> Vec<Self>` (`domains/rational_polynomial.rs:1246-1259`);
+- `apart(var) -> Vec<Self>` (`domains/rational_polynomial.rs:1239-1252`);
 - `apart_factored_denominators(var) -> Vec<(Self, Self, usize)>`, preserving each irreducible denominator base and power (`domains/rational_polynomial.rs:1261-1348`);
-- `apart_multivariate()`, with bounds `R: EuclideanDomain + UpgradeToField + PolynomialGCD`, upgraded field `Echelonize`, and polynomial `Factorize` (`domains/rational_polynomial.rs:1351-1373`); its implementation uses a Gröbner basis (`domains/rational_polynomial.rs:1400-1429`);
+- `apart_multivariate()`, with bounds `R: EuclideanDomain + UpgradeToField + PolynomialGCD`, upgraded field `Echelonize`, and polynomial `Factorize` (`domains/rational_polynomial.rs:1344-1373`); its implementation uses a Gröbner basis (`domains/rational_polynomial.rs:1400-1429`);
 - `integrate(var) -> RationalIntegral`, separating rational and logarithmic/root-sum parts (`domains/rational_polynomial.rs:97-122,1477-1505`).
 
-`src/algebra/partial_fractions.rs` now calls `apart_factored_denominators` directly on native `Rat` storage and retains the HyperFLINT output adapter, nonlinear-factor error, pole scaling, ordering, and reconstruction validation. For a deferred `FactoredRat`, `core/factored_rat/apart.rs` first calls the public `FactorizedRationalPolynomial::apart` on pairwise-coprime target-dependent blocks. Each returned component is then eagerly materialized as one canonical `Rat` containing one target-dependent block plus all target-independent factors, and that component is fed to the same rational-polynomial adapter. Hyperbolica does not explicitly build the exact all-block denominator at this adapter boundary, but the pinned native `apart` expands every powered block and its Diophantine solver builds suffix products containing as many as `n-1` blocks. This is therefore a measured blockwise strategy, not a strict stay-factored or asymptotic guarantee. Proportional blocks are merged after primitive-integer normalization; genuinely overlapping caller blocks take the exact full-materialization fallback. The Criterion baseline includes eager materialization inside its timed iteration, and no performance conclusion is valid until the licensed qualification corpus passes. Native regression coverage includes the factored-denominator test at `domains/rational_polynomial.rs:2065-2066`; Hyperbolica adds repeated/nonmonic/parameter/polynomial-part/zero/nonlinear reconstruction cases plus rational-unit, cold-view, overlap-fallback, deterministic block-matrix, primitive, and integration-step equivalence tests.
+`src/algebra/partial_fractions.rs` now calls `apart_factored_denominators` directly on native `Rat` storage and retains the HyperFLINT output adapter, nonlinear-factor error, pole scaling, ordering, and reconstruction validation. For a deferred `FactoredRat`, `core/factored_rat/apart.rs` first calls the public `FactorizedRationalPolynomial::apart` on pairwise-coprime target-dependent blocks. Each returned component is then eagerly materialized as one canonical `Rat` containing one target-dependent block plus all target-independent factors, and that component is fed to the same rational-polynomial adapter. Hyperbolica does not explicitly build the exact all-block denominator at this adapter boundary, but the pinned native `apart` expands every powered block and its Diophantine solver builds suffix products containing as many as `n-1` blocks. This is therefore a measured blockwise strategy, not a strict stay-factored or asymptotic guarantee. Proportional blocks are merged after primitive-integer normalization; genuinely overlapping caller blocks take the exact full-materialization fallback. The Criterion baseline includes eager materialization inside its timed iteration, and no performance conclusion is valid until the licensed qualification corpus passes. Native regression coverage includes `apart_preserves_factored_denominators` at `domains/rational_polynomial.rs:2084`; Hyperbolica adds repeated/nonmonic/parameter/polynomial-part/zero/nonlinear reconstruction cases plus rational-unit, cold-view, overlap-fallback, deterministic block-matrix, primitive, and integration-step equivalence tests.
 
-Do **not** immediately replace `integrator/primitive.rs::integrate_ii` with `RationalPolynomial::integrate`. Hyperbolica must emit word/log objects with its branch and regularization conventions, whereas `RationalIntegral` emits ordinary logs or algebraic root sums. More importantly, the native LRT/subresultant implementation contains the source comment “this may be wrong” (`domains/rational_polynomial.rs:1641-1644`). Use native integration as an **ORACLE/guarded experiment** only: differentiate every result and reconstruct the input over randomized exact examples before enabling it. The safe immediate change is native polynomial `.integrate` for the polynomial part, then the existing simple-pole word construction.
+Do **not** immediately replace `integrator/primitive.rs::integrate_ii` with `RationalPolynomial::integrate`. Hyperbolica must emit word/log objects with its branch and regularization conventions, whereas `RationalIntegral` emits ordinary logs or algebraic root sums. More importantly, the native LRT/subresultant implementation contains the source comment “this may be wrong” (`domains/rational_polynomial.rs:1635-1636`). Use native integration as an **ORACLE/guarded experiment** only: differentiate every result and reconstruct the input over randomized exact examples before enabling it. The safe immediate change is native polynomial `.integrate` for the polynomial part, then the existing simple-pole word construction.
 
 ### FactorizedRationalPolynomial
 
-The native factorized type exposes numerator/coefficient/factor storage (`domains/factorized_rational_polynomial.rs:28-77`), Q→Z and integer normalization/factorization (`domains/factorized_rational_polynomial.rs:397-543`), `inv`, `pow`, `gcd`, field/mapped evaluation (`domains/factorized_rational_polynomial.rs:714-868`), arithmetic, and `apart` (`domains/factorized_rational_polynomial.rs:1481-1509`). It is not yet a safe wholesale replacement for `FactoredRat`:
+The native factorized type exposes numerator/coefficient/factor storage (`domains/factorized_rational_polynomial.rs:28-77`), Q→Z and integer normalization/factorization (`domains/factorized_rational_polynomial.rs:397-543`), `inv`, `pow`, `gcd`, field/mapped evaluation (`domains/factorized_rational_polynomial.rs:714-868`), arithmetic, and `apart` (`domains/factorized_rational_polynomial.rs:1482-1566`). It is not yet a safe wholesale replacement for `FactoredRat`:
 
 - `InternalOrdering::internal_cmp` is `todo!()` and will panic if invoked (`domains/factorized_rational_polynomial.rs:79-83`);
 - construction has a TODO to fuse equal factors (`domains/factorized_rational_polynomial.rs:488-500`);
@@ -470,14 +473,13 @@ The native factorized type exposes numerator/coefficient/factor storage (`domain
 - `pow` is repeated multiplication with a binary-exponentiation TODO (`domains/factorized_rational_polynomial.rs:740-761`);
 - no public derivative was found.
 
-Pristine `dev_poly` still has a correctness defect in the field trait:
-`FactorizedRationalPolynomialField::is_one` checked `numerator`, denominator
-factors, and `denom_coeff` but omitted `numer_coeff`, so a scalar such as `2`
-was classified as one through the field API. The recorded checkout patch adds
-that one missing predicate and a focused in-module regression; the inherent
-value predicate already had the correct four-part check. The patch is recorded
-in `vendor/SYMBOLICA_SNAPSHOT.md` and
-`vendor/symbolica-dev_poly.patch`.
+Symbolica `dev` commit `bd0c137` fixes the former field-trait defect:
+`FactorizedRationalPolynomialField::is_one` now checks `numerator`, denominator
+factors, `numer_coeff`, and `denom_coeff`, so a scalar such as `2` is not
+classified as one through the field API. The inherent value predicate already
+had the same four-part check. Hyperbolica therefore carries no patch for this
+case; its rational-unit factored-partial-fraction regressions exercise the
+upstream implementation.
 
 Bare rational production ingress uses public
 `AtomCore::try_to_factorized_rational_polynomial(&Q, &Z, Some(var_map))`
@@ -493,7 +495,7 @@ Verdict: selective **WRAP/ORACLE**, not replacement. Native `apart` is used narr
 
 ## Series APIs
 
-`Series<F: Ring>` is a Puiseux series with rational exponents, expansion point, shift, truncation order, and ramification (`poly/series.rs:140-203`). `SeriesDepth::{Absolute,Relative}` is public (`poly/series.rs:140-175`). Public construction/access includes `new`, relative/absolute order, expansion point, variable, coefficient, and term iteration (`poly/series.rs:231-280,393-415,530-685`). Generic ring series support addition and multiplication (`poly/series.rs:912-1077`), but `/` is implemented specifically for `Series<AtomField>` (`poly/series.rs:1079-1093`), not for an arbitrary rational-function coefficient field. `Series<AtomField>` also exposes `exp`, `log`, `sin`, `cos`, series/series power, rational power, and Atom conversion (`poly/series.rs:1130-1464`).
+`Series<F: Ring>` is a Puiseux series with rational exponents, expansion point, shift, truncation order, and ramification (`poly/series.rs:140-203`). `SeriesDepth::{Absolute,Relative}` is public (`poly/series.rs:140-175`). Public construction/access includes `new`, relative/absolute order, expansion point, variable, coefficient, and term iteration (`poly/series.rs:231-280,393-415,530-685`). Generic ring series support addition and multiplication (`poly/series.rs:941-1097`), but `/` is implemented specifically for `Series<AtomField>` (`poly/series.rs:1108-1122`), not for an arbitrary rational-function coefficient field. `Series<AtomField>` also exposes `exp`, `log`, `sin`, `cos`, series/series power, rational power, and Atom conversion (`poly/series.rs:1159-1494`).
 
 The expression entry point is `AtomCore::series(variable, expansion_point, depth) -> Result<Series<AtomField>, SeriesError>` (`atom/core.rs:700-731`). Built-in and custom functions participate through `SymbolBuilder::with_series_function`; the engine invokes those hooks in `derivative.rs:376-530`. Native tests include general series tests at `derivative.rs:908+` and singular transcendental tests in `transcendental.rs`.
 
@@ -532,7 +534,7 @@ field is an algebraic extension of `Q` (`domains/algebraic.rs:1360-1402`); its
 tests cover constant generators such as `sqrt(2)` and `root(x^3-2,2)`
 (`domains/algebraic/tests.rs:331-414`), not unresolved parameter-dependent
 roots. The public polynomial `Factorize` implementations cover `Z`, `Q`,
-finite fields, and `AlgebraicExtension<Q>` (`poly/factor.rs:4100-4560`), but
+finite fields, and `AlgebraicExtension<Q>` (`poly/factor.rs:4640-5000,5002-5100,5102-5261`), but
 not `AlgebraicQuotient<RationalPolynomialField<...>>`. Consequently the bound
 on `RationalPolynomial::apart_factored_denominators` cannot be satisfied for
 that formal parametric quotient (`domains/rational_polynomial.rs:1240-1348`).
@@ -568,7 +570,7 @@ Numerical APIs are:
 - `to_float(decimal_prec)` (`atom/core.rs:1124-1153`);
 - heuristic `zero_test(iterations,tolerance)` (`atom/core.rs:1090-1103`).
 
-The reusable evaluator works in the selected build. JIT compilation/export does not because `native_code_generation` is off (`evaluate.rs:7-45`). Use the builder for repeated numerical probes; expected gain comes from compiled instruction reuse, not JIT. `zero_test` explicitly returns `ConditionResult` and can be inconclusive; it must **not** replace exact `reduce/periods.rs::test_zero_function[_sym]` or exact polynomial equality.
+The reusable evaluator works in the selected build. JIT compilation/export does not because `native_code_generation` is off (`evaluate.rs:7-46`). Use the builder for repeated numerical probes; expected gain comes from compiled instruction reuse, not JIT. `zero_test` explicitly returns `ConditionResult` and can be inconclusive; it must **not** replace exact `reduce/periods.rs::test_zero_function[_sym]` or exact polynomial equality.
 
 ## Gröbner API and the pure-Symbolica Euler path
 
@@ -582,7 +584,7 @@ The selected vendored snapshot contains a public in-process F4 implementation:
 - formal parameter-field types `ParameterField`, `ParametricExtension`, `ParametricRoot`, `ParametricSolution` (`poly/groebner.rs:201-244,525-635`) and `solve_parametric` with generic-locus conditions (`poly/groebner.rs:2208-2255`);
 - a blanket public `Echelonize` implementation for every `'static` field, with a specialized `Zp` path selected by the F4 kernel (`poly/groebner.rs:2444-2485`).
 
-At expression level, `AtomCore::solve` documents exact linear/polynomial solving over Q and Q(parameters), rational denominator exclusion, rational-power polynomialization, and positive-dimensional partial solutions (`atom/core.rs:826-892`). `SolveBuilder::over`/`wrt` are public (`solve.rs:475-521`); inequalities are accepted by the builder but currently return `InequalitiesNotSupported` (`solve.rs:522-528`).
+At expression level, `AtomCore::solve` documents exact linear/polynomial solving over Q and Q(parameters), rational denominator exclusion, rational-power polynomialization, and positive-dimensional partial solutions (`atom/core.rs:826-892`). `SolveBuilder::over`/`wrt` are public (`solve.rs:483-518`); inequalities are accepted by the builder but currently return `InequalitiesNotSupported` (`solve.rs:525-535`).
 
 ### Exact mapping of HyperFLINT's Euler chi/filter
 
@@ -601,7 +603,7 @@ The pure-Symbolica port should map it as follows:
 |---|---|---|
 | integer polynomial factors/derivatives/products/evaluation | `MultivariatePolynomial<IntegerRing,u16>` derivative, multiplication, and typed `replace`/`replace_all` | **REPLACE** all FLINT polynomial use. |
 | specialize coefficients modulo an odd prime | `Zp::new(p)` (`vendor/symbolica/lib/numerica/src/domains/finite_field.rs:34-37,197-230`) and polynomial `map_coeff`; Atom can also convert directly with `to_polynomial(&Zp, ...)` as shown in `poly/groebner.rs:1-43` | **REPLACE** FLINT/nmod conversion. |
-| choose a root of the now-univariate constraint | factor the lex-order `MultivariatePolynomial<Zp,...>` through public `Factorize`; select a degree-one factor and compute `-c0/c1` with field operations. Finite-field `Factorize` is implemented in `poly/factor.rs:4560-4610` | **REPLACE** `nmod_poly_roots`, preserving the matched-prime/retry policy. Do not use complex `UnivariatePolynomial::roots`; that API is numerical. |
+| choose a root of the now-univariate constraint | factor the lex-order `MultivariatePolynomial<Zp,...>` through public `Factorize`; select a degree-one factor and compute `-c0/c1` with field operations. Finite-field `Factorize` is implemented in `poly/factor.rs:5102-5261` | **REPLACE** `nmod_poly_roots`, preserving the matched-prime/retry policy. Do not use complex `UnivariatePolynomial::roots`; that API is numerical. |
 | grevlex GB | reorder generators to `GrevLexOrder`, then `GroebnerBasis::new(&system,false)` | **REPLACE** the `msolve` subprocess, temp files, serializer, parser, and spawn circuit breaker. |
 | leading exponent vectors | `gb.system.iter().map(|p| p.max_exp())`; `max_exp` is public (`poly/polynomial.rs:2075-2087`) | **REPLACE** parsed msolve terms. |
 | finite/positive-dimensional staircase and quotient dimension | no public quotient-dimension/standard-monomial API was found. FGLM internally constructs a staircase but does not expose it (`poly/groebner.rs:1293-1505`) | **RETAIN** `chi_staircase_count` as pure combinatorics. Do not use `solve().len()`: it is more expensive and need not represent multiplicity/quotient dimension. |
@@ -613,20 +615,20 @@ This is a credible pure-Symbolica implementation, but not a claim that Symbolica
 
 The migration above is implemented in `src/algebra/euler/{staircase,system,filter}.rs`. The exact public-API anchors used by the implementation are:
 
-- rational-to-primitive-integer coefficient mapping through `MultivariatePolynomial::map_coeff` (`poly/polynomial.rs:2031-2053`) followed by public `make_primitive` (`poly/polynomial.rs:5054-5085`);
-- typed specialization through public `replace` (`poly/polynomial.rs:2556-2590`), typed differentiation (`poly/polynomial.rs:2192-2207`), multiplication, and coefficient scaling;
+- rational-to-primitive-integer coefficient mapping through `MultivariatePolynomial::map_coeff` (`poly/polynomial.rs:2031-2053`) followed by public `make_primitive` (`poly/polynomial.rs:5086-5091`);
+- typed specialization through public `replace` (`poly/polynomial.rs:2556-2590`), typed differentiation (`poly/polynomial.rs:2187-2207`), multiplication, and coefficient scaling;
 - `Zp::new` and `FiniteFieldCore::{to_element,from_element}` (`lib/numerica/src/domains/finite_field.rs:197-230,290-316`);
-- the public finite-field `Factorize` implementation for lex-order multivariate polynomials (`poly/factor.rs:4560-4698`), restricted here to the specialized univariate constraint; all degree-one factors are inspected and the least residue root is selected, so an internal randomized factor ordering cannot affect the chosen root;
+- the public finite-field `Factorize` implementation for lex-order multivariate polynomials (`poly/factor.rs:5102-5261`), restricted here to the specialized univariate constraint; all degree-one factors are inspected and the least residue root is selected, so an internal randomized factor ordering cannot affect the chosen root;
 - `reorder::<GrevLexOrder>` (`poly/polynomial.rs:1986-2004`), `GroebnerBasis::new` (`poly/groebner.rs:729-754`), and public `max_exp` (`poly/polynomial.rs:2081-2088`).
 
 The remaining code is HyperFLINT domain policy, not a replacement CAS: sector enumeration, cleared-dlog system assembly, homogeneous C-star charting, staircase enumeration, and conservative voting. `SplitMix64` supplies a fully specified caller-seeded specialization stream; the 32 descending primes, matched-prime constraint-root retry, twist seed, stable FNV seed digests, max-of-two generic counts, and two independent destructive votes are deterministic. The per-marginal generic memo uses complete typed `Poly` factors, the exact propagator-index vector, and the derived generic sampling seed as its equality key, so reusing a public cache with another base seed cannot reuse a sampled value or failure. Its manual hash visits the common native context once and then each canonical polynomial payload. The separate digest is seed material only and is never an equality proof: coefficients and exponents are hashed natively, while `AtomCore::to_canonical_string()` supplies a namespace-complete, symbol-registration-order-independent spelling of each native variable. Diagnostic `PolyCtx::vars()` aliases never enter either identity or seed construction. Any invalid input, finite-field factorization/F4 panic, positive-dimensional constrained ideal, or exhausted retry keeps the candidate letter. Process-global atomic stats separately expose system construction and F4 wall time, chi calls, judgments, drops, boundary exemptions, and failure abstentions.
 
 Polynomial factorization likewise keeps Symbolica values typed end to end. The
 public rational-field `Factorize::factor` implementation
-(`poly/factor.rs:4386-4432`) returns exact polynomial factors and a constant
+(`poly/factor.rs:4926-5000`) returns exact polynomial factors and a constant
 factor; Hyperbolica folds the latter into a native `Rational`, constructs
 constant polynomials with `MultivariatePolynomial::constant`
-(`poly/polynomial.rs:956-974`), and carries the target-independent leading
+(`poly/polynomial.rs:958-972`), and carries the target-independent leading
 coefficient of a linear factorization as `Poly`. String conversion occurs only
 when emitting the legacy JSON protocol.
 
@@ -695,17 +697,17 @@ This table is deliberately exhaustive at module granularity. “Native primitive
 | `python/**` | PyO3 Atom API, prepared calls, result/exceptions/options | Symbolica is built with `python_export` under root `python`; native Atom types can cross the façade | **WRAP** the Rust Atom API. Keep Hyperbolica-specific Python classes/options/errors; no independent parsing/CAS. |
 | `lib.rs`, `error.rs` | module/API exports and errors | no CAS duplication | **RETAIN**, expose native-Atom-first API and wrap Symbolica failures without panics. |
 
-## Hand-written native-CAS duplication: prioritized deletion list
+## Native-CAS migration status
 
 | Priority | Current implementation | Native replacement | Expected impact / constraint |
 |---|---|---|---|
-| P0 | `Poly::discriminant` signed quotient | native derivative/resultant/lcoeff plus conventional sign | Correctness fix; negligible cost. |
-| P1 | `Rat::new`, add, mul, div, derivative | integer `RationalPolynomial` construction/operators/derivative | Expected major simplification and PF speedup; normalization invariant changes. Keep fast signed pow. |
-| P1 | PF Q→Z→Q adapters | direct native `Rat` + `apart_factored_denominators` | Expected fewer allocations/conversions; retain output checks. |
+| P0 | `Poly::discriminant` signed wrapper | native derivative/resultant/lcoeff plus conventional sign | **Implemented.** Degree-one through degree-five and scaling tests pin the conventional sign. |
+| P1 | `Rat` construction, arithmetic, powers, and derivative | integer `RationalPolynomial` construction/operators/derivative | **Implemented.** The wrapper supplies checked errors and delegates algebra to the native representation. |
+| P1 | Partial-fraction output adapter | direct native `Rat` + `apart_factored_denominators` | **Implemented.** HyperFLINT pole scaling, ordering, structural zeros, and reconstruction checks remain in the adapter. |
 | P1 | `Poly` string substitute/evaluate and bridge reparsing | typed polynomial `replace`/evaluation | **Implemented.** Production APIs take `Rational`/`Integer`; string conversion exists only in the JSON wire adapter. Criterion cases cover sparse substitution/evaluation. |
 | P1 | manual primitive polynomial loop | polynomial `.integrate` | **Implemented.** Exact field division is native; derivative round-trip tests include sparse and parameter-denominator cases. |
-| P1 | Euler external GB/process parser | `Zp` + native F4 `GroebnerBasis` | Expected very large orchestration win; kernel comparison unknown; staircase/domain policy remains. |
-| P1 | single unqualified resultant kernel | public improved Ducos, maintained rational-to-integer Ducos adapter, Brown PRS, primitive PRS, and rational-coefficient CRT | **WRAP, implemented:** Symbolica internally selects guarded integer-associate Ducos or CRT for the production default; explicit strategy hooks, deterministic bounded equality tests, Criterion cases, and the dense/lacunary strategy example retain reproducible backend evidence. |
+| P1 | Euler Gröbner-basis backend | `Zp` + native F4 `GroebnerBasis` | **Implemented.** The selected upstream F4 fix passes the minimized and same-matrix regressions; Hyperbolica retains staircase/domain policy. |
+| P1 | single unqualified resultant kernel | public improved Ducos, upstream rational-to-integer Ducos adapter, Brown PRS, primitive PRS, and rational-coefficient CRT | **WRAP, implemented:** Symbolica's coefficient-domain `PolynomialResultant` trait internally selects guarded integer-associate Ducos or CRT for the production default; explicit strategy hooks, deterministic bounded equality tests, Criterion cases, and the dense/lacunary strategy example retain reproducible backend evidence. |
 | P2 | custom parser as public algebra parser | `Atom::parse` + Atom traversal | Removes duplicate grammar and string variable scans; preserve explicit legacy compatibility if required. |
 | P2 | general Atom tree rewrite/scanning | `Pattern`, `Replacement`, `replace_map`, `Transformer` | Correctness/maintainability gain; benchmark hot rewrites before using patterns inside polynomial loops. |
 | P2 | manual general-expression derivative | `AtomCore::derivative` plus registered callbacks | Consistent chain rule; typed structured derivative remains. |

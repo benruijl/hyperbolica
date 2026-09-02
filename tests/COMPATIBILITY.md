@@ -10,6 +10,25 @@ external oracle. Set `HYPERFLINT_CPP` and `HYPERFLINT_RUST` to select the two
 executables. It never links FLINT or C++ code into the Rust crate. Stable
 responses in `fixtures/differential.jsonl` are compared byte for byte.
 
+## Per-call thread budget
+
+For the full-driver `hyperflint` operation, the compatibility bridge honors
+`HF_MAX_THREADS_PER_CALL` at request entry. The pinned C++ implementation at
+SubTropica `adfd3af` reads the variable only in `hyperflint_sym` and applies a
+positive `atoi` result; therefore unset, empty, non-numeric, zero, and negative
+values mean no override, while a value such as `"  +2workers"` selects two.
+Values outside the positive C `int` range are ignored because upstream `atoi`
+does not define them.
+
+Rust does not mutate Rayon's process-global pool. A limit greater than one is
+implemented with a request-scoped pool, bounded further by the process CPU
+allocation and Symbolica license. A limit of one uses the caller thread and
+disables the bridge's coarse independent-entry fanout. This preserves the
+memory-control intent and permits concurrent C ABI/LibraryLink requests without
+a shared thread-count race. The limit is a ceiling; `"parallel": false` can
+still request stricter serial execution. Other JSON operations intentionally
+ignore this variable, matching the pinned handler scope.
+
 `scripts/lint-fixtures.sh` is the CAS-independent preflight for this corpus and
 the benchmark corpus. It validates the checked-in schemas, canonical one-record
 JSONL form, unique names and requests, and the narrow metadata allowlist below.
@@ -30,6 +49,14 @@ Five response classes cannot be byte-compared:
 
 Those fields are named in each fixture and removed before a canonical JSON
 comparison. Mathematical result fields remain exact.
+
+Fixtures whose backends may print the same expression with different term
+ordering use `compare: "semantic"`. Only the explicitly declared
+`semantic_fields` are reparsed by the Rust executable and replaced with their
+Symbolica canonical Atom form; the surrounding response is still compared
+exactly after the same narrow metadata ignores. The C++ oracle runs with all
+Symbolica license variables removed, while the Rust backend and semantic
+parser may inherit the caller's license.
 
 `scripts/benchmark-compare.sh` builds the LTO Rust release binary, validates
 fixture-controlled response equality, and measures adjacent balanced backend

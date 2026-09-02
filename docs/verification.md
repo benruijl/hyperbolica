@@ -33,12 +33,27 @@ operations plus `hf_free_string` and `hf_version_string`, exactly eight public
 
 With `SYMBOLICA_LICENSE` set, `cargo test --test c_abi_contract` also invokes
 valid requests through the exported functions. It mirrors the upstream
-partial-fraction, linear-factor, and one-variable LR fixtures and adds the
-convergent integral `int_0^infinity dx/(1+x)^2 = 1`. The test pins exact
+partial-fraction, linear-factor, and one-variable LR fixtures, exercises
+successful factor-table and LR-scan calls, and adds the convergent integral
+`int_0^infinity dx/(1+x)^2 = 1`. The test pins exact
 UTF-8 JSON bytes for deterministic algebra responses, verifies the mathematical
 LR and integration fields, rejects duplicate/missing envelope fields, proves
 simultaneously live results are distinct writable allocations, and releases
 every result through `hf_free_string`.
+
+`scripts/check-examples.sh` builds and executes all nine public Rust examples,
+including Atom-native finite/infinite integrations, the full typed integration
+pipeline, Euler/F4 filtering, LR scan/factor-table construction, the locked
+automatic resultant, and the in-process JSON profiling driver. The examples
+contain their own exact assertions; the gate additionally checks their key
+observable outputs.
+
+`cargo test --test smirnov_e2e` runs HyperFLINT's complete smallest Smirnov
+fixture (`tst0`) in the upstream order `t4,t5,t1,t2,t3`. It requires one
+successful, non-divergent terminal term and compares its coefficient as a
+normalized Symbolica-backed rational function to
+`1 + mzv_3 - 4*mzv_2^2/5`, so formatting differences cannot hide a wrong
+period.
 
 ## Differential and benchmark runs
 
@@ -107,14 +122,23 @@ The locked policy currently requires 12 matched pairs per workload, two
 warmups, one thread, CPU 0 affinity, a 10,000-sample stratified bootstrap, a
 global Rust/C++ upper confidence bound no greater than 1.05, no workload
 geometric mean greater than 1.15, and peak RSS no greater than 1.25 times the
-C++ oracle. It also requires a clean Rust LTO release build and a clean C++
+C++ oracle. The sole exception is the dense parameter resultant, whose
+explicitly accepted and policy-recorded limit is 1.60; the statistical output
+includes that override and its reason. It also requires a clean Rust LTO
+release build, the official clean Symbolica `dev` checkout at the
+policy-pinned revision, and a clean C++
 `release-portable` build at the pinned upstream revision. Qualification
 settings cannot be relaxed with environment overrides. Rust is built into a
 new target directory after rejecting Cargo profile, flags, wrapper, target,
-ambient-config, and native-toolchain overrides. The C++ path's adjacent cache locates the source
-checkout only: the driver verifies its clean pinned revision, creates a fresh
-CMake tree with locked portable flags, clean-builds `hyperflint-cli`, and
-checks the compiled `HF_BUILD_VARIANT` stamp before timing it.
+ambient-config, and native-toolchain overrides. Before that build, the driver
+runs the pure-Symbolica gate and records the nested checkout's independent
+revision, branch, remote, worktree root, and clean state in the Rust build
+manifest. It reruns the purity gate after compilation and rejects any change to
+that independent Git identity before accepting the Rust binary. The C++ path's
+adjacent cache locates the source checkout only: the driver verifies its clean
+pinned revision, creates a fresh CMake tree with locked portable flags,
+clean-builds `hyperflint-cli`, and checks the compiled `HF_BUILD_VARIANT` stamp
+before timing it.
 
 A performance claim is valid only when `qualification.json` says both
 `status: "pass"` and `qualified: true`. A passed exploratory analysis,
@@ -122,10 +146,10 @@ compile-only result, manually edited status field, incomplete corpus, dirty
 revision, mismatched artifact hash, unfair C++ build, or missing qualification
 artifact is not parity evidence. The verdict records the exact run ID,
 metadata hash, raw/summary/correctness/analysis hashes, build-manifest hashes,
-and binary hashes it certifies. The policy verifier independently reopens the
-summary, samples, correctness data, build manifests, both timed executables,
-and CMake cache, then recomputes the statistical values instead of trusting
-the run status.
+binary hashes, and Symbolica revision it certifies. The policy verifier
+independently reopens the summary, samples, correctness data, build manifests,
+both timed executables, and CMake cache, then recomputes the statistical values
+instead of trusting the run status.
 
 The locked cross-backend rows cover the shared JSON surface, including an
 Euler-filtered ideal. They do not exercise the Atom-native factored ingress or

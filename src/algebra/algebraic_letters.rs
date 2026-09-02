@@ -184,13 +184,20 @@ mod tests {
         let worker = thread::spawn(move || {
             started_tx.send(()).unwrap();
             let _second = begin_algebraic_letter_session().unwrap();
-            entered_tx.send(()).unwrap();
+            // A failed timing assertion must not make this detached worker
+            // panic while it owns the process-wide session mutex: that would
+            // poison unrelated tests (and any later request in this process).
+            let _ = entered_tx.send(());
         });
 
         started_rx.recv().unwrap();
         assert!(entered_rx.recv_timeout(Duration::from_millis(25)).is_err());
         drop(first);
-        entered_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        // Other tests legitimately queue on the same global session. Give
+        // this worker enough time to reacquire it under the default parallel
+        // libtest scheduler instead of assuming it will win within one
+        // second.
+        entered_rx.recv_timeout(Duration::from_secs(30)).unwrap();
         worker.join().unwrap();
     }
 }

@@ -275,6 +275,51 @@ fn successful_math_operations_cross_the_abi_with_owned_envelopes() {
             .is_some_and(|seconds| seconds.is_finite() && seconds >= 0.0)
     );
 
+    // Exercise the two remaining exported LR helpers through successful,
+    // independently-owned calls as well. Their timing fields are deliberately
+    // not byte-stable, so compare the mathematical payloads instead.
+    let factor_table_request = json!({
+        "op": "factor_table",
+        "xvars": ["x"],
+        "groups": [["x"]],
+        "order": ["x"],
+    });
+    let [factor_table, factor_table_repeated] =
+        invoke_owned_pair(hf_factor_table, &factor_table_request);
+    for response in [&factor_table, &factor_table_repeated] {
+        assert_success_envelope(response, "factor_table");
+        assert_eq!(response.value["order"], json!(["x"]));
+        assert_eq!(response.value["polys"], json!(["x"]));
+        assert_eq!(response.value["pairs"], json!([]));
+        assert_eq!(response.value["stats"]["pairs_total"], 0);
+    }
+    assert_eq!(
+        factor_table.value["singletons"],
+        factor_table_repeated.value["singletons"]
+    );
+
+    let scan_request = json!({
+        "op": "find_lr_orders_scan",
+        "xvars": ["x"],
+        "groups": [["x"]],
+        "exps": [[[-1, 0]]],
+    });
+    let [scan, scan_repeated] = invoke_owned_pair(hf_find_lr_orders_scan, &scan_request);
+    for response in [&scan, &scan_repeated] {
+        assert_success_envelope(response, "find_lr_orders_scan");
+        assert_eq!(response.value["nXVars"], 1);
+        assert_eq!(response.value["nGroups"], 1);
+        assert!(response.value["orders"].is_array());
+        assert!(
+            response.value["timing_compute_s"]
+                .as_f64()
+                .is_some_and(|seconds| seconds.is_finite() && seconds >= 0.0)
+        );
+    }
+    assert_eq!(scan.value["projective"], scan_repeated.value["projective"]);
+    assert_eq!(scan.value["truncated"], scan_repeated.value["truncated"]);
+    assert_eq!(scan.value["orders"], scan_repeated.value["orders"]);
+
     // A convergent integral over [0, infinity]: integral dx/(1+x)^2 = 1.
     // This keeps the full exported driver live while remaining millisecond
     // scale and deterministic with parallel execution disabled.

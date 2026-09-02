@@ -34,13 +34,22 @@ class Thresholds:
     global_upper_ci: float
     max_workload_ratio: float
     max_rss_ratio: float
+    max_rss_ratio_overrides: Mapping[str, tuple[float, str]]
 
-    def as_json(self) -> dict[str, float]:
-        return {
+    def as_json(self) -> dict[str, Any]:
+        result: dict[str, Any] = {
             "global_upper_ci": self.global_upper_ci,
             "max_workload_ratio": self.max_workload_ratio,
             "max_rss_ratio": self.max_rss_ratio,
         }
+        if self.max_rss_ratio_overrides:
+            result["max_rss_ratio_overrides"] = {
+                workload: {"limit": limit, "reason": reason}
+                for workload, (limit, reason) in sorted(
+                    self.max_rss_ratio_overrides.items()
+                )
+            }
+        return result
 
 
 def _mapping(value: object, location: str) -> Mapping[str, Any]:
@@ -62,6 +71,12 @@ def _positive_number(value: object, location: str) -> float:
     if not math.isfinite(parsed) or parsed <= 0:
         raise StatisticsInputError(f"{location} must be a finite positive number")
     return parsed
+
+
+def _nonempty_text(value: object, location: str) -> str:
+    if not isinstance(value, str) or not value:
+        raise StatisticsInputError(f"{location} must be a non-empty string")
+    return value
 
 
 def _pair_identifier(value: object, location: str) -> str:
@@ -105,6 +120,44 @@ def _parse_sample(value: object, ordinal: int) -> Sample:
 
 def _parse_thresholds(value: object) -> Thresholds:
     record = _mapping(value, "thresholds")
+    allowed = {
+        "global_upper_ci",
+        "max_workload_ratio",
+        "max_rss_ratio",
+        "max_rss_ratio_overrides",
+    }
+    unknown = set(record) - allowed
+    if unknown:
+        raise StatisticsInputError(
+            f"thresholds contains unknown fields: {', '.join(sorted(unknown))}"
+        )
+    override_records = _mapping(
+        record.get("max_rss_ratio_overrides", {}),
+        "thresholds.max_rss_ratio_overrides",
+    )
+    overrides: dict[str, tuple[float, str]] = {}
+    for workload, value in override_records.items():
+        workload = _nonempty_text(
+            workload, "thresholds.max_rss_ratio_overrides workload"
+        )
+        override = _mapping(
+            value, f"thresholds.max_rss_ratio_overrides[{workload!r}]"
+        )
+        if set(override) != {"limit", "reason"}:
+            raise StatisticsInputError(
+                f"thresholds.max_rss_ratio_overrides[{workload!r}] must contain "
+                "exactly limit and reason"
+            )
+        overrides[workload] = (
+            _positive_number(
+                override.get("limit"),
+                f"thresholds.max_rss_ratio_overrides[{workload!r}].limit",
+            ),
+            _nonempty_text(
+                override.get("reason"),
+                f"thresholds.max_rss_ratio_overrides[{workload!r}].reason",
+            ),
+        )
     return Thresholds(
         global_upper_ci=_positive_number(
             record.get("global_upper_ci"), "thresholds.global_upper_ci"
@@ -115,6 +168,7 @@ def _parse_thresholds(value: object) -> Thresholds:
         max_rss_ratio=_positive_number(
             record.get("max_rss_ratio"), "thresholds.max_rss_ratio"
         ),
+        max_rss_ratio_overrides=overrides,
     )
 
 
@@ -212,6 +266,13 @@ def analyze(document: object) -> dict[str, Any]:
             )
         pair[sample.backend] = sample
 
+    unused_overrides = set(thresholds.max_rss_ratio_overrides) - set(grouped)
+    if unused_overrides:
+        raise StatisticsInputError(
+            "peak-RSS overrides name absent workloads: "
+            + ", ".join(sorted(unused_overrides))
+        )
+
     failures: list[dict[str, Any]] = []
     workload_results: dict[str, dict[str, Any]] = {}
     logs_by_workload: dict[str, list[float]] = {}
@@ -276,18 +337,20 @@ def analyze(document: object) -> dict[str, Any]:
                     "limit": thresholds.max_workload_ratio,
                 }
             )
-        if memory_ratio is None or memory_ratio > thresholds.max_rss_ratio:
+        rss_override = thresholds.max_rss_ratio_overrides.get(workload)
+        rss_limit = rss_override[0] if rss_override else thresholds.max_rss_ratio
+        if memory_ratio is None or memory_ratio > rss_limit:
             failures.append(
                 {
                     "gate": "peak_rss",
                     "workload": workload,
                     "actual": memory_ratio,
-                    "limit": thresholds.max_rss_ratio,
+                    "limit": rss_limit,
                 }
             )
         if memory_ratio is not None:
             all_rss_ratios.append(memory_ratio)
-        workload_results[workload] = {
+        workload_result: dict[str, Any] = {
             "pairs": pair_count,
             "geometric_mean_ratio": geometric_mean,
             "upper_95_ci": upper_ci,
@@ -299,6 +362,12 @@ def analyze(document: object) -> dict[str, Any]:
             "peak_rss_bytes": {"cpp": cpp_peak, "rust": rust_peak},
             "peak_rss_ratio": memory_ratio,
         }
+        if rss_override:
+            workload_result["peak_rss_override"] = {
+                "limit": rss_override[0],
+                "reason": rss_override[1],
+            }
+        workload_results[workload] = workload_result
         logs_by_workload[workload] = log_ratios
         total_pairs += pair_count
 

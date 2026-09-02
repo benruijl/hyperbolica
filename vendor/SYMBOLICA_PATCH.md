@@ -1,46 +1,79 @@
 # Hyperbolica-maintained Symbolica patches
 
-## Current `dev_poly` patch
+## Current `dev` status
 
-The selected dependency is the official `dev_poly` checkout at
-`vendor/symbolica`, audited at
-`76e3eb630abcc4d597463d759a0b40fedb57b764`. Its complete local diff is the
-machine-applicable [`symbolica-dev_poly.patch`](symbolica-dev_poly.patch).
-Apply it from the repository root after creating the checkout:
+The selected dependency is a clean official `dev` checkout at
+`0b57776bf911faeea7e28ea133706fb03740ffeb`. No Hyperbolica patch is applied.
+The two improvements formerly carried here were integrated upstream as:
+
+- `4fd8443c` — `Add resultant trait for best algorithm selection per ring`;
+- `b8fa6b53` — `Use binary exponentation for rational polynomials`.
+
+The powering commit is byte-identical to the standalone patch below. The
+resultant commit contains the same coefficient-domain trait, primitive-integer
+Ducos path, CRT path, and rational selector, with the selector's private
+organization and documentation streamlined upstream. Applying either patch to
+current `dev` correctly fails because its changes are already present.
+
+## Standalone binary-powering patch
+
+[`symbolica-dev-rational-power.patch`](symbolica-dev-rational-power.patch) is
+the clean, powering-only patch against predecessor
+`bd0c137e62cbd07ebc045bc4b04ac661a14f3be6`. Its SHA-256 is
+`452fc0c595207ae37270927b1efcda3ad1c72df3bb58fbd9d03a0fcf5e85d82b`.
+It touches only `src/domains/rational_polynomial.rs` and
+`tests/rational_polynomial.rs`; resultant changes are excluded.
+
+It replaces linear repeated multiplication with exact exponentiation by
+squaring, delegates `RationalPolynomialField::pow` to the same path, and tests
+powers 0, 1, and 13 through both public APIs.
+
+## Standalone resultant patch
+
+[`symbolica-dev-resultant.patch`](symbolica-dev-resultant.patch) is the clean,
+resultant-only patch against the same predecessor. Its SHA-256 is
+`a47d5fd653daaeec17bd4cd2ffb6ccd0f32cf48302a8f6eb9f8fbd2e14688387`.
+It touches only `src/lib.rs`, `src/poly.rs`, and `src/poly/resultant.rs`; binary
+powering is excluded. Its native tests cover rational contents, denominators,
+signs, zero/constant/small inputs, the internal Ducos/CRT boundary, and public
+trait dispatch.
+
+## Combined predecessor patch
+
+[`symbolica-dev.patch`](symbolica-dev.patch) combines the two disjoint patches
+above. Its SHA-256 is
+`5f5a3ad9a0b4552772097581eea9673e7a2d1e896f3996d5afb2d439972d90d0`.
+All three artifacts were checked with strict whitespace validation against a
+temporary index at `bd0c137`; their post-images match the former nested
+checkout exactly, and the two standalone patches reproduce the combined
+post-image.
+
+To inspect or apply one of these historical patches, first check out its exact
+base, not current `dev`:
 
 ```sh
-git -C vendor/symbolica apply ../symbolica-dev_poly.patch
+git -C vendor/symbolica checkout bd0c137e62cbd07ebc045bc4b04ac661a14f3be6
+git -C vendor/symbolica apply --check ../symbolica-dev-resultant.patch
+git -C vendor/symbolica apply ../symbolica-dev-resultant.patch
 ```
 
-The current patch contains three changes:
+Substitute `symbolica-dev-rational-power.patch` or `symbolica-dev.patch` as
+needed. On current `dev`, run the already-upstream focused regressions instead:
 
-1. `RationalPolynomial::pow` uses exponentiation by squaring, and the
-   `RationalPolynomialField` implementation delegates to it. Pristine
-   `dev_poly` still performs `e` multiplications. The focused
-   `rational_polynomial_power_uses_exact_binary_exponentiation` test covers
-   exponents 0, 1, and 13 through both APIs.
-2. `FactorizedRationalPolynomialField::is_one` checks `numer_coeff`. Pristine
-   `dev_poly` misclassifies the scalar `2` because its polynomial payload is
-   one and the scalar lives in `numer_coeff`. This can route native factorized
-   partial fractions into monic division with a nonmonic divisor. The focused
-   `field_is_one_checks_the_numerator_coefficient` test and Hyperbolica's
-   factored-partial-fraction suite cover the fix.
-3. `UnivariatePolynomial<PolynomialRing<RationalField, _>>` exposes
-   `resultant_ducos_integer` and `resultant_auto`. The former clears scalar
-   denominators and global integer contents once, runs the checkout's optimized
-   Ducos recurrence over `Z[parameters]`, and restores the exact homogeneous
-   rational scale. The latter owns the coefficient-domain-specific choice
-   between that path and CRT, analogous to Symbolica's internal polynomial-GCD
-   planning; Hyperbolica does not duplicate the guard. Native tests cover the
-   dispatch boundary, denominators, nontrivial contents and signs, swapped odd
-   degrees, zero, constants, and the small-resultant formulas. The existing CRT
-   adapter shares the same primitive-integer conversion.
+```sh
+cargo test --manifest-path vendor/symbolica/Cargo.toml \
+  --test rational_polynomial \
+  rational_polynomial_power_uses_exact_binary_exponentiation
+cargo test --manifest-path vendor/symbolica/Cargo.toml --lib \
+  resultant_integer_ducos -- --test-threads=1
+cargo test --manifest-path vendor/symbolica/Cargo.toml --lib \
+  rational_resultant -- --test-threads=1
+```
 
 The exact scalar-content `from_num_den(..., true)` regression and the F4
-same-matrix regression already pass on pristine `dev_poly`, so their old local
-patches are not applied to the selected checkout. Symbolica's derivative still
-uses `do_gcd = false` internally; Hyperbolica performs a targeted scalar
-normalization at that wrapper boundary.
+same-matrix regression also pass on pristine current `dev`. Commit `bd0c137`
+contains the formerly local factorized-`is_one` and rational-derivative
+scalar-normalization fixes, so Hyperbolica carries no workaround for either.
 
 ## Archived `symbolica-src` patch record
 
@@ -198,16 +231,17 @@ diff --git a/vendor/symbolica-src/src/poly/groebner.rs b/vendor/symbolica-src/sr
 
 ### Defensive exact-verification fallback
 
-The companion patch exposes `ensure_groebner_basis`, which verifies an F4
-result using Symbolica's exact S-polynomial check. If verification fails, a conventional
-Buchberger work list adds only the missing remainders, then the existing basis
-reducer canonicalizes the completed result. Verification is explicit because
-checking all S-polynomials of a large valid basis is not free.
+The companion patch exposed `ensure_groebner_basis`, which verified an F4
+result using Symbolica's exact S-polynomial check. If verification failed, a
+conventional Buchberger work list added only the missing remainders, then the
+existing basis reducer canonicalized the completed result. Verification was
+explicit because checking all S-polynomials of a large valid basis is not free.
 
-Hyperbolica invokes the method on every reduced Euler basis because an
-incomplete leading ideal can also retain pure powers and produce a wrong finite
-count. Verification operates on the already reduced result and uses
-Buchberger's product criterion to skip relatively-prime leading monomials.
+At that archived revision, Hyperbolica invoked the method on every reduced
+Euler basis because an incomplete leading ideal could also retain pure powers
+and produce a wrong finite count. Verification operated on the already reduced
+result and used Buchberger's product criterion to skip relatively-prime leading
+monomials. Current `dev` contains the native fix and needs no fallback.
 
 ### Defensive fallback patch
 
@@ -349,9 +383,10 @@ does not include the separate explicit verification fallback.
 
 ## Refreshing the vendor snapshot
 
-When updating Symbolica, first run the focused tests without these patches.
-Drop any patch whose regression now passes against upstream unchanged;
-otherwise reapply it and update the snapshot commit recorded in
-`SYMBOLICA_SNAPSHOT.md`. Always rerun Hyperbolica's full correctness and
-performance gates because exact F4 verification adds work on every path where
-the caller requests it, even with the product-criterion fast path.
+When updating Symbolica, advance the clean `dev` checkout, pin its exact
+revision in `SYMBOLICA_SNAPSHOT.md` and `check-pure-symbolica.sh`, then run the
+focused upstream regressions and require a clean nested worktree. Rerun
+Hyperbolica's full correctness and performance gates before accepting the new
+revision. Create a new base-specific patch and record its hash only if a needed
+change is still absent upstream; do not apply the historical predecessor
+patches to current `dev`.

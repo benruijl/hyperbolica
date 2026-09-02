@@ -1,4 +1,5 @@
 use symbolica::domains::InternalOrdering;
+use symbolica::poly::PolynomialResultant;
 use symbolica::prelude::*;
 
 use super::{Factored, Poly, ResultantStrategy, SymbolicaPoly};
@@ -161,15 +162,22 @@ impl Poly {
         if variable >= self.ctx.len() {
             return Err(Error::UnknownVariable(variable.to_string()));
         }
-        let left = self.inner.to_univariate(variable);
-        let right = other.inner.to_univariate(variable);
         let resultant = match strategy {
-            ResultantStrategy::Auto => left.resultant_auto(&right),
-            ResultantStrategy::Ducos => left.resultant_ducos_integer(&right),
-            ResultantStrategy::RationalDucos => left.resultant(&right),
-            ResultantStrategy::Brown => left.resultant_brown(&right),
-            ResultantStrategy::Primitive => left.resultant_primitive(&right),
-            ResultantStrategy::Crt => left.resultant_crt(&right),
+            ResultantStrategy::Auto => {
+                PolynomialResultant::resultant(&self.inner, &other.inner, variable)
+            }
+            strategy => {
+                let left = self.inner.to_univariate(variable);
+                let right = other.inner.to_univariate(variable);
+                match strategy {
+                    ResultantStrategy::Ducos => left.resultant_ducos_integer(&right),
+                    ResultantStrategy::RationalDucos => left.resultant(&right),
+                    ResultantStrategy::Brown => left.resultant_brown(&right),
+                    ResultantStrategy::Primitive => left.resultant_primitive(&right),
+                    ResultantStrategy::Crt => left.resultant_crt(&right),
+                    ResultantStrategy::Auto => unreachable!("handled above"),
+                }
+            }
         };
         Ok(Self::from_inner(self.ctx.clone(), resultant))
     }

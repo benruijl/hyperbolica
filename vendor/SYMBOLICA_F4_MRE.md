@@ -3,7 +3,7 @@
 The archived standalone Rust example
 [`symbolica-src/examples/f4_incomplete_basis_mre.rs`](symbolica-src/examples/f4_incomplete_basis_mre.rs)
 is the minimized regression for an F4 correctness failure that does not use
-any Hyperbolica code. The selected official `dev_poly` checkout contains the
+any Hyperbolica code. The selected official `dev` checkout contains the
 same case as its native `prevent_live_basis_update` unit test. Both construct
 two binomials in three variables over `GF(65521)` in GrevLex order, call raw
 `GroebnerBasis::new`, and check the result with Symbolica's exact
@@ -12,10 +12,15 @@ two binomials in three variables over `GF(65521)` in GrevLex order, call raw
 From the Hyperbolica repository root, run:
 
 ```sh
-export SYMBOLICA_LICENSE='<your Symbolica license>'
+read -rsp 'Symbolica license: ' SYMBOLICA_LICENSE
+printf '\n'
+export SYMBOLICA_LICENSE
 cargo test --manifest-path vendor/symbolica/Cargo.toml --lib \
   prevent_live_basis_update -- --nocapture
 ```
+
+The hidden prompt keeps the credential out of shell history and command-line
+arguments.
 
 Without the native fix, F4 fails deterministically:
 
@@ -89,11 +94,11 @@ other rows produced by their own matrix.
 
 ## Verified environment
 
-- Selected Symbolica branch: `dev_poly`
-- Audited revision: `76e3eb630abcc4d597463d759a0b40fedb57b764`
-- Native fix commit: `ec19eeb211685aa216dbd28a4df547cd4c6baca1`
+- Selected Symbolica branch: `dev`
+- Audited revision: `0b57776bf911faeea7e28ea133706fb03740ffeb`
+- Native fix commit on `dev`: `1f6621d`
 - Symbolica package version: `2.2.0`
 - Rust: `1.89.0`
-- Pristine `dev_poly`: the native regression and unchanged standalone MRE both
+- Pristine `dev`: the native regression and unchanged standalone MRE both
   pass, returning the missing fourth polynomial and preserving the input ideal
 - Hyperbolica with direct `GroebnerBasis::new`: all Euler-system tests pass

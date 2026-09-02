@@ -11,7 +11,13 @@ recording the Symbolica license value.
   `9d826854503f3849c60369840b79ab1b50ebaf7587a382498d6e9fa06d570f65`.
 - Symbolica: official `dev_poly` revision
   `76e3eb630abcc4d597463d759a0b40fedb57b764` plus
-  `vendor/symbolica-dev_poly.patch`.
+  the then-current, unretained `symbolica-dev_poly.patch` (contemporaneously
+  recorded SHA-256
+  `c1453111b3bbe8eb6a0dd1d7089266382f91add605b11b6f6b5872a5080afde5`).
+  Those patch bytes were not archived, so the hash identifies the historical
+  build but is not a reproducible patch artifact. The selected dependency has
+  since moved to `dev`; this row remains a historical build identity rather
+  than current-revision qualification.
 - C++ oracle: clean HyperFLINT revision
   `adfd3af3be234cb43a2322bd9ec442caa26edd74`, binary SHA-256
   `8140b11d4628defa83301a1e37790b1af78a7bce1da3dc0d5a17ec17c723d8b1`.
@@ -39,7 +45,8 @@ confidence bound `0.469063`: Rust was about 2.28x faster overall. Every
 per-workload upper time bound was below the locked `1.15` limit. The only
 locked numerical threshold that would fail was peak RSS for the dense
 resultant: `1.5491` versus the locked `1.25` limit. That memory exception was
-explicitly accepted for this change.
+explicitly accepted for this change and was subsequently encoded as a narrow
+`1.60` dense-resultant override in policy v3; all other workloads retain 1.25.
 
 The run remains exploratory rather than formal qualification because it reused
 externally built binaries from the dirty pre-commit Rust tree and relaxed the
@@ -90,8 +97,10 @@ The locked workload fixture SHA-256 was
 the corpus manifest SHA-256 was
 `e0b3eb1ffc2a3d3bc3443f26473ed76581a87bd287837eb6e3aa1dfa4ce847d3`.
 
-The qualification replay intentionally reports threshold/provenance
-deviations: the exploratory analysis was collected with RSS relaxed to 100,
-whereas replay applies the locked 1.25 value, and neither binary was built by
-the qualification driver. Its `analysis_not_reproducible` entry reflects that
-deliberate threshold mismatch, not corruption of the raw samples.
+The qualification replay stored with this historical record intentionally
+reports threshold/provenance deviations: the exploratory analysis was
+collected with RSS relaxed to 100, the then-current policy applied 1.25, and
+neither binary was built by the qualification driver. Its
+`analysis_not_reproducible` entry reflects that deliberate threshold mismatch,
+not corruption of the raw samples. Policy v3 does not retroactively qualify
+these artifacts.

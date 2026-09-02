@@ -2,19 +2,8 @@
 
 use std::ops::Neg;
 
-use symbolica::prelude::{EuclideanDomain, Ring, Z};
-
-use super::{NativeRat, Rat};
+use super::Rat;
 use crate::error::{Error, Result};
-
-fn remove_common_integer_content(mut value: NativeRat) -> NativeRat {
-    let content = Z.gcd(&value.numerator.content(), &value.denominator.content());
-    if !Z.is_one(&content) {
-        value.numerator = value.numerator.div_coeff(&content);
-        value.denominator = value.denominator.div_coeff(&content);
-    }
-    value
-}
 
 impl Rat {
     pub fn try_add(&self, other: &Self) -> Result<Self> {
@@ -79,11 +68,6 @@ impl Rat {
         if variable >= self.ctx.len() {
             return Err(Error::UnknownVariable(variable.to_string()));
         }
-        // Symbolica's derivative constructs its quotient-rule intermediates
-        // with `do_gcd = false`. Integer differentiation can introduce a
-        // common scalar even when the input itself is canonical, so remove
-        // that scalar before structural equality and hashing observe it.
-        let derivative = remove_common_integer_content(self.native.derivative(variable));
-        Self::from_native(self.ctx.clone(), derivative)
+        Self::from_native(self.ctx.clone(), self.native.derivative(variable))
     }
 }

@@ -1,4 +1,4 @@
-# `dev_poly` performance profile
+# Symbolica polynomial performance profile
 
 This record captures the 2026-09-01 profiling pass requested for the Rust port.
 It is diagnostic evidence, not a qualification verdict; the locked paired
@@ -7,8 +7,14 @@ benchmark policy in `docs/verification.md` remains the publication gate.
 ## Provenance and method
 
 - Host: AMD EPYC 9754, Linux 6.18.45, performance governor.
-- Symbolica: live `origin/dev_poly` revision
-  `76e3eb630abcc4d597463d759a0b40fedb57b764`.
+- Selected Symbolica: clean `origin/dev` revision
+  `0b57776bf911faeea7e28ea133706fb03740ffeb`. The profiling measurements below
+  were collected on the former `dev_poly` revision `76e3eb6` and then checked
+  against the byte-identical optimized kernel blobs at `bd0c137`. Current
+  `dev` integrates the rational resultant selector (`4fd8443c`) and binary
+  rational-polynomial powering (`b8fa6b53`) upstream. Formal current-revision
+  claims must come from the separate clean qualification gate; the historical
+  measurements below do not supply that verdict.
 - Build: release LTO, one codegen unit, debug symbols retained; Symbolica
   `faster_alloc`, GMP integer, and MPFR float features enabled.
 - Sampling: `perf` userspace `cpu-clock` samples, processes pinned to CPU 0,
@@ -34,9 +40,10 @@ number to the last executable:
 
 The locked fixture file SHA-256 is
 `241e7627f262f51b2b83fd8fbf76b749a1ffb211edc7ad2d062c6d95d9262a13`.
-The final complete Symbolica source diff is
-`vendor/symbolica-dev_poly.patch`, SHA-256
-`569b52e78f5c109332898625381563d1ab1c6542e60f33fb1000f4597ee9e82b`.
+The selected Symbolica checkout now has no local source diff. The former
+combined patch is retained as `vendor/symbolica-dev.patch`, SHA-256
+`5f5a3ad9a0b4552772097581eea9673e7a2d1e896f3996d5afb2d439972d90d0`,
+for predecessor provenance; both of its changes are upstream.
 The temporary probe source was replaced by the tracked
 `examples/resultant_strategies.rs`, which exercises the same public paths.
 The final paired aggregate results and all raw-artifact hashes are retained in
@@ -151,20 +158,21 @@ speedup. The equal-weight global geometric-mean Rust/C++ time ratio was 0.439,
 with a 0.469 upper 95% confidence bound: about 2.28x faster overall. All 14
 per-workload upper time bounds passed the locked 1.15 limit.
 
-This is deliberately not called qualification evidence. It used the locked
+This historical run is deliberately not called qualification evidence. It used the locked
 corpus, pair count, warmup, affinity, bootstrap, global-time, and tail-time
 values, but reused externally built binaries from the dirty pre-commit Rust
 tree and relaxed only the already accepted RSS threshold for collection. The
 tracked sanitized record links every aggregate to the ignored raw-artifact
 hashes. It establishes an allocator-matched time comparison and RSS
-observation, not a formal qualification verdict.
+observation, not a formal qualification verdict; a clean policy-v4
+qualification run must supply the final performance claim.
 
 ## Resultant memory profile
 
 The remaining RSS gap is understood and accepted for this change. In the fair
 mimalloc-on paired run, Symbolica reached 70.8 MB and FLINT reached 45.7 MB on
-the dense resultant, a 1.55 ratio versus the locked 1.25 limit. This was the
-only locked numerical threshold not met. Setting
+the dense resultant, a 1.55 ratio. Policy v3 records a workload-specific 1.60
+limit for this case while retaining 1.25 for every other workload. Setting
 `MIMALLOC_ARENA_EAGER_COMMIT=0` reduced the Symbolica result to about 43 MB in a
 separate probe with no measured slowdown, but it is retained as an optional
 runtime mitigation rather than silently changing allocator policy for the

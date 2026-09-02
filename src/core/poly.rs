@@ -40,7 +40,8 @@ pub struct Poly {
 ///
 /// [`ResultantStrategy::Auto`] is the production default. It delegates the
 /// representation-specific choice between optimized integer-associate Ducos
-/// and modular CRT to Symbolica. The direct recurrence over rational
+/// and modular CRT to Symbolica's [`symbolica::poly::PolynomialResultant`]
+/// implementation for `Q`. The direct recurrence over rational
 /// coefficients remains available only as a diagnostic baseline.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum ResultantStrategy {

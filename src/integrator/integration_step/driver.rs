@@ -320,40 +320,44 @@ pub(crate) fn integration_step_core_sym_with_options(
     // Pair indices are allocated in encounter order by the upstream-compatible
     // registry. Keep that encounter order deterministic until the table is
     // replaced by an owned batch allocator; the default rational path retains
-    // full Rayon parallelism.
-    let contributions =
-        if options.parallel && !options.introduce_algebraic_letters && input.len() >= 4 {
-            (0..input.len())
-                .into_par_iter()
-                .map(|index| {
-                    process_entry(
-                        ctx,
-                        &input[index],
-                        variable,
-                        options.check_divergences,
-                        options.introduce_algebraic_letters,
-                        forbidden_algebraic_variables,
-                        transformed[index].as_ref(),
-                    )
-                })
-                .collect::<IntegrationResult<Vec<_>>>()?
-        } else {
-            input
-                .iter()
-                .zip(&transformed)
-                .map(|(entry, transformed)| {
-                    process_entry(
-                        ctx,
-                        entry,
-                        variable,
-                        options.check_divergences,
-                        options.introduce_algebraic_letters,
-                        forbidden_algebraic_variables,
-                        transformed.as_ref(),
-                    )
-                })
-                .collect::<IntegrationResult<Vec<_>>>()?
-        };
+    // full licensed Rayon parallelism, while restricted mode stays on the
+    // calling thread.
+    let contributions = if options.parallel
+        && !options.introduce_algebraic_letters
+        && input.len() >= 4
+        && symbolica::LicenseManager::max_threads(rayon::current_num_threads()) > 1
+    {
+        (0..input.len())
+            .into_par_iter()
+            .map(|index| {
+                process_entry(
+                    ctx,
+                    &input[index],
+                    variable,
+                    options.check_divergences,
+                    options.introduce_algebraic_letters,
+                    forbidden_algebraic_variables,
+                    transformed[index].as_ref(),
+                )
+            })
+            .collect::<IntegrationResult<Vec<_>>>()?
+    } else {
+        input
+            .iter()
+            .zip(&transformed)
+            .map(|(entry, transformed)| {
+                process_entry(
+                    ctx,
+                    entry,
+                    variable,
+                    options.check_divergences,
+                    options.introduce_algebraic_letters,
+                    forbidden_algebraic_variables,
+                    transformed.as_ref(),
+                )
+            })
+            .collect::<IntegrationResult<Vec<_>>>()?
+    };
     merge_contributions(
         ctx,
         contributions,

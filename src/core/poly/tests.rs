@@ -172,6 +172,66 @@ fn standard_discriminant_has_the_degree_dependent_sign() {
 }
 
 #[test]
+fn discriminants_through_degree_five_match_roots_and_scalar_scaling() {
+    fn discriminant_from_roots(roots: &[i64]) -> i64 {
+        let mut discriminant = 1_i64;
+        for (left_index, left) in roots.iter().enumerate() {
+            for right in &roots[left_index + 1..] {
+                let difference = left.checked_sub(*right).unwrap();
+                discriminant = discriminant
+                    .checked_mul(difference.checked_mul(difference).unwrap())
+                    .unwrap();
+            }
+        }
+        discriminant
+    }
+
+    let ctx = context();
+    let x = Poly::generator(ctx.clone(), 0).unwrap();
+    let coefficient_scalar = Poly::parse(ctx.clone(), "2*y-3").unwrap();
+    let roots = [-2, 1, 4, 8, 13];
+
+    for degree in 1..=5 {
+        let mut polynomial = Poly::one(ctx.clone());
+        for root in &roots[..degree] {
+            polynomial = polynomial
+                .try_mul(&x.try_sub(&Poly::from_int(ctx.clone(), *root)).unwrap())
+                .unwrap();
+        }
+        assert_eq!(polynomial.degree(0).unwrap(), degree as i64);
+
+        let expected = Poly::from_int(ctx.clone(), discriminant_from_roots(&roots[..degree]));
+        assert_eq!(
+            polynomial.discriminant(0).unwrap(),
+            expected,
+            "root-product discriminant, degree {degree}"
+        );
+
+        let sign_exponent = degree * (degree - 1) / 2;
+        let expected_legacy = if sign_exponent % 2 == 0 {
+            expected.clone()
+        } else {
+            -&expected
+        };
+        assert_eq!(
+            polynomial.resultant_discriminant(0).unwrap(),
+            expected_legacy,
+            "legacy resultant sign, degree {degree}"
+        );
+
+        let scaled = coefficient_scalar.try_mul(&polynomial).unwrap();
+        let expected_scaled = expected
+            .try_mul(&coefficient_scalar.pow(2 * degree - 2))
+            .unwrap();
+        assert_eq!(
+            scaled.discriminant(0).unwrap(),
+            expected_scaled,
+            "disc(c*p) = c^(2*n-2)*disc(p), degree {degree}"
+        );
+    }
+}
+
+#[test]
 fn typed_substitution_and_full_evaluation_are_exact() {
     let ctx = context();
     let polynomial = Poly::parse(ctx.clone(), "3*x^9*y^4-2*x^2*y+7").unwrap();
