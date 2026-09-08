@@ -5,4 +5,5 @@ tests/data/smirnov/*.txt -whitespace
 # Unified-diff context lines necessarily contain a one-character prefix even
 # when the represented source line is empty.
 vendor/symbolica-dev*.patch -whitespace
-vendor/symbolica-hyperlica.patch -whitespace
+vendor/symbolica-hyperlica*.patch -whitespace
+vendor/symbolica-heap*.patch -whitespace

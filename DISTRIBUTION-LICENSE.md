@@ -4,15 +4,23 @@ Hyperbolica-authored code is licensed under the MIT License in `LICENSE`.
 
 This working tree also contains, and built artifacts statically embed,
 Symbolica. Symbolica is not covered by Hyperbolica's MIT license. The selected
-checkout's `vendor/symbolica/License.md` states that copying or distributing
-any part of the Symbolica code requires express prior permission, with
-separate terms for hobbyist/student, professional non-commercial, and
-commercial use. The archived `vendor/symbolica-src` copy is covered by the
-same separate licensing requirement.
+checkout at upstream base `fb845d34bda8ccf1fedef6544d3aa46dc24944e3`
+provides the **Symbolica Source-Available License 1.0** in
+[`vendor/symbolica/License.md`](vendor/symbolica/License.md). Its SHA-256 is
+`95576170a17bc8996fb8a94473745545048b6edc5d91e3867f091f7fc6b26981`.
+Preserve and supply that complete notice with applicable distributions.
 
-Therefore the repository and Hyperbolica wheels must not be published,
-redistributed, or pushed to a remote repository containing the vendored
-Symbolica source unless the required permission has been obtained from
-Symbolica and recorded for that distribution. See
-<https://symbolica.io/license/> and the bundled Symbolica license for the
-controlling terms.
+Runtime rights are not included or transferred by Hyperbolica unless a
+separate written agreement expressly provides otherwise. Each recipient's
+installation and execution require the applicable Symbolica runtime rights.
+
+The active dependency includes local Symbolica modifications. This update
+does not establish permission to distribute a modified build or source tree.
+Review the complete selected license, applicable runtime terms, and any
+separate written agreement before publication or redistribution; record the
+authority for the intended distribution. Current plan information is at
+[Symbolica licensing](https://symbolica.io/license/).
+
+The historical `vendor/symbolica-src` snapshot and older patches are separate
+versioned artifacts. Preserve their original notices; do not assume the new
+checkout's notice retroactively replaces their terms.

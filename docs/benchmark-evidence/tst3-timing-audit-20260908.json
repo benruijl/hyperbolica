@@ -1,0 +1,43 @@
+{
+  "case": "tst3",
+  "workers": 8,
+  "cpus": [
+    132,
+    135,
+    139,
+    141,
+    143,
+    148,
+    149,
+    150
+  ],
+  "policy": "One fresh adjacent C++/Rust pair per case; same eight physical cores; no warmup; shared host; exact agreement with each backend archived response under documented exclusions. Cross-backend semantic equivalence is established by the archived fixtures.",
+  "runs": [
+    {
+      "backend": "flint",
+      "elapsed_ns": 258327733097,
+      "user_ns": 1942668063000,
+      "sys_ns": 4343816000,
+      "max_rss_bytes": 8280969216,
+      "effective_request_sha256": "d25965d982a66e0c511a013aed9e83a6eb4beb93e353bb7af97392b8f9fd2c7c",
+      "executable_sha256": "8140b11d4628defa83301a1e37790b1af78a7bce1da3dc0d5a17ec17c723d8b1",
+      "internal_compute_seconds": 258.188,
+      "outside_compute_seconds": 0.13973309700003256,
+      "average_busy_cores": 7.536983566022748,
+      "output_sha256": "fad2365c25a196ae85cabed4627233e64be9015a9cbd847d87847323e7a6beb7"
+    },
+    {
+      "backend": "symbolica",
+      "elapsed_ns": 281873777532,
+      "user_ns": 1613329783000,
+      "sys_ns": 1943065000,
+      "max_rss_bytes": 1413140480,
+      "effective_request_sha256": "d25965d982a66e0c511a013aed9e83a6eb4beb93e353bb7af97392b8f9fd2c7c",
+      "executable_sha256": "4f4106444fe9ad0a37ef96b2a52ad26c4c61b71571c7eed0bc8cbbac7cd1892c",
+      "internal_compute_seconds": 281.758105478,
+      "outside_compute_seconds": 0.11567205400001512,
+      "average_busy_cores": 5.7304828499579905,
+      "output_sha256": "582856beb569e5f46d97a0816cc9fd04a6cf9a6e838057984c7c0807c3e1f946"
+    }
+  ]
+}

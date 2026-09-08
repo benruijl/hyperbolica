@@ -1,0 +1,3633 @@
+From df7eb980ecd3040ac0fd0bacc37b0f34d74b4701 Mon Sep 17 00:00:00 2001
+From: Ben Ruijl <ben@ruijl.ch>
+Date: Tue, 8 Sep 2026 08:49:25 +0000
+Subject: [PATCH] Retain generic rational fast paths and scalar correction on
+ current dev
+
+Keep upstream correctness implementations, generic polynomial and factored partial-fraction optimizations, native regression tests and the scalar-only constructor correction. Exclude the five resolved standalone MREs while preserving the newly discovered scalar reproducer.
+---
+ benches/bug-reproducers.md                    |  59 +++
+ benches/rational_polynomial_shapes.md         |  79 +++
+ .../rational_polynomial_shapes_flint.c        |  78 +++
+ examples/factored_partial_fractions.rs        | 221 ++++++++
+ examples/mre_factored_scalar.rs               |  15 +
+ .../rational_polynomial_exact_division.rs     | 138 +++++
+ examples/rational_polynomial_shapes.rs        | 178 +++++++
+ .../examples/fraction_polynomial_kernels.rs   | 110 ++++
+ lib/numerica/examples/rational_fastpaths.rs   |  83 +++
+ lib/numerica/src/domains/integer.rs           |  72 ++-
+ .../src/domains/integer/polynomial_kernels.rs |  86 ++-
+ lib/numerica/src/domains/rational.rs          | 133 ++++-
+ .../domains/rational/polynomial_kernels.rs    | 490 ++++++++++++++++++
+ src/domains/factorized_rational_polynomial.rs |  19 +-
+ .../factorized_rational_polynomial/apart.rs   | 107 ++++
+ .../apart/linear.rs                           | 194 +++++++
+ .../apart/tests.rs                            | 190 +++++++
+ .../constructor_tests.rs                      | 393 ++++++++++++++
+ src/domains/rational_polynomial.rs            | 111 +++-
+ .../rational_polynomial/arithmetic_tests.rs   | 275 ++++++++++
+ src/poly/gcd.rs                               |   9 +
+ src/poly/gcd/rational_division.rs             | 218 ++++++++
+ 22 files changed, 3231 insertions(+), 27 deletions(-)
+ create mode 100644 benches/bug-reproducers.md
+ create mode 100644 benches/rational_polynomial_shapes.md
+ create mode 100644 benches/support/rational_polynomial_shapes_flint.c
+ create mode 100644 examples/factored_partial_fractions.rs
+ create mode 100644 examples/mre_factored_scalar.rs
+ create mode 100644 examples/rational_polynomial_exact_division.rs
+ create mode 100644 examples/rational_polynomial_shapes.rs
+ create mode 100644 lib/numerica/examples/fraction_polynomial_kernels.rs
+ create mode 100644 lib/numerica/examples/rational_fastpaths.rs
+ create mode 100644 lib/numerica/src/domains/rational/polynomial_kernels.rs
+ create mode 100644 src/domains/factorized_rational_polynomial/apart.rs
+ create mode 100644 src/domains/factorized_rational_polynomial/apart/linear.rs
+ create mode 100644 src/domains/factorized_rational_polynomial/apart/tests.rs
+ create mode 100644 src/domains/factorized_rational_polynomial/constructor_tests.rs
+ create mode 100644 src/domains/rational_polynomial/arithmetic_tests.rs
+ create mode 100644 src/poly/gcd/rational_division.rs
+
+diff --git a/benches/bug-reproducers.md b/benches/bug-reproducers.md
+new file mode 100644
+index 0000000..3a715a5
+--- /dev/null
++++ b/benches/bug-reproducers.md
+@@ -0,0 +1,59 @@
++# HyperLica audit regressions on current Symbolica dev
++
++Upstream base: `fb845d34bda8ccf1fedef6544d3aa46dc24944e3` (2026-09-08).
++Commit `bd29c4704eaa4ea5754330a7c43d59d2bd50e065` incorporates the powered
++denominator, leading-unit, rational-scaling, duplicate-factor, zero-denominator,
++constant-map and sparse-partial-fraction fixes. It also normalizes nonzero
++univariate GCD results with a zero operand, including algebraic extensions;
++that was the source of the intermittent Galois-upgrade factorization panic.
++
++The local overlay retains generic rational arithmetic and polynomial kernels,
++native factored-coefficient partial fractions, extra exact-value regressions
++and checked denominator multiplicities. It does not replace upstream's
++constructors with the former local construction implementation.
++
++## Retained regression coverage
++
++The five obsolete standalone MRE examples have been removed. Their historical
++sources remain recoverable from the earlier `symbolica-hyperlica.patch` series
++and Git history; they are not part of the current performance patch.
++
++Coverage remains in the native unit tests: factored constructor and arithmetic
++regressions, `constants_can_grow_and_shrink_variable_maps`,
++`sparse_partial_fractions_preserve_maps_and_skip_zero_terms`,
++`gcd_with_zero_is_monic_over_extensions`, `galois_upgrade`, and the root-isolation
++`isolate` test. No library test or production implementation was removed.
++
++Run the native suite from this checkout:
++
++```sh
++cargo test --locked --lib -- --test-threads=1
++```
++
++Supply your normal `SYMBOLICA_LICENSE` through the environment if required;
++no license value belongs in source or saved logs. Use a debug build and provide
++a C++ compiler on PATH for native-code-generation tests.
++
++The corrected upstream root-isolation test expects `[3/16, 9/32]`. The former
++`[15/64, 9/32]` assertion was a test-expectation mismatch, not an incorrect root;
++the refined interval remains `[1023/4096, 2049/8192]`.
++
++Current upstream canonicalizes zero factored rationals to empty denominators
++and drops removable zero-power factors before map unification. Regression
++tests respect those representation choices while preserving exact-value checks.
++
++## Additional scalar-only regression
++
++The larger retained matrix found another corner case after the upstream
++refresh: constructing `1/2` over Q with an empty variable map and no explicit
++denominator could factor an integer constant through a zero-width exponent
++iterator. The local scalar-base bypass leaves constants to the existing
++domain-specific scalar normalization instead. The portable reproducer is
++`examples/mre_factored_scalar.rs`; run it with
++`cargo run --locked --example mre_factored_scalar`. The native regression
++checks eighteen scalar-only combinations, and the combined library suite
++passed all 637 tests after this correction.
++
++For measured validation results and performance boundaries, consult the parent
++HyperLica report. These runnable commands are not a claim that a particular
++suite or benchmark has already passed.
+diff --git a/benches/rational_polynomial_shapes.md b/benches/rational_polynomial_shapes.md
+new file mode 100644
+index 0000000..80fe66e
+--- /dev/null
++++ b/benches/rational_polynomial_shapes.md
+@@ -0,0 +1,79 @@
++# Rational polynomial kernel diagnostics
++
++The `rational_polynomial_shapes` example measures multiplication and exact
++division for five deterministic support families, three coefficient-size
++parameters, and either integral coefficients or denominators from
++`{1,3,5,7,11}`. It emits CSV and writes exact operands/products for an independent
++FLINT `fmpq_mpoly` oracle. These diagnostics complement `flint_comparison`, whose
++integer-polynomial cases do not directly measure rational-domain dispatch.
++
++```sh
++cargo run --locked --release --example rational_polynomial_shapes \
++  --no-default-features --features faster_alloc,integer-gmp,float-mpfr \
++  -- 20 benchmark-inputs > symbolica.csv
++cc -O3 -DNDEBUG benches/support/rational_polynomial_shapes_flint.c \
++  $(pkg-config --cflags --libs flint) -o rational-polynomial-shapes-flint
++./rational-polynomial-shapes-flint 20 benchmark-inputs > flint.csv
++```
++
++Supply your normal Symbolica license through the environment, never in source
++or committed command transcripts. FLINT is an optional external benchmark
++dependency; the Symbolica and Numerica examples do not require it. Some FLINT
++installations need explicit compiler include/library flags instead of pkg-config.
++
++The Rust arguments are `rounds input-directory [shape] [bits] [domain]`. Optional
++filters use the CSV names (`dense3_d20`, `127`, `Z`, for example). The C oracle
++accepts `rounds input-directory [shape]` with the same shape names. The bit field is
++a deterministic generator shift parameter, not an exact maximum bit count;
++the additive index term can make small coefficients slightly larger. Families:
++
++| Shape | Variables | Input terms | Product terms |
++|---|---:|---:|---:|
++| `sparse8_d128` | 8 | 17 × 17 | 245 |
++| `dense3_d12` | 3 | 455 × 364 | 2600 |
++| `dense3_d20` | 3 | 1771 × 1540 | 11480 |
++| `sparse8_div127` | 8 | 17 × 17 | 245 |
++| `sparse8_div128` | 8 | 17 × 17 | 245 |
++
++The last two families isolate the checked-division exponent-packing boundary.
++Both use input high degrees 64/63; the second multiplies its entire left operand
++by `x`, so the actual dividend degree in the first variable is 127 versus 128.
++All other variable degrees remain 127. A monomial shift preserves coefficient
++values, term counts and every product collision. Merely replacing high degree
++64 by 65 would change collisions and is not an isolated boundary control. The original
++`sparse8_d128` uses input degrees 128/127 and therefore dividend degree 255,
++not 128. The current eight-variable checked-division implementation only
++uses its packed-key path when every dividend degree is at most 127.
++
++`Q` is native rational arithmetic; `Z` clears the exact common denominator before
++the timed region. Thus Z diagnoses possible coefficient-domain dispatch gains,
++not the performance of converting inside an operation. Rust verifies the Q/Z
++scalar relation and both quotients. The C oracle reads the same operands and
++requires exact equality of products and quotients before timing. Both include
++output allocation/destruction and exclude generation, parsing, and validation.
++
++For meaningful comparisons, use the same release profile, Rust compiler,
++dependency lockfile and features for baseline and candidate. Archive each full
++dependency artifact directory: separate workspace copies can reuse Cargo
++artifact names even when their contents differ. Record source/binary hashes and
++FLINT/GMP/compiler versions. Pin all measured processes to the same otherwise
++idle CPU, set `RAYON_NUM_THREADS=1`, and alternate baseline/candidate process
++order over multiple pairs. Report median per-call times and dispersion; tiny
++cases need substantially more rounds. CLI startup is not in the timed regions.
++
++The Numerica-only `fraction_polynomial_kernels` example compares the optional
++dense kernel with exact generic fraction accumulation, including a fallback
++when the kernel declines. It covers dense inputs, a collision-free sparse
++product, tiny products, and one/few/many denominators at three coefficient sizes.
++
++```sh
++cargo run --locked --release -p numerica \
++  --example fraction_polynomial_kernels -- 100 > fraction-kernels.csv
++cargo run --locked --release -p numerica \
++  --example rational_fastpaths -- 5000 > fraction-scalars.csv
++```
++
++The bulk benchmark compares two paths within one revision; use the scalar
++example with matched unchanged/patched revisions to isolate scalar changes.
++The scalar fused round trip asserts cancellation inside its measured region,
++so compare it only with the same source and assertion policy.
+diff --git a/benches/support/rational_polynomial_shapes_flint.c b/benches/support/rational_polynomial_shapes_flint.c
+new file mode 100644
+index 0000000..733bf11
+--- /dev/null
++++ b/benches/support/rational_polynomial_shapes_flint.c
+@@ -0,0 +1,78 @@
++/* Matching exact FLINT oracle for examples/rational_polynomial_shapes.rs.
++ * See ../rational_polynomial_shapes.md for compilation and measurement notes. */
++#define _POSIX_C_SOURCE 200809L
++#include <flint/flint.h>
++#include <flint/fmpq_mpoly.h>
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++#include <time.h>
++
++static unsigned long long now_ns(void) {
++    struct timespec value;
++    if (clock_gettime(CLOCK_MONOTONIC, &value) != 0) abort();
++    return (unsigned long long)value.tv_sec * 1000000000ULL + value.tv_nsec;
++}
++
++static void load(fmpq_mpoly_t p, const fmpq_mpoly_ctx_t ctx,
++                 const char **variables, const char *directory,
++                 const char *name, const char *suffix) {
++    char path[1024];
++    snprintf(path,sizeof(path),"%s/%s.%s",directory,name,suffix);
++    FILE *input=fopen(path,"rb");
++    if (!input) { perror(path); exit(2); }
++    if(fseek(input,0,SEEK_END)!=0) abort();
++    long length=ftell(input);
++    if(length<0 || fseek(input,0,SEEK_SET)!=0) abort();
++    char *text=malloc((size_t)length+1);
++    if(!text || fread(text,1,length,input)!=(size_t)length) abort();
++    text[length]=0;
++    fclose(input);
++    if (fmpq_mpoly_set_str_pretty(p,text,variables,ctx)!=0) {
++        fprintf(stderr,"Cannot parse %s\n",path); exit(2);
++    }
++    free(text);
++}
++
++int main(int argc, char **argv) {
++    if(argc<3 || argc>4) return 2;
++    int rounds=atoi(argv[1]);
++    if(rounds<1) return 2;
++    flint_set_num_threads(1);
++    const char *variables[]={"x","y","z","a","b","c","d","e"};
++    const char *shapes[]={"sparse8_d128","dense3_d12","dense3_d20","sparse8_div127","sparse8_div128"};
++    int bits[]={12,63,127};
++    puts("shape,bits,rational,operation,domain,nvars,left_terms,right_terms,output_terms,rounds,elapsed_ns");
++    for(size_t shape=0;shape<sizeof(shapes)/sizeof(shapes[0]);shape++) for(int bit=0;bit<3;bit++) for(int rational=0;rational<2;rational++) {
++        if(argc==4 && strcmp(argv[3],shapes[shape])!=0) continue;
++        int nvars=strncmp(shapes[shape],"sparse",6)==0?8:3;
++        fmpq_mpoly_ctx_t ctx;
++        fmpq_mpoly_ctx_init(ctx,nvars,ORD_LEX);
++        fmpq_mpoly_t left,right,product,result;
++        fmpq_mpoly_init(left,ctx); fmpq_mpoly_init(right,ctx); fmpq_mpoly_init(product,ctx); fmpq_mpoly_init(result,ctx);
++        char name[128];
++        snprintf(name,sizeof(name),"%s-b%d-q%s",shapes[shape],bits[bit],rational?"true":"false");
++        load(left,ctx,variables,argv[2],name,"left");
++        load(right,ctx,variables,argv[2],name,"right");
++        load(product,ctx,variables,argv[2],name,"product");
++        fmpq_mpoly_mul(result,left,right,ctx);
++        if(!fmpq_mpoly_equal(result,product,ctx)) abort();
++        if(!fmpq_mpoly_divides(result,product,left,ctx) || !fmpq_mpoly_equal(result,right,ctx)) abort();
++        for(int operation=0;operation<2;operation++) {
++            unsigned long long start=now_ns();
++            for(int round=0;round<rounds;round++) {
++                fmpq_mpoly_t output;
++                fmpq_mpoly_init(output,ctx);
++                if(operation==0) fmpq_mpoly_mul(output,left,right,ctx);
++                else if(!fmpq_mpoly_divides(output,product,left,ctx)) abort();
++                fmpq_mpoly_clear(output,ctx);
++            }
++            printf("%s,%d,%s,%s,FLINT_Q,%d,%ld,%ld,%ld,%d,%llu\n",shapes[shape],bits[bit],rational?"true":"false",operation==0?"multiply":"exact_division",nvars,fmpq_mpoly_length(left,ctx),fmpq_mpoly_length(right,ctx),fmpq_mpoly_length(product,ctx),rounds,now_ns()-start);
++            fflush(stdout);
++        }
++        fmpq_mpoly_clear(left,ctx); fmpq_mpoly_clear(right,ctx); fmpq_mpoly_clear(product,ctx); fmpq_mpoly_clear(result,ctx);
++        fmpq_mpoly_ctx_clear(ctx);
++    }
++    flint_cleanup();
++    return 0;
++}
+diff --git a/examples/factored_partial_fractions.rs b/examples/factored_partial_fractions.rs
+new file mode 100644
+index 0000000..4211195
+--- /dev/null
++++ b/examples/factored_partial_fractions.rs
+@@ -0,0 +1,221 @@
++//! Matched-build native partial-fraction benchmark.
++//!
++//! Run with `cargo run --release --example factored_partial_fractions`.
++//! Both paths use the same coefficient ring and build. The canonical baseline
++//! independently implements the same truncated Taylor recurrence using ordinary
++//! rational-polynomial coefficients. Factored timings include materializing all
++//! final coefficients; parsing and exact coefficient verification are excluded.
++//! Five alternating pairs report per-call medians. These are warmed native-call
++//! timings, not cold-process CLI timings.
++
++use std::hint::black_box;
++use std::sync::Arc;
++use std::time::Instant;
++use symbolica::domains::SelfRing;
++use symbolica::domains::factorized_rational_polynomial::FromNumeratorAndFactorizedDenominator;
++use symbolica::domains::rational_polynomial::FromNumeratorAndDenominator;
++use symbolica::prelude::*;
++type NativeFactored = FactorizedRationalPolynomial<IntegerRing, u16>;
++type NativeRational = RationalPolynomial<IntegerRing, u16>;
++
++fn materialize(input: &NativeFactored) -> NativeRational {
++    input.to_rational_polynomial()
++}
++
++fn canonical_recurrence(input: &NativeFactored) -> Vec<NativeRational> {
++    fn mul(left: &NativeRational, right: &NativeRational) -> NativeRational {
++        if left.is_zero() || right.is_one() {
++            left.clone()
++        } else if right.is_zero() || left.is_one() {
++            right.clone()
++        } else {
++            left * right
++        }
++    }
++    fn add(left: &NativeRational, right: &NativeRational) -> NativeRational {
++        if left.is_zero() {
++            right.clone()
++        } else if right.is_zero() {
++            left.clone()
++        } else if left.denominator == right.denominator {
++            NativeRational::from_num_den(
++                &left.numerator + &right.numerator,
++                left.denominator.clone(),
++                &Z,
++                true,
++            )
++        } else {
++            left + right
++        }
++    }
++    fn sub(left: &NativeRational, right: &NativeRational) -> NativeRational {
++        if right.is_zero() {
++            left.clone()
++        } else if left.is_zero() {
++            -right.clone()
++        } else if left.denominator == right.denominator {
++            NativeRational::from_num_den(
++                &left.numerator - &right.numerator,
++                left.denominator.clone(),
++                &Z,
++                true,
++            )
++        } else {
++            left - right
++        }
++    }
++    fn multiply_shifted(
++        series: &mut [NativeRational],
++        point: &NativeRational,
++        degree: usize,
++    ) -> usize {
++        let degree = (degree + 1).min(series.len() - 1);
++        for index in (1..=degree).rev() {
++            series[index] = add(&mul(&series[index], point), &series[index - 1]);
++        }
++        series[0] = mul(&series[0], point);
++        degree
++    }
++    let zero: NativeRational = input.numerator.zero().into();
++    let one: NativeRational = input.numerator.one().into();
++    assert!(input.numer_coeff.is_one() && input.denom_coeff.is_one());
++    let points = input
++        .denominators
++        .iter()
++        .map(|(base, exponent)| {
++            let univariate = base.to_univariate(0);
++            assert!(univariate.coefficients()[1].is_one());
++            (
++                NativeRational::from(-univariate.coefficients()[0].clone()),
++                *exponent,
++            )
++        })
++        .collect::<Vec<_>>();
++    let numerator = input.numerator.to_univariate(0);
++    let mut result = vec![];
++    for (index, (point, terms)) in points.iter().enumerate() {
++        let mut numerator_series = vec![zero.clone(); *terms];
++        let mut degree = 0;
++        for (index, coefficient) in numerator.coefficients().iter().rev().enumerate() {
++            if index != 0 {
++                degree = multiply_shifted(&mut numerator_series, point, degree);
++            }
++            numerator_series[0] = add(&numerator_series[0], &coefficient.clone().into());
++        }
++        let mut cofactor = vec![zero.clone(); *terms];
++        cofactor[0] = one.clone();
++        let mut degree = 0;
++        for (other_index, (other_point, multiplicity)) in points.iter().enumerate() {
++            if index == other_index {
++                continue;
++            }
++            let difference = sub(point, other_point);
++            for _ in 0..*multiplicity {
++                degree = multiply_shifted(&mut cofactor, &difference, degree);
++            }
++        }
++        let mut quotient = vec![];
++        for exponent in 0..*terms {
++            let mut coefficient = numerator_series[exponent].clone();
++            for cofactor_exponent in 1..=exponent {
++                coefficient = sub(
++                    &coefficient,
++                    &mul(
++                        &cofactor[cofactor_exponent],
++                        &quotient[exponent - cofactor_exponent],
++                    ),
++                );
++            }
++            quotient.push(&coefficient / &cofactor[0]);
++        }
++        result.extend(quotient);
++    }
++    result
++}
++
++fn main() {
++    println!("poles,multiplicity,native_factored_ms,canonical_recurrence_ms,ratio");
++    for multiplicity in [1usize, 3, 6] {
++        for pole_count in [2usize, 3, 4] {
++            let names = ["x", "a", "b", "c", "d"];
++            let names = &names[..=pole_count];
++            let variables = Arc::new(
++                names
++                    .iter()
++                    .map(|name| Symbol::parse(name, "factored_pf_example").unwrap().into())
++                    .collect::<Vec<PolyVariable>>(),
++            );
++            let poly = |text: &str| {
++                Atom::parse(text, "factored_pf_example", ParseSettings::default())
++                    .unwrap()
++                    .to_polynomial::<_, u16>(&Z, Some(variables.clone()))
++            };
++            let input = NativeFactored::from_num_den(
++                poly("x+a"),
++                names[1..]
++                    .iter()
++                    .map(|name| (poly(&format!("x-{name}")), multiplicity))
++                    .collect(),
++                &Z,
++                false,
++            );
++            let reference = canonical_recurrence(&input);
++            let result = input.apart_factored_denominators(0);
++            assert_eq!(
++                result
++                    .iter()
++                    .map(|(coefficient, _, _)| materialize(coefficient))
++                    .collect::<Vec<_>>(),
++                reference
++            );
++            let candidate = || {
++                let result = black_box(&input).apart_factored_denominators(0);
++                let materialized = result
++                    .iter()
++                    .map(|(coefficient, _, _)| materialize(coefficient))
++                    .collect::<Vec<_>>();
++                black_box(materialized);
++            };
++            let baseline = || {
++                black_box(canonical_recurrence(black_box(&input)));
++            };
++            let repetitions = if multiplicity == 1 {
++                256
++            } else if multiplicity == 3 {
++                8
++            } else {
++                1
++            };
++            let mut candidate_samples = vec![];
++            let mut baseline_samples = vec![];
++            for pair in 0..5 {
++                let mut measure = |is_candidate| {
++                    let start = Instant::now();
++                    for _ in 0..repetitions {
++                        if is_candidate {
++                            candidate();
++                        } else {
++                            baseline();
++                        }
++                    }
++                    let time = start.elapsed().as_secs_f64() * 1000. / repetitions as f64;
++                    if is_candidate {
++                        candidate_samples.push(time);
++                    } else {
++                        baseline_samples.push(time);
++                    }
++                };
++                measure(pair % 2 == 0);
++                measure(pair % 2 != 0);
++            }
++            candidate_samples.sort_by(f64::total_cmp);
++            baseline_samples.sort_by(f64::total_cmp);
++            println!(
++                "{pole_count},{multiplicity},{:.6},{:.6},{:.4}",
++                candidate_samples[2],
++                baseline_samples[2],
++                candidate_samples[2] / baseline_samples[2]
++            );
++        }
++    }
++}
+diff --git a/examples/mre_factored_scalar.rs b/examples/mre_factored_scalar.rs
+new file mode 100644
+index 0000000..6e321aa
+--- /dev/null
++++ b/examples/mre_factored_scalar.rs
+@@ -0,0 +1,15 @@
++//! Scalar-only factored Q-to-Z construction must not factor a zero-variable polynomial.
++use symbolica::domains::factorized_rational_polynomial::FromNumeratorAndFactorizedDenominator;
++use symbolica::prelude::*;
++
++fn main() {
++    println!("Constructing factored rational 1/2, with no variables or supplied denominators");
++    let numerator = parse!("1/2").to_polynomial::<_, u16>(&Q, None);
++    let value = FactorizedRationalPolynomial::from_num_den(numerator, vec![], &Z, true);
++    assert_eq!(value.numerator.nvars(), 0);
++    assert!(value.numerator.is_one());
++    assert!(value.denominators.is_empty());
++    assert_eq!(value.numer_coeff, Integer::from(1));
++    assert_eq!(value.denom_coeff, Integer::from(2));
++    println!("PASS: exact scalar value 1/2");
++}
+diff --git a/examples/rational_polynomial_exact_division.rs b/examples/rational_polynomial_exact_division.rs
+new file mode 100644
+index 0000000..2133877
+--- /dev/null
++++ b/examples/rational_polynomial_exact_division.rs
+@@ -0,0 +1,138 @@
++//! Compare coefficient-domain exact division with generic Q term division.
++//!
++//! Run with `cargo run --release --example rational_polynomial_exact_division`.
++//! Input construction and equality verification are excluded from timings.
++
++use std::hint::black_box;
++use std::sync::Arc;
++use std::time::Instant;
++use symbolica::domains::rational::RationalField;
++use symbolica::prelude::*;
++
++type Polynomial = MultivariatePolynomial<RationalField, u16>;
++
++fn coefficient(index: usize, bits: u64, fractions: bool) -> Rational {
++    let magnitude =
++        Integer::from(2).pow(bits - 1) + Integer::from(((index * 17 + 5) % 1024) as i64);
++    let primes = [2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31];
++    let denominator = if fractions {
++        primes[index % primes.len()]
++    } else {
++        1
++    };
++    Rational::from((magnitude, Integer::from(denominator)))
++}
++
++fn variables(count: usize) -> Arc<Vec<PolyVariable>> {
++    Arc::new(
++        (0..count)
++            .map(|i| {
++                PolyVariable::Symbol(
++                    Symbol::parse(&format!("v{i}"), "exact_division_probe").unwrap(),
++                )
++            })
++            .collect(),
++    )
++}
++
++fn dense(degree: u16, seed: usize, bits: u64, fractions: bool) -> Polynomial {
++    let mut polynomial = Polynomial::new(&Q, None, variables(3));
++    let mut index = seed;
++    for x in 0..=degree {
++        for y in 0..=degree - x {
++            for z in 0..=degree - x - y {
++                polynomial.append_monomial(coefficient(index, bits, fractions), &[x, y, z]);
++                index += 1;
++            }
++        }
++    }
++    polynomial
++}
++
++fn sparse(degree: u16, seed: usize, bits: u64, fractions: bool) -> Polynomial {
++    let mut polynomial = Polynomial::new(&Q, None, variables(8));
++    for i in 0..8 {
++        let mut exponents = vec![0; 8];
++        exponents[i] = degree;
++        polynomial.append_monomial(coefficient(seed + i, bits, fractions), &exponents);
++    }
++    polynomial
++}
++
++fn main() {
++    println!(
++        "shape,bits,fractions,dividend_terms,divisor_terms,generic_ns,candidate_ns,candidate_over_generic"
++    );
++    for bits in [12, 63, 127] {
++        for fractions in [false, true] {
++            for (label, divisor, quotient) in [
++                (
++                    "tiny",
++                    dense(1, 1, bits, fractions),
++                    dense(1, 9, bits, fractions),
++                ),
++                (
++                    "sparse8_d128",
++                    sparse(128, 1, bits, fractions),
++                    sparse(127, 9, bits, fractions),
++                ),
++                (
++                    "dense3_d4",
++                    dense(4, 1, bits, fractions),
++                    dense(3, 9, bits, fractions),
++                ),
++                (
++                    "nondividing_dense3_d4",
++                    dense(4, 1, bits, fractions),
++                    dense(3, 9, bits, fractions),
++                ),
++                (
++                    "dense3_d10",
++                    dense(10, 1, bits, fractions),
++                    dense(9, 9, bits, fractions),
++                ),
++            ] {
++                let mut dividend = &divisor * &quotient;
++                let expected = if label.starts_with("nondividing") {
++                    dividend = &dividend + &dividend.one();
++                    None
++                } else {
++                    Some(quotient)
++                };
++                assert_eq!(dividend.try_div(&divisor), expected);
++                assert_eq!(dividend.try_div_exact(&divisor), expected);
++                let loops = if label == "tiny" { 1024 } else { 1 };
++                let mut generic = vec![];
++                let mut candidate = vec![];
++                for pair in 0..5 {
++                    for candidate_first in [pair % 2 == 0, pair % 2 != 0] {
++                        let start = Instant::now();
++                        for _ in 0..loops {
++                            black_box(if candidate_first {
++                                black_box(&dividend).try_div_exact(black_box(&divisor))
++                            } else {
++                                black_box(&dividend).try_div(black_box(&divisor))
++                            });
++                        }
++                        let elapsed = start.elapsed().as_nanos() / loops;
++                        if candidate_first {
++                            candidate.push(elapsed);
++                        } else {
++                            generic.push(elapsed);
++                        }
++                    }
++                }
++                generic.sort_unstable();
++                candidate.sort_unstable();
++                let g = generic[2];
++                let c = candidate[2];
++                println!(
++                    "{label},{bits},{fractions},{},{},{g},{c},{}",
++                    dividend.nterms(),
++                    divisor.nterms(),
++                    c as f64 / g as f64
++                );
++            }
++        }
++    }
++}
+diff --git a/examples/rational_polynomial_shapes.rs b/examples/rational_polynomial_shapes.rs
+new file mode 100644
+index 0000000..2fc8928
+--- /dev/null
++++ b/examples/rational_polynomial_shapes.rs
+@@ -0,0 +1,178 @@
++//! Deterministic rational/integer polynomial multiplication and exact-division benchmark.
++//! See benches/rational_polynomial_shapes.md for the matching FLINT oracle and protocol.
++use std::{hint::black_box, sync::Arc, time::Instant};
++use symbolica::prelude::*;
++
++type P = MultivariatePolynomial<IntegerRing, u16>;
++fn polynomial(vars: Arc<Vec<PolyVariable>>, shape: &str, bits: u32, variant: usize) -> P {
++    let mut output = MultivariatePolynomial::new(&Z, None, vars.clone());
++    let mut index = 0;
++    let mut append = |powers: &[u16]| {
++        let value = (Integer::from(((index * 17 + variant * 13) % 23 + 1) as i64)
++            << bits.saturating_sub(5))
++            + Integer::from((index * 3 + variant * 5 + 1) as i64);
++        if shape == "sparse8_div128" && variant == 0 {
++            // Multiplication by one monomial preserves every product collision.
++            let mut shifted = powers.to_vec();
++            shifted[0] += 1;
++            output.append_monomial(value, &shifted);
++        } else {
++            output.append_monomial(value, powers);
++        }
++        index += 1;
++    };
++    if shape.starts_with("sparse") {
++        // The boundary cases have the same support up to one monomial shift,
++        // giving maximum dividend degrees 127 versus 128 with equal collisions.
++        let high_degree = match shape {
++            "sparse8_div127" | "sparse8_div128" => {
++                if variant == 0 {
++                    64
++                } else {
++                    63
++                }
++            }
++            _ => 128 - variant as u16,
++        };
++        append(&vec![0; 8]);
++        for variable in 0..8 {
++            for degree in [1, high_degree] {
++                let mut powers = vec![0; 8];
++                powers[variable] = degree;
++                append(&powers);
++            }
++        }
++    } else {
++        let degree = if shape == "dense3_d12" { 12 } else { 20 } - variant as u16;
++        for x in 0..=degree {
++            for y in 0..=degree - x {
++                for z in 0..=degree - x - y {
++                    append(&[x, y, z]);
++                }
++            }
++        }
++    }
++    output
++}
++
++fn main() {
++    let rounds: usize = std::env::args()
++        .nth(1)
++        .unwrap_or_else(|| "8".into())
++        .parse()
++        .unwrap();
++    let directory = std::env::args().nth(2).unwrap();
++    std::fs::create_dir_all(&directory).unwrap();
++    let variables: Vec<PolyVariable> = [
++        symbol!("x"),
++        symbol!("y"),
++        symbol!("z"),
++        symbol!("a"),
++        symbol!("b"),
++        symbol!("c"),
++        symbol!("d"),
++        symbol!("e"),
++    ]
++    .into_iter()
++    .map(Into::into)
++    .collect();
++    println!(
++        "shape,bits,rational,operation,domain,nvars,left_terms,right_terms,output_terms,rounds,elapsed_ns"
++    );
++    for shape in [
++        "sparse8_d128",
++        "dense3_d12",
++        "dense3_d20",
++        "sparse8_div127",
++        "sparse8_div128",
++    ] {
++        if std::env::args()
++            .nth(3)
++            .is_some_and(|filter| filter != shape)
++        {
++            continue;
++        }
++        for bits in [12, 63, 127] {
++            if std::env::args()
++                .nth(4)
++                .is_some_and(|filter| filter != bits.to_string())
++            {
++                continue;
++            }
++            for rational in [false, true] {
++                let nvars = if shape.starts_with("sparse") { 8 } else { 3 };
++                let vars = Arc::new(variables[..nvars].to_vec());
++                let source = [
++                    polynomial(vars.clone(), shape, bits, 0),
++                    polynomial(vars.clone(), shape, bits, 1),
++                ];
++                let mut q = Vec::new();
++                for p in source {
++                    let mut qp = MultivariatePolynomial::new(&Q, None, vars.clone());
++                    for (i, (c, e)) in p.coefficients.iter().zip(p.exponents_iter()).enumerate() {
++                        let denominator = if rational { [1, 3, 5, 7, 11][i % 5] } else { 1 };
++                        qp.append_monomial(
++                            Q.to_element(c.clone(), Integer::from(denominator), true),
++                            e,
++                        );
++                    }
++                    q.push(qp);
++                }
++                let scale = Integer::from(if rational { 1155 } else { 1 });
++                let z: Vec<P> = q
++                    .iter()
++                    .map(|p| p.map_coeff(|c| c.numerator_ref() * (&scale / c.denominator_ref()), Z))
++                    .collect();
++                let zp = &z[0] * &z[1];
++                let qp = &q[0] * &q[1];
++                assert_eq!(
++                    qp,
++                    zp.map_coeff(|c| Q.to_element(c.clone(), &scale * &scale, true), Q)
++                );
++                assert_eq!(qp.try_div_exact(&q[0]).unwrap(), q[1]);
++                assert_eq!(zp.try_div_exact(&z[0]).unwrap(), z[1]);
++                let name = format!("{shape}-b{bits}-q{rational}");
++                for (suffix, value) in [
++                    ("left", q[0].to_string()),
++                    ("right", q[1].to_string()),
++                    ("product", qp.to_string()),
++                ] {
++                    std::fs::write(format!("{directory}/{name}.{suffix}"), value).unwrap();
++                }
++                for operation in ["multiply", "exact_division"] {
++                    for domain in ["Q", "Z"] {
++                        if std::env::args()
++                            .nth(5)
++                            .is_some_and(|filter| filter != domain)
++                        {
++                            continue;
++                        }
++                        let start = Instant::now();
++                        for _ in 0..rounds {
++                            if domain == "Q" {
++                                black_box(if operation == "multiply" {
++                                    black_box(&q[0]) * black_box(&q[1])
++                                } else {
++                                    black_box(&qp).try_div_exact(black_box(&q[0])).unwrap()
++                                });
++                            } else {
++                                black_box(if operation == "multiply" {
++                                    black_box(&z[0]) * black_box(&z[1])
++                                } else {
++                                    black_box(&zp).try_div_exact(black_box(&z[0])).unwrap()
++                                });
++                            }
++                        }
++                        println!(
++                            "{shape},{bits},{rational},{operation},{domain},{nvars},{},{},{},{rounds},{}",
++                            q[0].nterms(),
++                            q[1].nterms(),
++                            qp.nterms(),
++                            start.elapsed().as_nanos()
++                        );
++                    }
++                }
++            }
++        }
++    }
++}
+diff --git a/lib/numerica/examples/fraction_polynomial_kernels.rs b/lib/numerica/examples/fraction_polynomial_kernels.rs
+new file mode 100644
+index 0000000..976fc65
+--- /dev/null
++++ b/lib/numerica/examples/fraction_polynomial_kernels.rs
+@@ -0,0 +1,110 @@
++//! Deterministic bulk-fraction-kernel benchmark with generic arithmetic as an exact oracle.
++//! Includes dense, collision-free sparse, tiny, and denominator-variety fallback controls.
++use numerica::{
++    domains::{
++        Ring, RingOps,
++        integer::Integer,
++        rational::{Q, Rational},
++    },
++    kernels::DensePolynomialMulRequest,
++};
++use std::{hint::black_box, time::Instant};
++
++fn naive(
++    left: &[Rational],
++    li: &[u32],
++    right: &[Rational],
++    ri: &[u32],
++    length: usize,
++) -> Vec<(u32, Rational)> {
++    let mut output = vec![Rational::zero(); length];
++    for (a, &i) in left.iter().zip(li) {
++        for (b, &j) in right.iter().zip(ri) {
++            Q.add_mul_assign(&mut output[(i + j) as usize], a, b);
++        }
++    }
++    output
++        .into_iter()
++        .enumerate()
++        .filter(|(_, c)| !c.is_zero())
++        .map(|(i, c)| (i as u32, c))
++        .collect()
++}
++
++fn main() {
++    let rounds: usize = std::env::args()
++        .nth(1)
++        .unwrap_or_else(|| "5".into())
++        .parse()
++        .unwrap();
++    println!("shape,bits,denominators,method,rounds,elapsed_ns");
++    for shape in ["dense3_d12", "sparse_unique", "tiny"] {
++        let (li, ri, length): (Vec<u32>, Vec<u32>, usize) = if shape == "dense3_d12" {
++            let indices = |degree| {
++                let mut v = vec![];
++                for x in 0..=degree {
++                    for y in 0..=degree - x {
++                        for z in 0..=degree - x - y {
++                            v.push(x * 24 * 24 + y * 24 + z);
++                        }
++                    }
++                }
++                v
++            };
++            (indices(12), indices(11), 24 * 24 * 24)
++        } else if shape == "sparse_unique" {
++            ((0..32).map(|i| i * 32).collect(), (0..32).collect(), 1024)
++        } else {
++            (vec![0, 1, 2], vec![0, 1], 4)
++        };
++        for bits in [12u32, 63, 127] {
++            for denominators in ["one", "few", "many"] {
++                let coefficients = |len: usize| {
++                    (0..len)
++                        .map(|i| {
++                            let value = (Integer::from((i % 19 + 1) as i64) << bits - 5)
++                                + Integer::from((i % 127 + 1) as i64);
++                            let denominator = match denominators {
++                                "one" => 1,
++                                "few" => [1, 3, 5, 7, 11][i % 5],
++                                _ => 101 + 2 * i,
++                            };
++                            Q.to_element(value, Integer::from(denominator), true)
++                        })
++                        .collect::<Vec<_>>()
++                };
++                let left = coefficients(li.len());
++                let right = coefficients(ri.len());
++                let expected = naive(&left, &li, &right, &ri, length);
++                let call = || {
++                    Q.kernels().polynomial().and_then(|kernel| {
++                        kernel.try_dense_mul(DensePolynomialMulRequest {
++                            output_len: length,
++                            left_coefficients: &left,
++                            left_indices: &li,
++                            right_coefficients: &right,
++                            right_indices: &ri,
++                        })
++                    })
++                };
++                if let Some(output) = call() {
++                    assert_eq!(output, expected);
++                }
++                for method in ["generic", "bulk"] {
++                    let start = Instant::now();
++                    for _ in 0..rounds {
++                        black_box(if method == "generic" {
++                            naive(&left, &li, &right, &ri, length)
++                        } else {
++                            call().unwrap_or_else(|| naive(&left, &li, &right, &ri, length))
++                        });
++                    }
++                    println!(
++                        "{shape},{bits},{denominators},{method},{rounds},{}",
++                        start.elapsed().as_nanos()
++                    );
++                }
++            }
++        }
++    }
++}
+diff --git a/lib/numerica/examples/rational_fastpaths.rs b/lib/numerica/examples/rational_fastpaths.rs
+new file mode 100644
+index 0000000..2b38cdd
+--- /dev/null
++++ b/lib/numerica/examples/rational_fastpaths.rs
+@@ -0,0 +1,83 @@
++//! Reproducible scalar and coefficient-convolution benchmarks for fraction arithmetic.
++//!
++//! Run the same source with baseline and candidate Numerica revisions. Timings
++//! exclude deterministic input construction and verify round-trip cancellation.
++use std::{hint::black_box, time::Instant};
++
++use numerica::domains::{
++    RingOps,
++    integer::Integer,
++    rational::{Q, Rational},
++};
++
++fn coefficients(bits: u32, rational: bool) -> Vec<Rational> {
++    (0..48)
++        .map(|index| {
++            let small = Integer::from((index * 17 % 113) as i64 - 56);
++            let numerator = if bits <= 12 {
++                small
++            } else {
++                (small << (bits - 7)) + Integer::from((index * 23 % 127) as i64)
++            };
++            let denominator = if rational { 3 + 2 * (index % 7) } else { 1 };
++            Q.to_element(numerator, Integer::from(denominator), true)
++        })
++        .collect()
++}
++
++fn main() {
++    let rounds: usize = std::env::args()
++        .nth(1)
++        .unwrap_or_else(|| "2000".into())
++        .parse()
++        .unwrap();
++    println!("bits,rational,operation,rounds,elapsed_ns");
++    for bits in [12, 63, 127, 512] {
++        for rational in [false, true] {
++            let left = coefficients(bits, rational);
++            let mut right = left.clone();
++            right.reverse();
++            for operation in ["add", "multiply", "fused_round_trip", "convolution"] {
++                let operation_rounds = if operation == "convolution" {
++                    (rounds / 48).max(1)
++                } else {
++                    rounds
++                };
++                let start = Instant::now();
++                for _ in 0..operation_rounds {
++                    if operation == "convolution" {
++                        let mut output = vec![Rational::zero(); 95];
++                        for (i, a) in left.iter().enumerate() {
++                            for (j, b) in right.iter().enumerate() {
++                                Q.add_mul_assign(&mut output[i + j], a, b);
++                            }
++                        }
++                        black_box(output);
++                    } else {
++                        for (a, b) in left.iter().zip(&right) {
++                            match operation {
++                                "add" => {
++                                    black_box(Q.add(black_box(a), black_box(b)));
++                                }
++                                "multiply" => {
++                                    black_box(Q.mul(black_box(a), black_box(b)));
++                                }
++                                "fused_round_trip" => {
++                                    let mut result = a.clone();
++                                    Q.add_mul_assign(&mut result, black_box(a), black_box(b));
++                                    Q.sub_mul_assign(&mut result, black_box(a), black_box(b));
++                                    assert_eq!(black_box(result), *a);
++                                }
++                                _ => unreachable!(),
++                            }
++                        }
++                    }
++                }
++                println!(
++                    "{bits},{rational},{operation},{operation_rounds},{}",
++                    start.elapsed().as_nanos()
++                );
++            }
++        }
++    }
++}
+diff --git a/lib/numerica/src/domains/integer.rs b/lib/numerica/src/domains/integer.rs
+index d4351fe..c6ff953 100644
+--- a/lib/numerica/src/domains/integer.rs
++++ b/lib/numerica/src/domains/integer.rs
+@@ -4044,27 +4044,19 @@ pub fn extended_gcd_i128(mut a: i128, mut b: i128) -> (u128, i128, i128) {
+ }
+ 
+ /// Compute the signed GCD of two `i64` numbers.
+-pub fn gcd_signed(mut a: i64, mut b: i64) -> u64 {
+-    let mut c;
+-    while a != 0 {
+-        c = a;
+-        // only wraps when i64::MIN % -1 and that still yields 0
+-        a = b.wrapping_rem(a);
+-        b = c;
+-    }
+-    b.unsigned_abs()
++pub fn gcd_signed(a: i64, b: i64) -> u64 {
++    gcd_unsigned(a.unsigned_abs(), b.unsigned_abs())
+ }
+ 
+ /// Compute the signed GCD of two `i128` numbers.
+-pub fn gcd_signed_i128(mut a: i128, mut b: i128) -> u128 {
+-    let mut c;
++pub fn gcd_signed_i128(a: i128, b: i128) -> u128 {
++    // Computing on magnitudes also handles MIN without a signed overflow case.
++    // In particular, no iteration needs signed remainder or its overflow check.
++    let (mut a, mut b) = (a.unsigned_abs(), b.unsigned_abs());
+     while a != 0 {
+-        c = a;
+-        // only wraps when i128::MIN % -1 and that still yields 0
+-        a = b.wrapping_rem(a);
+-        b = c;
++        (a, b) = (b % a, a);
+     }
+-    b.unsigned_abs()
++    b
+ }
+ 
+ #[cfg(test)]
+@@ -4075,6 +4067,54 @@ mod test {
+         str::FromStr,
+     };
+ 
++    #[test]
++    fn signed_gcd_uses_unsigned_magnitudes() {
++        fn reference(mut a: i128, mut b: i128) -> u128 {
++            while a != 0 {
++                (a, b) = (b.wrapping_rem(a), a);
++            }
++            b.unsigned_abs()
++        }
++        let boundary = [
++            i128::MIN,
++            i128::MIN + 1,
++            i64::MIN as i128,
++            -2,
++            -1,
++            0,
++            1,
++            2,
++            i64::MAX as i128,
++            i128::MAX - 1,
++            i128::MAX,
++        ];
++        for &a in &boundary {
++            for &b in &boundary {
++                assert_eq!(super::gcd_signed_i128(a, b), reference(a, b));
++                assert_eq!(
++                    super::gcd_signed(a as i64, b as i64) as u128,
++                    reference(a as i64 as i128, b as i64 as i128)
++                );
++            }
++        }
++        let mut seed = 1u128;
++        for _ in 0..10_000 {
++            seed = seed
++                .wrapping_mul(6364136223846793005)
++                .wrapping_add(1442695040888963407);
++            let a = seed as i128;
++            seed = seed
++                .wrapping_mul(6364136223846793005)
++                .wrapping_add(1442695040888963407);
++            let b = seed as i128;
++            assert_eq!(super::gcd_signed_i128(a, b), reference(a, b));
++            assert_eq!(
++                super::gcd_signed(a as i64, b as i64) as u128,
++                reference(a as i64 as i128, b as i64 as i128)
++            );
++        }
++    }
++
+     #[cfg(feature = "float-mpfr")]
+     use crate::domains::float::{Float, Real};
+     use crate::domains::{
+diff --git a/lib/numerica/src/domains/integer/polynomial_kernels.rs b/lib/numerica/src/domains/integer/polynomial_kernels.rs
+index cf4ed0d..e7ec2e4 100644
+--- a/lib/numerica/src/domains/integer/polynomial_kernels.rs
++++ b/lib/numerica/src/domains/integer/polynomial_kernels.rs
+@@ -1639,10 +1639,11 @@ impl<'a> DenseIntegerMul<'a> {
+     #[cfg(feature = "integer-gmp")]
+     /// Multiply into a dense array of reusable GMP integer accumulators.
+     ///
+-    /// This strategy requires at least one [`Integer::Large`] input coefficient. It dispatches
+-    /// each coefficient pair by its tagged representation and uses fused GMP add-products for
+-    /// large operands, avoiding a separately allocated temporary product. It returns `None` when
+-    /// the product is too small or the dense output array would be disproportionately large.
++    /// This strategy accepts double-width and GMP-backed input coefficients. Double-width
++    /// coefficients are promoted once before the convolution, so overflowing products do not
++    /// allocate a GMP operand for every coefficient pair. Smaller bounded accumulators and
++    /// Kronecker multiplication have already had their opportunity in [`Self::run`]. It returns
++    /// `None` when the product is too small or the dense output array is disproportionately large.
+     fn try_large_array(&self) -> Option<Vec<(u32, Integer)>> {
+         let Self {
+             output_len,
+@@ -1654,7 +1655,7 @@ impl<'a> DenseIntegerMul<'a> {
+         if !left_coefficients
+             .iter()
+             .chain(right_coefficients)
+-            .any(|coefficient| matches!(coefficient, Integer::Large(_)))
++            .any(|coefficient| matches!(coefficient, Integer::Double(_) | Integer::Large(_)))
+         {
+             return None;
+         }
+@@ -1669,6 +1670,27 @@ impl<'a> DenseIntegerMul<'a> {
+             return None;
+         }
+ 
++        fn promote_double(coefficients: &[Integer]) -> std::borrow::Cow<'_, [Integer]> {
++            if !coefficients.iter().any(|c| matches!(c, Integer::Double(_))) {
++                return std::borrow::Cow::Borrowed(coefficients);
++            }
++            std::borrow::Cow::Owned(
++                coefficients
++                    .iter()
++                    .map(|coefficient| match coefficient {
++                        Integer::Double(value) => {
++                            Integer::Large(MultiPrecisionInteger::from(value.get()))
++                        }
++                        value => value.clone(),
++                    })
++                    .collect(),
++            )
++        }
++        let left_storage = promote_double(left_coefficients);
++        let right_storage = promote_double(right_coefficients);
++        let left_coefficients = left_storage.as_ref();
++        let right_coefficients = right_storage.as_ref();
++
+         #[inline(always)]
+         fn add_product(accumulator: &mut MultiPrecisionInteger, left: &Integer, right: &Integer) {
+             match (left, right) {
+@@ -2914,6 +2936,60 @@ fn total_degree_limb_workspace_is_bounded(
+ mod tests {
+     use super::*;
+ 
++    #[cfg(feature = "integer-gmp")]
++    #[test]
++    fn dense_gmp_accumulation_promotes_double_inputs_once() {
++        let indices: Vec<u32> = (0..8).collect();
++        let initial: Vec<Integer> = [
++            i128::MIN,
++            i128::MAX,
++            1i128 << 80,
++            -(1i128 << 81),
++            17,
++            -19,
++            0,
++            42,
++        ]
++        .into_iter()
++        .map(Integer::from)
++        .collect();
++        assert!(initial.iter().any(|c| matches!(c, Integer::Double(_))));
++        assert!(!initial.iter().any(|c| matches!(c, Integer::Large(_))));
++        for large_side in 0..3 {
++            let mut left = initial.clone();
++            let mut right: Vec<_> = initial.iter().rev().cloned().collect();
++            if large_side == 1 {
++                left[2] = Integer::one() << 256u32;
++            } else if large_side == 2 {
++                right[2] = -(Integer::one() << 256u32);
++            }
++            let mut expected = vec![Integer::zero(); 15];
++            for (i, a) in left.iter().enumerate() {
++                for (j, b) in right.iter().enumerate() {
++                    expected[i + j] += a * b;
++                }
++            }
++            let expected: Vec<_> = expected
++                .into_iter()
++                .enumerate()
++                .filter(|(_, coefficient)| !coefficient.is_zero())
++                .map(|(index, coefficient)| (index as u32, coefficient))
++                .collect();
++            let operation = DenseIntegerMul::new(DensePolynomialMulRequest {
++                output_len: 15,
++                left_coefficients: &left,
++                left_indices: &indices,
++                right_coefficients: &right,
++                right_indices: &indices,
++            })
++            .unwrap();
++            assert_eq!(operation.try_large_array(), Some(expected.clone()));
++            assert_eq!(operation.run(), Some(expected));
++            assert_eq!(operation.left_coefficients, left);
++            assert_eq!(operation.right_coefficients, right);
++        }
++    }
++
+     #[cfg(feature = "integer-gmp")]
+     #[test]
+     fn fixed_limb_absolute_statistics_match_integer_arithmetic() {
+diff --git a/lib/numerica/src/domains/rational.rs b/lib/numerica/src/domains/rational.rs
+index 7466890..8d29a48 100644
+--- a/lib/numerica/src/domains/rational.rs
++++ b/lib/numerica/src/domains/rational.rs
+@@ -1,5 +1,7 @@
+ //! Fraction fields and rational numbers.
+ 
++mod polynomial_kernels;
++
+ use std::{
+     borrow::Cow,
+     fmt::{Display, Error, Formatter},
+@@ -216,6 +218,10 @@ impl<R: EuclideanDomain + FractionNormalization> RingOps<<FractionField<R> as Se
+     fn add(&self, a: Self::Element, b: Self::Element) -> Self::Element {
+         let r = &self.ring;
+ 
++        if r.is_one(&a.denominator) && r.is_one(&b.denominator) {
++            return self.to_element_numerator(r.add(a.numerator, b.numerator));
++        }
++
+         if a.denominator == b.denominator {
+             let num = r.add(&a.numerator, &b.numerator);
+             let g = r.gcd(&num, &a.denominator);
+@@ -270,6 +276,9 @@ impl<R: EuclideanDomain + FractionNormalization> RingOps<<FractionField<R> as Se
+ 
+     fn mul(&self, a: Self::Element, b: Self::Element) -> Self::Element {
+         let r = &self.ring;
++        if r.is_one(&a.denominator) && r.is_one(&b.denominator) {
++            return self.to_element_numerator(r.mul(a.numerator, b.numerator));
++        }
+         let gcd1 = r.gcd(&a.numerator, &b.denominator);
+         let gcd2 = r.gcd(&a.denominator, &b.numerator);
+ 
+@@ -318,11 +327,11 @@ impl<R: EuclideanDomain + FractionNormalization> RingOps<<FractionField<R> as Se
+     }
+ 
+     fn add_mul_assign(&self, a: &mut Self::Element, b: Self::Element, c: Self::Element) {
+-        self.add_assign(a, &self.mul(b, c));
++        self.add_mul_assign(a, &b, &c);
+     }
+ 
+     fn sub_mul_assign(&self, a: &mut Self::Element, b: Self::Element, c: Self::Element) {
+-        self.sub_assign(a, &self.mul(b, c));
++        self.sub_mul_assign(a, &b, &c);
+     }
+ 
+     fn neg(&self, a: Self::Element) -> Self::Element {
+@@ -339,6 +348,10 @@ impl<R: EuclideanDomain + FractionNormalization> RingOps<&<FractionField<R> as S
+     fn add(&self, a: &Self::Element, b: &Self::Element) -> Self::Element {
+         let r = &self.ring;
+ 
++        if r.is_one(&a.denominator) && r.is_one(&b.denominator) {
++            return self.to_element_numerator(r.add(&a.numerator, &b.numerator));
++        }
++
+         if a.denominator == b.denominator {
+             let num = r.add(&a.numerator, &b.numerator);
+             let g = r.gcd(&num, &a.denominator);
+@@ -394,6 +407,9 @@ impl<R: EuclideanDomain + FractionNormalization> RingOps<&<FractionField<R> as S
+ 
+     fn mul(&self, a: &Self::Element, b: &Self::Element) -> Self::Element {
+         let r = &self.ring;
++        if r.is_one(&a.denominator) && r.is_one(&b.denominator) {
++            return self.to_element_numerator(r.mul(&a.numerator, &b.numerator));
++        }
+         let gcd1 = r.gcd(&a.numerator, &b.denominator);
+         let gcd2 = r.gcd(&a.denominator, &b.numerator);
+ 
+@@ -429,11 +445,19 @@ impl<R: EuclideanDomain + FractionNormalization> RingOps<&<FractionField<R> as S
+     }
+ 
+     fn add_assign(&self, a: &mut Self::Element, b: &Self::Element) {
++        if self.ring.is_one(&a.denominator) && self.ring.is_one(&b.denominator) {
++            self.ring.add_assign(&mut a.numerator, &b.numerator);
++            return;
++        }
+         // TODO: optimize
+         *a = self.add(&*a, b);
+     }
+ 
+     fn sub_assign(&self, a: &mut Self::Element, b: &Self::Element) {
++        if self.ring.is_one(&a.denominator) && self.ring.is_one(&b.denominator) {
++            self.ring.sub_assign(&mut a.numerator, &b.numerator);
++            return;
++        }
+         *a = self.sub(&*a, b);
+     }
+ 
+@@ -442,10 +466,26 @@ impl<R: EuclideanDomain + FractionNormalization> RingOps<&<FractionField<R> as S
+     }
+ 
+     fn add_mul_assign(&self, a: &mut Self::Element, b: &Self::Element, c: &Self::Element) {
++        if self.ring.is_one(&a.denominator)
++            && self.ring.is_one(&b.denominator)
++            && self.ring.is_one(&c.denominator)
++        {
++            self.ring
++                .add_mul_assign(&mut a.numerator, &b.numerator, &c.numerator);
++            return;
++        }
+         self.add_assign(a, &self.mul(b, c));
+     }
+ 
+     fn sub_mul_assign(&self, a: &mut Self::Element, b: &Self::Element, c: &Self::Element) {
++        if self.ring.is_one(&a.denominator)
++            && self.ring.is_one(&b.denominator)
++            && self.ring.is_one(&c.denominator)
++        {
++            self.ring
++                .sub_mul_assign(&mut a.numerator, &b.numerator, &c.numerator);
++            return;
++        }
+         self.sub_assign(a, &self.mul(b, c));
+     }
+ 
+@@ -458,6 +498,19 @@ impl<R: EuclideanDomain + FractionNormalization> RingOps<&<FractionField<R> as S
+ }
+ 
+ impl<R: EuclideanDomain + FractionNormalization> Ring for FractionField<R> {
++    fn kernels(&self) -> crate::kernels::RingKernels<'_, Self::Element> {
++        let underlying = self.ring.kernels();
++        if underlying.polynomial().is_none() {
++            return crate::kernels::RingKernels::empty();
++        }
++        let kernels = crate::kernels::RingKernels::empty().with_polynomial(self);
++        if let Some(density) = underlying.preferred_total_degree_mul_density() {
++            kernels.with_preferred_total_degree_mul_density(density)
++        } else {
++            kernels
++        }
++    }
++
+     fn zero(&self) -> Self::Element {
+         Fraction {
+             numerator: self.ring.zero(),
+@@ -1478,6 +1531,57 @@ mod test {
+         assert_eq!(d, f.to_element((-97).into(), 3.into(), false));
+     }
+ 
++    #[test]
++    fn fraction_arithmetic_unit_denominator_and_fallback() {
++        let f = FractionField::new(Z);
++        let values: Vec<Rational> = (-5..=5)
++            .flat_map(|numerator| (1..=5).map(move |denominator| (numerator, denominator).into()))
++            .chain([
++                Rational::from(Integer::one() << 63u32),
++                Rational::from(-(Integer::one() << 127u32)),
++                Rational::from(Integer::one() << 512u32),
++                f.to_element(Integer::one() << 130u32, 3.into(), true),
++            ])
++            .collect();
++        for a in &values {
++            for b in &values {
++                let expected_add = f.to_element(
++                    a.numerator_ref() * b.denominator_ref()
++                        + b.numerator_ref() * a.denominator_ref(),
++                    a.denominator_ref() * b.denominator_ref(),
++                    true,
++                );
++                let expected_mul = f.to_element(
++                    a.numerator_ref() * b.numerator_ref(),
++                    a.denominator_ref() * b.denominator_ref(),
++                    true,
++                );
++                assert_eq!(f.add(a, b), expected_add);
++                assert_eq!(f.add(a.clone(), b.clone()), expected_add);
++                assert_eq!(f.mul(a, b), expected_mul);
++                assert_eq!(f.mul(a.clone(), b.clone()), expected_mul);
++                let mut sum = a.clone();
++                f.add_assign(&mut sum, b);
++                assert_eq!(sum, expected_add);
++                f.sub_assign(&mut sum, b);
++                assert_eq!(&sum, a);
++
++                for accumulator in [Rational::zero(), a.clone(), f.neg(a)] {
++                    let expected = f.add(&accumulator, &expected_mul);
++                    let mut result = accumulator.clone();
++                    f.add_mul_assign(&mut result, a, b);
++                    assert_eq!(result, expected);
++                    f.sub_mul_assign(&mut result, a, b);
++                    assert_eq!(result, accumulator);
++                    f.add_mul_assign(&mut result, a.clone(), b.clone());
++                    assert_eq!(result, expected);
++                    f.sub_mul_assign(&mut result, a.clone(), b.clone());
++                    assert_eq!(result, accumulator);
++                }
++            }
++        }
++    }
++
+     #[test]
+     fn ordered_fraction_comparison() {
+         let f = FractionField::new(Z);
+@@ -1491,6 +1595,31 @@ mod test {
+         assert_eq!(f.try_cmp(&half, &two_thirds), Ok(std::cmp::Ordering::Less));
+     }
+ 
++    #[test]
++    fn fraction_unit_denominator_over_finite_field() {
++        use crate::domains::finite_field::Zp;
++        let ring = Zp::new(17);
++        let f = FractionField::new(ring);
++        for i in 0..17 {
++            for j in 0..17 {
++                let a = f.to_element_numerator(f.ring().nth(i.into()));
++                let b = f.to_element_numerator(f.ring().nth(j.into()));
++                let product =
++                    f.to_element_numerator(f.ring().mul(a.numerator_ref(), b.numerator_ref()));
++                assert_eq!(f.mul(&a, &b), product);
++                assert_eq!(
++                    f.add(&a, &b),
++                    f.to_element_numerator(f.ring().add(a.numerator_ref(), b.numerator_ref()))
++                );
++                let mut result = a.clone();
++                f.add_mul_assign(&mut result, &a, &b);
++                assert_eq!(result, f.add(&a, &product));
++                f.sub_mul_assign(&mut result, &a, &b);
++                assert_eq!(result, a);
++            }
++        }
++    }
++
+     #[test]
+     fn rational_to_f64_with_large_components() {
+         let scale = Integer::one() << 4096u32;
+diff --git a/lib/numerica/src/domains/rational/polynomial_kernels.rs b/lib/numerica/src/domains/rational/polynomial_kernels.rs
+new file mode 100644
+index 0000000..bd52afb
+--- /dev/null
++++ b/lib/numerica/src/domains/rational/polynomial_kernels.rs
+@@ -0,0 +1,490 @@
++//! Lift fraction coefficients once per bulk operation, so their underlying
++//! domain can reuse its polynomial kernels without normalizing every product.
++
++use crate::{
++    domains::EuclideanDomain,
++    kernels::{
++        ChunkedDensePolynomialMulRequest, DensePolynomialMulRequest, PolynomialKernels,
++        TotalDegreePolynomialMulRequest,
++    },
++};
++
++use super::{Fraction, FractionField, FractionNormalization};
++
++impl<R: EuclideanDomain + FractionNormalization> FractionField<R> {
++    /// Bound setup before computing any LCM. This limits denominator variety,
++    /// not coefficient bit sizes: a single large common denominator is allowed.
++    fn polynomial_lift_is_bounded(
++        &self,
++        left: &[Fraction<R>],
++        right: &[Fraction<R>],
++        output_len: usize,
++    ) -> bool {
++        const MIN_COEFFICIENT_PRODUCTS: usize = 64;
++        const MAX_DISTINCT_DENOMINATORS: usize = 16;
++        let product_count = left.len().saturating_mul(right.len());
++        if product_count < MIN_COEFFICIENT_PRODUCTS {
++            return false;
++        }
++        let mut denominators = Vec::new();
++        for coefficient in left.iter().chain(right) {
++            if self.ring().is_one(&coefficient.denominator)
++                || denominators.contains(&&coefficient.denominator)
++            {
++                continue;
++            }
++            if denominators.len() == MAX_DISTINCT_DENOMINATORS {
++                return false;
++            }
++            denominators.push(&coefficient.denominator);
++        }
++        // With few collisions, a common denominator enlarges every coefficient
++        // even though individual output coefficients only need a few input
++        // denominators. Keep those products in the ordinary fraction domain.
++        denominators.is_empty() || product_count >= output_len.saturating_mul(4)
++    }
++
++    fn dense_fraction_layout_is_valid(
++        &self,
++        request: &DensePolynomialMulRequest<'_, Fraction<R>>,
++    ) -> bool {
++        if request.left_coefficients.len() != request.left_indices.len()
++            || request.right_coefficients.len() != request.right_indices.len()
++            || request
++                .left_indices
++                .windows(2)
++                .any(|indices| indices[0] >= indices[1])
++            || request
++                .right_indices
++                .windows(2)
++                .any(|indices| indices[0] >= indices[1])
++        {
++            return false;
++        }
++        match (request.left_indices.last(), request.right_indices.last()) {
++            (Some(&left), Some(&right)) => (left as usize)
++                .checked_add(right as usize)
++                .is_some_and(|max| max < request.output_len),
++            _ => true,
++        }
++    }
++
++    fn lift_polynomial_coefficients(
++        &self,
++        coefficients: &[Fraction<R>],
++    ) -> (Vec<R::Element>, R::Element) {
++        let ring = self.ring();
++        let mut denominator = ring.one();
++        for coefficient in coefficients {
++            if ring.is_one(&coefficient.denominator) || coefficient.denominator == denominator {
++                continue;
++            }
++            if ring.is_one(&denominator) {
++                denominator = coefficient.denominator.clone();
++            } else {
++                let gcd = ring.gcd(&denominator, &coefficient.denominator);
++                let factor = ring.quot_rem(&coefficient.denominator, &gcd).0;
++                ring.mul_assign(&mut denominator, factor);
++            }
++        }
++        let values = if ring.is_one(&denominator) {
++            coefficients.iter().map(|c| c.numerator.clone()).collect()
++        } else {
++            coefficients
++                .iter()
++                .map(|c| {
++                    if c.denominator == denominator {
++                        c.numerator.clone()
++                    } else {
++                        ring.mul(&c.numerator, &ring.quot_rem(&denominator, &c.denominator).0)
++                    }
++                })
++                .collect()
++        };
++        (values, denominator)
++    }
++
++    fn restore_polynomial_coefficients(
++        &self,
++        coefficients: Vec<(u32, R::Element)>,
++        denominator: R::Element,
++    ) -> Vec<(u32, Fraction<R>)> {
++        if self.ring().is_one(&denominator) {
++            coefficients
++                .into_iter()
++                .map(|(index, value)| (index, self.to_element_numerator(value)))
++                .collect()
++        } else {
++            coefficients
++                .into_iter()
++                .map(|(index, value)| (index, self.to_element(value, denominator.clone(), true)))
++                .collect()
++        }
++    }
++}
++
++impl<R: EuclideanDomain + FractionNormalization> PolynomialKernels<Fraction<R>>
++    for FractionField<R>
++{
++    fn try_dense_mul(
++        &self,
++        request: DensePolynomialMulRequest<'_, Fraction<R>>,
++    ) -> Option<Vec<(u32, Fraction<R>)>> {
++        let underlying = self.ring().kernels();
++        let kernel = underlying.polynomial()?;
++        if !self.dense_fraction_layout_is_valid(&request) {
++            return None;
++        }
++        if request.left_coefficients.is_empty() || request.right_coefficients.is_empty() {
++            return Some(Vec::new());
++        }
++        if !self.polynomial_lift_is_bounded(
++            request.left_coefficients,
++            request.right_coefficients,
++            request.output_len,
++        ) {
++            return None;
++        }
++        let (left, left_denominator) = self.lift_polynomial_coefficients(request.left_coefficients);
++        let (right, right_denominator) =
++            self.lift_polynomial_coefficients(request.right_coefficients);
++        let output = kernel.try_dense_mul(DensePolynomialMulRequest {
++            output_len: request.output_len,
++            left_coefficients: &left,
++            left_indices: request.left_indices,
++            right_coefficients: &right,
++            right_indices: request.right_indices,
++        })?;
++        Some(self.restore_polynomial_coefficients(
++            output,
++            self.ring().mul(left_denominator, right_denominator),
++        ))
++    }
++
++    fn try_chunked_dense_mul(
++        &self,
++        request: ChunkedDensePolynomialMulRequest<'_, Fraction<R>>,
++    ) -> Option<Vec<(u32, Fraction<R>)>> {
++        let underlying = self.ring().kernels();
++        let kernel = underlying.polynomial()?;
++        if !self.dense_fraction_layout_is_valid(&request.dense)
++            || request.inner_len == 0
++            || !request.dense.output_len.is_multiple_of(request.inner_len)
++        {
++            return None;
++        }
++        if request.dense.left_coefficients.is_empty() || request.dense.right_coefficients.is_empty()
++        {
++            return Some(Vec::new());
++        }
++        if !self.polynomial_lift_is_bounded(
++            request.dense.left_coefficients,
++            request.dense.right_coefficients,
++            request.dense.output_len,
++        ) {
++            return None;
++        }
++        let (left, left_denominator) =
++            self.lift_polynomial_coefficients(request.dense.left_coefficients);
++        let (right, right_denominator) =
++            self.lift_polynomial_coefficients(request.dense.right_coefficients);
++        let output = kernel.try_chunked_dense_mul(ChunkedDensePolynomialMulRequest {
++            dense: DensePolynomialMulRequest {
++                output_len: request.dense.output_len,
++                left_coefficients: &left,
++                left_indices: request.dense.left_indices,
++                right_coefficients: &right,
++                right_indices: request.dense.right_indices,
++            },
++            inner_len: request.inner_len,
++        })?;
++        Some(self.restore_polynomial_coefficients(
++            output,
++            self.ring().mul(left_denominator, right_denominator),
++        ))
++    }
++
++    fn try_total_degree_mul(
++        &self,
++        request: TotalDegreePolynomialMulRequest<'_, Fraction<R>>,
++    ) -> Option<Vec<(u32, Fraction<R>)>> {
++        let underlying = self.ring().kernels();
++        let kernel = underlying.polynomial()?;
++        if request.left_coefficients.len() != request.left_codes.len()
++            || request.right_coefficients.len() != request.right_codes.len()
++            || request.prefix_rank.len() != request.prefix_remaining.len()
++            || request.suffix_code_count == 0
++            || !request
++                .suffix_rank
++                .len()
++                .is_multiple_of(request.suffix_code_count)
++            || !self.polynomial_lift_is_bounded(
++                request.left_coefficients,
++                request.right_coefficients,
++                request.output_len,
++            )
++        {
++            return None;
++        }
++        let (left, left_denominator) = self.lift_polynomial_coefficients(request.left_coefficients);
++        let (right, right_denominator) =
++            self.lift_polynomial_coefficients(request.right_coefficients);
++        let output = kernel.try_total_degree_mul(TotalDegreePolynomialMulRequest {
++            output_len: request.output_len,
++            left_coefficients: &left,
++            left_codes: request.left_codes,
++            right_coefficients: &right,
++            right_codes: request.right_codes,
++            prefix_rank: request.prefix_rank,
++            prefix_remaining: request.prefix_remaining,
++            suffix_rank: request.suffix_rank,
++            suffix_code_count: request.suffix_code_count,
++        })?;
++        Some(self.restore_polynomial_coefficients(
++            output,
++            self.ring().mul(left_denominator, right_denominator),
++        ))
++    }
++
++    fn preferred_total_degree_mul_workspace_ratio(
++        &self,
++        left: &[Fraction<R>],
++        right: &[Fraction<R>],
++        output_len: usize,
++    ) -> Option<usize> {
++        let underlying = self.ring().kernels();
++        let kernel = underlying.polynomial()?;
++        if !self.polynomial_lift_is_bounded(left, right, output_len) {
++            return None;
++        }
++        let (left, _) = self.lift_polynomial_coefficients(left);
++        let (right, _) = self.lift_polynomial_coefficients(right);
++        kernel.preferred_total_degree_mul_workspace_ratio(&left, &right, output_len)
++    }
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++    use crate::domains::{
++        Ring, RingOps,
++        integer::Integer,
++        rational::{Q, Rational},
++    };
++
++    fn coefficients(count: usize, shift: u32, rational: bool) -> Vec<Rational> {
++        (0..count)
++            .map(|i| {
++                let value =
++                    Integer::from((i % 9 + 1) as i64 * if i % 3 == 0 { -1 } else { 1 }) << shift;
++                Q.to_element(
++                    value,
++                    Integer::from(if rational { [1, 2, 3, 5, 7][i % 5] } else { 1 }),
++                    true,
++                )
++            })
++            .collect()
++    }
++
++    fn oracle(
++        left: &[Rational],
++        left_indices: &[u32],
++        right: &[Rational],
++        right_indices: &[u32],
++        len: usize,
++    ) -> Vec<(u32, Rational)> {
++        let mut output = vec![Rational::zero(); len];
++        for (left, &i) in left.iter().zip(left_indices) {
++            for (right, &j) in right.iter().zip(right_indices) {
++                Q.add_mul_assign(&mut output[(i + j) as usize], left, right);
++            }
++        }
++        output
++            .into_iter()
++            .enumerate()
++            .filter(|(_, value)| !value.is_zero())
++            .map(|(i, value)| (i as u32, value))
++            .collect()
++    }
++
++    #[test]
++    fn dense_fraction_multiplication_matches_coefficient_oracle() {
++        let indices: Vec<u32> = (0..64).collect();
++        for shift in [0, 60, 120, 200] {
++            for rational in [false, true] {
++                let left = coefficients(64, shift, rational);
++                let mut right = left.clone();
++                right.reverse();
++                let expected = oracle(&left, &indices, &right, &indices, 127);
++                let actual =
++                    Q.kernels()
++                        .polynomial()
++                        .unwrap()
++                        .try_dense_mul(DensePolynomialMulRequest {
++                            output_len: 127,
++                            left_coefficients: &left,
++                            left_indices: &indices,
++                            right_coefficients: &right,
++                            right_indices: &indices,
++                        });
++                // The optional large-integer backend may decline a kernel.
++                if cfg!(feature = "integer-gmp") || shift == 0 {
++                    assert_eq!(actual, Some(expected));
++                } else if let Some(actual) = actual {
++                    assert_eq!(actual, expected);
++                }
++                let (lifted, denominator) = Q.lift_polynomial_coefficients(&left);
++                for (lifted, original) in lifted.into_iter().zip(&left) {
++                    assert_eq!(Q.to_element(lifted, denominator.clone(), true), *original);
++                }
++            }
++        }
++    }
++
++    #[test]
++    fn chunked_fraction_multiplication_preserves_cancellations() {
++        let indices: Vec<u32> = (0..16).chain(32..48).collect();
++        let left = coefficients(32, 0, true);
++        let mut right = left.clone();
++        right.reverse();
++        let expected = oracle(&left, &indices, &right, &indices, 256);
++        let kernel = Q.kernels();
++        let kernel = kernel.polynomial().unwrap();
++        assert_eq!(
++            kernel.try_chunked_dense_mul(ChunkedDensePolynomialMulRequest {
++                dense: DensePolynomialMulRequest {
++                    output_len: 256,
++                    left_coefficients: &left,
++                    left_indices: &indices,
++                    right_coefficients: &right,
++                    right_indices: &indices
++                },
++                inner_len: 32,
++            }),
++            Some(expected)
++        );
++        assert!(
++            kernel
++                .try_chunked_dense_mul(ChunkedDensePolynomialMulRequest {
++                    dense: DensePolynomialMulRequest {
++                        output_len: 256,
++                        left_coefficients: &left,
++                        left_indices: &indices,
++                        right_coefficients: &right,
++                        right_indices: &indices
++                    },
++                    inner_len: 0,
++                })
++                .is_none()
++        );
++    }
++
++    #[test]
++    fn total_degree_fraction_multiplication_and_invalid_fallback() {
++        let indices: Vec<u32> = (0..64).collect();
++        let codes: Vec<_> = (0..64).map(|index| (index, 0)).collect();
++        let rank: Vec<u32> = (0..127).collect();
++        let remaining = vec![0; 127];
++        let left = coefficients(64, 0, true);
++        let expected = oracle(&left, &indices, &left, &indices, 127);
++        let kernel = Q.kernels();
++        let kernel = kernel.polynomial().unwrap();
++        assert_eq!(
++            kernel.try_total_degree_mul(TotalDegreePolynomialMulRequest {
++                output_len: 127,
++                left_coefficients: &left,
++                left_codes: &codes,
++                right_coefficients: &left,
++                right_codes: &codes,
++                prefix_rank: &rank,
++                prefix_remaining: &remaining,
++                suffix_rank: &[0],
++                suffix_code_count: 1,
++            }),
++            Some(expected)
++        );
++        assert!(
++            kernel
++                .try_dense_mul(DensePolynomialMulRequest {
++                    output_len: 127,
++                    left_coefficients: &left,
++                    left_indices: &indices[..63],
++                    right_coefficients: &left,
++                    right_indices: &indices,
++                })
++                .is_none()
++        );
++        assert_eq!(
++            kernel.try_dense_mul(DensePolynomialMulRequest {
++                output_len: 0,
++                left_coefficients: &[],
++                left_indices: &[],
++                right_coefficients: &[],
++                right_indices: &[],
++            }),
++            Some(vec![])
++        );
++    }
++
++    #[test]
++    fn fraction_kernel_declines_excessive_denominator_variety_before_lifting() {
++        let indices: Vec<u32> = (0..32).collect();
++        let many: Vec<Rational> = (0..32)
++            .map(|i| Q.to_element(1.into(), Integer::from(101 + 2 * i), true))
++            .collect();
++        let original = many.clone();
++        assert!(!Q.polynomial_lift_is_bounded(&many, &many, 63));
++        let kernels = Q.kernels();
++        let kernel = kernels.polynomial().unwrap();
++        assert!(
++            kernel
++                .try_dense_mul(DensePolynomialMulRequest {
++                    output_len: 63,
++                    left_coefficients: &many,
++                    left_indices: &indices,
++                    right_coefficients: &many,
++                    right_indices: &indices,
++                })
++                .is_none()
++        );
++        assert!(
++            kernel
++                .preferred_total_degree_mul_workspace_ratio(&many, &many, 63)
++                .is_none()
++        );
++        assert_eq!(many, original);
++        let few = coefficients(32, 0, true);
++        assert!(Q.polynomial_lift_is_bounded(&few, &few, 63));
++        assert!(!Q.polynomial_lift_is_bounded(&few[..2], &few[..3], 4));
++        let huge_denominator = Integer::one() << 8192u32;
++        let common = vec![Q.to_element(1.into(), huge_denominator, true); 32];
++        assert!(Q.polynomial_lift_is_bounded(&common, &common, 63));
++    }
++
++    #[test]
++    fn fraction_kernel_declines_low_collision_nonintegral_products() {
++        let left_indices: Vec<u32> = (0..32).map(|i| i * 32).collect();
++        let right_indices: Vec<u32> = (0..32).collect();
++        let coefficients = coefficients(32, 59, true);
++        assert!(!Q.polynomial_lift_is_bounded(&coefficients, &coefficients, 1024));
++        let kernels = Q.kernels();
++        assert!(
++            kernels
++                .polynomial()
++                .unwrap()
++                .try_dense_mul(DensePolynomialMulRequest {
++                    output_len: 1024,
++                    left_coefficients: &coefficients,
++                    left_indices: &left_indices,
++                    right_coefficients: &coefficients,
++                    right_indices: &right_indices,
++                })
++                .is_none()
++        );
++        let integers: Vec<Rational> = coefficients
++            .iter()
++            .map(|c| Rational::from(c.numerator()))
++            .collect();
++        assert!(Q.polynomial_lift_is_bounded(&integers, &integers, 1024));
++    }
++}
+diff --git a/src/domains/factorized_rational_polynomial.rs b/src/domains/factorized_rational_polynomial.rs
+index 6740b85..fe74f30 100644
+--- a/src/domains/factorized_rational_polynomial.rs
++++ b/src/domains/factorized_rational_polynomial.rs
+@@ -1,5 +1,10 @@
+ //! Rational polynomial field with factorized denominator.
+ 
++mod apart;
++
++#[cfg(test)]
++mod constructor_tests;
++
+ use std::{
+     borrow::Cow,
+     cmp::Ordering,
+@@ -420,8 +425,16 @@ fn prepare_denominators<R: EuclideanDomain + PolynomialGCD<E>, E: PositiveExpone
+     }
+     let mut remaining = Vec::new();
+     for (d, power) in std::mem::take(dens) {
++        // Scalar powers are normalized by the domain-specific constructor.
++        // Avoid polynomial factorization, including its zero-variable case.
++        if d.is_constant() {
++            remaining.push((d, power));
++            continue;
++        }
+         for (base, multiplicity) in d.factor() {
+-            let mut power = power * multiplicity;
++            let mut power = power
++                .checked_mul(multiplicity)
++                .expect("denominator factor exponent overflow");
+             while power != 0 {
+                 let gcd = num.gcd(&base);
+                 if gcd.is_one() {
+@@ -448,7 +461,9 @@ fn merge_denominators<R: Ring, E: PositiveExponent>(
+     let mut merged: Vec<(MultivariatePolynomial<R, E>, usize)> = Vec::new();
+     for (base, power) in std::mem::take(dens) {
+         if let Some((_, existing_power)) = merged.iter_mut().find(|(d, _)| *d == base) {
+-            *existing_power += power;
++            *existing_power = existing_power
++                .checked_add(power)
++                .expect("denominator factor exponent overflow");
+         } else {
+             merged.push((base, power));
+         }
+diff --git a/src/domains/factorized_rational_polynomial/apart.rs b/src/domains/factorized_rational_polynomial/apart.rs
+new file mode 100644
+index 0000000..150326b
+--- /dev/null
++++ b/src/domains/factorized_rational_polynomial/apart.rs
+@@ -0,0 +1,107 @@
++//! Partial fractions with factored rational-function Taylor coefficients.
++
++use super::{FactorizedRationalPolynomial, FromNumeratorAndFactorizedDenominator};
++use crate::domains::EuclideanDomain;
++use crate::domains::rational_polynomial::{FromNumeratorAndDenominator, RationalPolynomial};
++use crate::poly::{
++    PositiveExponent, factor::Factorize, gcd::PolynomialGCD, polynomial::MultivariatePolynomial,
++};
++
++type Factored<R, E> = FactorizedRationalPolynomial<R, E>;
++type Polynomial<R, E> = MultivariatePolynomial<R, E>;
++type ApartTerm<R, E> = (Factored<R, E>, Factored<R, E>, usize);
++
++mod linear;
++use linear::try_linear;
++
++impl<R: EuclideanDomain + PolynomialGCD<E>, E: PositiveExponent> Factored<R, E>
++where
++    RationalPolynomial<R, E>: FromNumeratorAndDenominator<R, R, E>,
++{
++    /// Materialize the denominator product and return a canonical rational polynomial.
++    pub fn to_rational_polynomial(&self) -> RationalPolynomial<R, E> {
++        let numerator = self.numerator.clone().mul_coeff(self.numer_coeff.clone());
++        let denominator = self.denominators.iter().fold(
++            self.numerator.constant(self.denom_coeff.clone()),
++            |product, (base, power)| product * &base.pow(*power),
++        );
++        RationalPolynomial::from_num_den(numerator, denominator, self.numerator.ring(), true)
++    }
++}
++
++impl<R: EuclideanDomain + PolynomialGCD<E>, E: PositiveExponent> Factored<R, E>
++where
++    Self: FromNumeratorAndFactorizedDenominator<R, R, E>,
++    RationalPolynomial<R, E>: FromNumeratorAndDenominator<R, R, E>,
++    Polynomial<R, E>: Factorize,
++{
++    /// Compute partial fractions in `var`, returning terms
++    /// `(numerator, denominator, exponent)` for `numerator / denominator^exponent`.
++    ///
++    /// Proper products of linear denominator blocks use truncated Taylor series
++    /// over factored rational functions. Neither the input's powered linear
++    /// blocks nor their product is expanded. Coefficient denominators remain
++    /// factored as well; call [`Self::to_rational_polynomial`] only when a
++    /// canonical expanded coefficient is required.
++    ///
++    /// For proper all-linear inputs, terms have monic, unpowered rational linear blocks
++    /// `var - pole` as denominators; their numerators are independent of `var`.
++    /// Supplied duplicate, proportional,
++    /// or overlapping blocks need not already be canonical. Nonlinear and
++    /// improper inputs retain the general rational-polynomial decomposition.
++    pub fn apart_factored_denominators(&self, var: usize) -> Vec<(Self, Self, usize)> {
++        assert!(
++            var < self.numerator.nvars(),
++            "partial fraction variable out of range"
++        );
++        assert!(
++            !self.numerator.ring().is_zero(&self.denom_coeff),
++            "zero denominator"
++        );
++        assert!(
++            self.denominators
++                .iter()
++                .all(|(base, power)| *power == 0 || !base.is_zero()),
++            "zero denominator"
++        );
++
++        // Public fields and the nonfactoring constructor allow distinct maps.
++        // Reconstruct without factorization to unify maps and scalar units;
++        // the source variable remains at its original index in the numerator.
++        let mut denominators = self.denominators.clone();
++        denominators.push((self.numerator.constant(self.denom_coeff.clone()), 1));
++        let input = Self::from_num_den(
++            self.numerator.clone().mul_coeff(self.numer_coeff.clone()),
++            denominators,
++            self.numerator.ring(),
++            false,
++        );
++        if let Some(terms) = try_linear(&input, var) {
++            return terms;
++        }
++
++        input
++            .to_rational_polynomial()
++            .apart_factored_denominators(var)
++            .into_iter()
++            .map(|(numerator, denominator, exponent)| {
++                let from_rational = |value: RationalPolynomial<R, E>| {
++                    Self::from_num_den(
++                        value.numerator,
++                        vec![(value.denominator, 1)],
++                        input.numerator.ring(),
++                        true,
++                    )
++                };
++                (
++                    from_rational(numerator),
++                    from_rational(denominator),
++                    exponent,
++                )
++            })
++            .collect()
++    }
++}
++
++#[cfg(test)]
++mod tests;
+diff --git a/src/domains/factorized_rational_polynomial/apart/linear.rs b/src/domains/factorized_rational_polynomial/apart/linear.rs
+new file mode 100644
+index 0000000..f483e40
+--- /dev/null
++++ b/src/domains/factorized_rational_polynomial/apart/linear.rs
+@@ -0,0 +1,194 @@
++use super::super::FromNumeratorAndFactorizedDenominator;
++use super::{ApartTerm, Factored, Polynomial};
++use crate::domains::EuclideanDomain;
++use crate::poly::{PositiveExponent, factor::Factorize, gcd::PolynomialGCD};
++
++struct LinearPole<R: EuclideanDomain + PolynomialGCD<E>, E: PositiveExponent> {
++    constant: Polynomial<R, E>,
++    leading: Polynomial<R, E>,
++    point: Factored<R, E>,
++    multiplicity: usize,
++}
++
++fn from_polynomial<R: EuclideanDomain + PolynomialGCD<E>, E: PositiveExponent>(
++    polynomial: Polynomial<R, E>,
++) -> Factored<R, E>
++where
++    Factored<R, E>: FromNumeratorAndFactorizedDenominator<R, R, E>,
++{
++    let ring = polynomial.ring().clone();
++    Factored::from_num_den(polynomial, vec![], &ring, false)
++}
++
++fn multiply_shifted<R: EuclideanDomain + PolynomialGCD<E>, E: PositiveExponent>(
++    coefficients: &mut [Factored<R, E>],
++    point: &Factored<R, E>,
++    degree: usize,
++) -> usize
++where
++    Factored<R, E>: FromNumeratorAndFactorizedDenominator<R, R, E>,
++{
++    let degree = (degree + 1).min(coefficients.len() - 1);
++    for index in (1..=degree).rev() {
++        let scaled = &coefficients[index] * point;
++        coefficients[index] = &scaled + &coefficients[index - 1];
++    }
++    coefficients[0] = &coefficients[0] * point;
++    degree
++}
++
++fn shifted_numerator<R: EuclideanDomain + PolynomialGCD<E>, E: PositiveExponent>(
++    coefficients: &[Polynomial<R, E>],
++    point: &Factored<R, E>,
++    terms: usize,
++) -> Vec<Factored<R, E>>
++where
++    Factored<R, E>: FromNumeratorAndFactorizedDenominator<R, R, E>,
++{
++    let mut shifted = vec![from_polynomial(point.numerator.zero()); terms];
++    let mut degree = 0;
++    for (index, coefficient) in coefficients.iter().rev().enumerate() {
++        if index != 0 {
++            degree = multiply_shifted(&mut shifted, point, degree);
++        }
++        shifted[0] = &shifted[0] + &from_polynomial(coefficient.clone());
++    }
++    shifted
++}
++
++pub(super) fn try_linear<R: EuclideanDomain + PolynomialGCD<E>, E: PositiveExponent>(
++    input: &Factored<R, E>,
++    var: usize,
++) -> Option<Vec<ApartTerm<R, E>>>
++where
++    Factored<R, E>: FromNumeratorAndFactorizedDenominator<R, R, E>,
++    Polynomial<R, E>: Factorize,
++{
++    let one = from_polynomial(input.numerator.one());
++    if input.is_zero() {
++        return Some(vec![(from_polynomial(input.numerator.zero()), one, 1)]);
++    }
++    let mut total_degree = 0usize;
++    for (base, power) in &input.denominators {
++        if *power == 0 {
++            continue;
++        }
++        match base.degree(var).to_i32() {
++            0 => {}
++            1 => {
++                total_degree = total_degree
++                    .checked_add(*power)
++                    .expect("denominator degree overflow")
++            }
++            _ => return None,
++        }
++    }
++    if total_degree == 0 {
++        return Some(vec![(input.clone(), one, 1)]);
++    }
++    if input.numerator.degree(var).to_i32() as usize >= total_degree {
++        return None;
++    }
++
++    let ring = input.numerator.ring();
++    let mut coefficient_denominators =
++        vec![(input.numerator.constant(input.denom_coeff.clone()), 1)];
++    let mut poles: Vec<LinearPole<R, E>> = vec![];
++    for (base, power) in &input.denominators {
++        if *power == 0 {
++            continue;
++        }
++        if base.degree(var) == E::zero() {
++            coefficient_denominators.push((base.clone(), *power));
++            continue;
++        }
++        let univariate = base.to_univariate(var);
++        let constant = univariate.coefficients()[0].clone();
++        let leading = univariate.coefficients()[1].clone();
++        coefficient_denominators.push((leading.clone(), *power));
++
++        // Compare roots by cross multiplication, not by a representation's
++        // factor ordering or by an expensive canonical rational-function GCD.
++        if let Some(pole) = poles
++            .iter_mut()
++            .find(|pole| &pole.constant * &leading == &constant * &pole.leading)
++        {
++            pole.multiplicity = pole
++                .multiplicity
++                .checked_add(*power)
++                .expect("pole multiplicity overflow");
++        } else {
++            let point =
++                Factored::from_num_den(-constant.clone(), vec![(leading.clone(), 1)], ring, true);
++            poles.push(LinearPole {
++                constant,
++                leading,
++                point,
++                multiplicity: *power,
++            });
++        }
++    }
++    let inverse_scalar = Factored::from_num_den(
++        input.numerator.constant(input.numer_coeff.clone()),
++        coefficient_denominators,
++        ring,
++        true,
++    );
++    let numerator = input.numerator.to_univariate(var);
++    let mut coordinate_exponents = vec![E::zero(); input.numerator.nvars()];
++    coordinate_exponents[var] = E::one();
++    let coordinate = from_polynomial(input.numerator.monomial(ring.one(), coordinate_exponents));
++    let mut output = vec![];
++    for (index, pole) in poles.iter().enumerate() {
++        let terms = pole.multiplicity;
++        let numerator_series = shifted_numerator(numerator.coefficients(), &pole.point, terms);
++        let mut cofactor = vec![from_polynomial(input.numerator.zero()); terms];
++        cofactor[0] = one.clone();
++        let mut degree = 0;
++        let mut inverse_constant = one.clone();
++        for (other_index, other) in poles.iter().enumerate() {
++            if index == other_index {
++                continue;
++            }
++            let difference = &pole.point - &other.point;
++            if difference.is_zero() {
++                return None;
++            }
++            let inverse_difference = difference.clone().inv();
++            for _ in 0..other.multiplicity {
++                degree = multiply_shifted(&mut cofactor, &difference, degree);
++                inverse_constant = &inverse_constant * &inverse_difference;
++            }
++        }
++
++        let mut quotient: Vec<Factored<R, E>> = Vec::with_capacity(terms);
++        for exponent in 0..terms {
++            let mut coefficient = numerator_series[exponent].clone();
++            for cofactor_exponent in 1..=exponent {
++                if cofactor[cofactor_exponent].is_zero()
++                    || quotient[exponent - cofactor_exponent].is_zero()
++                {
++                    continue;
++                }
++                coefficient = &coefficient
++                    - &(&cofactor[cofactor_exponent] * &quotient[exponent - cofactor_exponent]);
++            }
++            quotient.push(&coefficient * &inverse_constant);
++        }
++
++        // A monic rational linear block avoids constructing or subsequently
++        // undoing powers of a parameter-dependent leading coefficient.
++        // Reuse the already-factored pole instead of factoring its leading
++        // polynomial again for every output coefficient.
++        let denominator = &coordinate - &pole.point;
++        for (exponent, coefficient) in quotient.into_iter().enumerate() {
++            if coefficient.is_zero() {
++                continue;
++            }
++            let power = terms - exponent;
++            let coefficient = &coefficient * &inverse_scalar;
++            output.push((coefficient, denominator.clone(), power));
++        }
++    }
++    Some(output)
++}
+diff --git a/src/domains/factorized_rational_polynomial/apart/tests.rs b/src/domains/factorized_rational_polynomial/apart/tests.rs
+new file mode 100644
+index 0000000..3e79a06
+--- /dev/null
++++ b/src/domains/factorized_rational_polynomial/apart/tests.rs
+@@ -0,0 +1,190 @@
++use super::*;
++use crate::prelude::*;
++
++fn assert_reconstructs<R: EuclideanDomain + PolynomialGCD<u16>>(
++    input: &Factored<R, u16>,
++    variable: usize,
++    proper_linear: bool,
++) where
++    Factored<R, u16>: FromNumeratorAndFactorizedDenominator<R, R, u16>,
++    RationalPolynomial<R, u16>: FromNumeratorAndDenominator<R, R, u16>,
++    Polynomial<R, u16>: Factorize,
++{
++    let expected = input.to_rational_polynomial();
++    let mut reconstructed: RationalPolynomial<R, u16> = input.numerator.zero().into();
++    let terms = input.apart_factored_denominators(variable);
++    for (numerator, denominator, power) in terms {
++        if proper_linear {
++            assert_eq!(numerator.numerator.degree(variable), 0);
++            assert!(
++                numerator
++                    .denominators
++                    .iter()
++                    .all(|(base, _)| base.degree(variable) == 0)
++            );
++            assert_eq!(denominator.numerator.degree(variable), 1);
++            let monic = denominator.to_rational_polynomial();
++            assert_eq!(
++                monic.numerator.to_univariate(variable).coefficients()[1],
++                monic.denominator
++            );
++        }
++        for original in input.get_variables() {
++            assert!(numerator.get_variables().contains(original));
++            assert!(denominator.get_variables().contains(original));
++        }
++        reconstructed = &reconstructed
++            + &(&numerator.to_rational_polynomial()
++                / &denominator.to_rational_polynomial().pow(power as u64));
++    }
++    let mut expected = expected;
++    reconstructed.unify_variables(&mut expected);
++    assert_eq!(reconstructed, expected);
++}
++
++fn rational_input(numerator: &str, bases: &[(&str, usize)]) -> (Factored<IntegerRing, u16>, usize) {
++    let variables = parse!("x+a+b+c+d+y+unused")
++        .to_polynomial::<_, u16>(&Q, None)
++        .variables()
++        .clone();
++    let variable = parse!("x").to_polynomial::<_, u16>(&Q, None).variables()[0].clone();
++    let index = variables.iter().position(|v| v == &variable).unwrap();
++    let polynomial = |text: &str| parse!(text).to_polynomial::<_, u16>(&Q, Some(variables.clone()));
++    let numerator = polynomial(numerator);
++    let bases = bases
++        .iter()
++        .map(|(base, power)| (polynomial(base), *power))
++        .collect();
++    (Factored::from_num_den(numerator, bases, &Z, false), index)
++}
++
++#[test]
++fn repeated_linear_poles_reconstruct_exactly_with_units_and_overlaps() {
++    for (numerator, factors) in [
++        ("x+a", vec![("x-a", 3), ("x-b", 2), ("x-c", 1)]),
++        ("(x+a)/3", vec![("(2*y+1)*x+a", 3), ("(y+2)*x+b", 2)]),
++        ("(x-a)*(x-b)", vec![("x-a", 2), ("-2*x+2*a", 2), ("x-b", 1)]),
++        ("x+1", vec![("y*(x-a)", 2), ("(y+1)*(x-b)", 2), ("y-1", 3)]),
++        ("1", vec![("x", 3), ("-3*(x+1)/2", 2), ("-5/7", 3)]),
++        ("(x-a)^2", vec![("x-a", 4), ("x-a", 1)]),
++        ("x+1", vec![("x-a", 3), ("y+1", 0)]),
++    ] {
++        let (input, variable) = rational_input(numerator, &factors);
++        assert!(try_linear(&input, variable).is_some());
++        assert_reconstructs(&input, variable, true);
++    }
++}
++
++#[test]
++fn nonlinear_improper_polynomial_and_zero_inputs_keep_exact_fallbacks() {
++    for (numerator, factors) in [
++        ("x+1", vec![("x^2+a", 2), ("x-b", 1)]),
++        ("x^5+1", vec![("x-a", 2), ("x-b", 1)]),
++        ("x^2+a", vec![("y+1", 2)]),
++        ("0", vec![("x-a", 2)]),
++        ("x+1", vec![]),
++    ] {
++        let (input, variable) = rational_input(numerator, &factors);
++        assert_reconstructs(&input, variable, false);
++    }
++}
++
++#[test]
++fn scalar_metadata_is_not_dropped() {
++    let (mut input, variable) = rational_input("x+a", &[("x-a", 2), ("x-b", 2)]);
++    input.numer_coeff = (-3).into();
++    input.denom_coeff = 5.into();
++    assert_reconstructs(&input, variable, true);
++}
++
++#[test]
++fn finite_field_residues_preserve_leading_units() {
++    let (template, variable) = rational_input("x+a", &[("3*x+a", 3), ("5*x+b", 2)]);
++    let field = Zp::new(17);
++    let input = template.to_finite_field(&field);
++    assert_reconstructs(&input, variable, true);
++}
++
++#[test]
++fn algebraic_coefficients_remain_exact() {
++    let field = AlgebraicExtension::new(parse!("z^2-2").to_polynomial::<_, u16>(&Q, None));
++    let variables = parse!("x+y+unused")
++        .to_polynomial::<_, u16>(&Q, None)
++        .variables()
++        .clone();
++    let x = parse!("x").to_polynomial::<_, u16>(&field, Some(variables.clone()));
++    let variable = x
++        .exponents_iter()
++        .next()
++        .unwrap()
++        .iter()
++        .position(|exponent| *exponent == 1)
++        .unwrap();
++    let first = (&x + &x.one()).mul_coeff(field.generator());
++    let second = &x + &x.constant(field.nth(2.into()));
++    let input = Factored::from_num_den(&x + &x.one(), vec![(first, 3), (second, 2)], &field, false);
++    assert_reconstructs(&input, variable, true);
++}
++
++#[test]
++fn wide_linear_power_is_never_materialized() {
++    let (input, variable) = rational_input("x+1", &[("x+a+b+c+d+y+unused+1", 32)]);
++    let terms = input.apart_factored_denominators(variable);
++    assert_eq!(terms.len(), 2);
++    assert!(terms.iter().all(|(_, denominator, power)| {
++        denominator.numerator.nterms() == 8 && *power >= 31 && denominator.denominators.is_empty()
++    }));
++    for value in [2, 3, 5] {
++        let values = vec![Q.nth(value.into()); input.numerator.nvars()];
++        let evaluate = |f: &Factored<IntegerRing, u16>| {
++            f.evaluate_with_coeff_map(|c| Q.to_element_numerator(c.clone()), &values, &Q)
++        };
++        let reconstructed = terms
++            .iter()
++            .fold(Q.zero(), |sum, (numerator, denominator, power)| {
++                sum + Q.div(
++                    &evaluate(numerator),
++                    &Q.pow(&evaluate(denominator), *power as u64),
++                )
++            });
++        assert_eq!(reconstructed, evaluate(&input));
++    }
++}
++
++#[test]
++fn wide_parameter_leading_powers_remain_factored_in_monic_residues() {
++    let (input, variable) = rational_input("x+1", &[("(a+b+c+d+y+unused+1)*x+1", 32)]);
++    let terms = input.apart_factored_denominators(variable);
++    assert_eq!(terms.len(), 2);
++    for (numerator, denominator, power) in &terms {
++        assert!(*power >= 31);
++        assert!(numerator.numerator.nterms() <= 7);
++        assert_eq!(numerator.denominators.len(), 1);
++        assert_eq!(numerator.denominators[0].0.nterms(), 7);
++        assert!([32, 33].contains(&numerator.denominators[0].1));
++        assert_eq!(denominator.denominators.len(), 1);
++        assert_eq!(denominator.denominators[0].1, 1);
++    }
++    for value in [2, 3] {
++        let values = vec![Q.nth(value.into()); input.numerator.nvars()];
++        let evaluate = |f: &Factored<IntegerRing, u16>| {
++            f.evaluate_with_coeff_map(|c| Q.to_element_numerator(c.clone()), &values, &Q)
++        };
++        let reconstructed = terms
++            .iter()
++            .fold(Q.zero(), |sum, (numerator, denominator, power)| {
++                sum + Q.div(
++                    &evaluate(numerator),
++                    &Q.pow(&evaluate(denominator), *power as u64),
++                )
++            });
++        assert_eq!(reconstructed, evaluate(&input));
++    }
++}
++
++#[test]
++#[should_panic(expected = "partial fraction variable out of range")]
++fn invalid_variable_is_checked_even_for_zero() {
++    let (input, _) = rational_input("0", &[]);
++    input.apart_factored_denominators(input.numerator.nvars());
++}
+diff --git a/src/domains/factorized_rational_polynomial/constructor_tests.rs b/src/domains/factorized_rational_polynomial/constructor_tests.rs
+new file mode 100644
+index 0000000..5fbf02a
+--- /dev/null
++++ b/src/domains/factorized_rational_polynomial/constructor_tests.rs
+@@ -0,0 +1,393 @@
++use super::*;
++use crate::domains::factorized_rational_polynomial::{
++    FactorizedRationalPolynomial, FromNumeratorAndFactorizedDenominator,
++};
++use crate::domains::rational_polynomial::{FromNumeratorAndDenominator, RationalPolynomial};
++use crate::prelude::*;
++
++fn materialize<R>(value: FactorizedRationalPolynomial<R, u16>) -> RationalPolynomial<R, u16>
++where
++    R: EuclideanDomain + PolynomialGCD<u16>,
++    RationalPolynomial<R, u16>: FromNumeratorAndDenominator<R, R, u16>,
++{
++    let numerator = value.numerator.mul_coeff(value.numer_coeff);
++    let ring = numerator.ring().clone();
++    let denominator = value.denominators.into_iter().fold(
++        numerator.constant(value.denom_coeff),
++        |product, (base, power)| product * &base.pow(power),
++    );
++    RationalPolynomial::from_num_den(numerator, denominator, &ring, true)
++}
++
++#[test]
++fn integer_powered_cancellation_preserves_every_denominator_occurrence() {
++    let x1 = parse!("x+1").to_polynomial::<_, u16>(&Z, None);
++    for (numerator_power, denominator_power) in [(1, 2), (2, 3), (3, 2)] {
++        let numerator = x1.pow(numerator_power);
++        let expected = RationalPolynomial::from_num_den(
++            numerator.clone(),
++            x1.pow(denominator_power),
++            &Z,
++            true,
++        );
++        let actual = FactorizedRationalPolynomial::from_num_den(
++            numerator,
++            vec![(x1.clone(), denominator_power)],
++            &Z,
++            true,
++        );
++        assert_eq!(materialize(actual), expected);
++    }
++
++    let x2 = parse!("x+2").to_polynomial::<_, u16>(&Z, None);
++    let base = &x1 * &x2;
++    let expected = RationalPolynomial::from_num_den(x1.clone(), base.pow(3), &Z, true);
++    let actual = FactorizedRationalPolynomial::from_num_den(x1, vec![(base, 3)], &Z, true);
++    assert_eq!(materialize(actual), expected);
++}
++
++#[test]
++fn integer_duplicate_and_overlapping_factors_preserve_multiplicities() {
++    let x1 = parse!("x+1").to_polynomial::<_, u16>(&Z, None);
++    let x2 = parse!("x+2").to_polynomial::<_, u16>(&Z, None);
++    let numerator = x1.pow(2);
++    let bases = vec![(x1.clone(), 2), (&x1 * &x2, 3), (x2.clone(), 1)];
++    let denominator = bases
++        .iter()
++        .fold(x1.one(), |acc, (base, p)| acc * &base.pow(*p));
++    let expected = RationalPolynomial::from_num_den(numerator.clone(), denominator, &Z, true);
++    let actual = FactorizedRationalPolynomial::from_num_den(numerator, bases, &Z, true);
++    assert_eq!(actual.denominators.len(), 2);
++    assert!(actual.denominators.contains(&(x1, 3)));
++    assert!(actual.denominators.contains(&(x2, 4)));
++    assert_eq!(materialize(actual), expected);
++}
++
++#[test]
++fn rational_contents_are_scaled_independently_for_every_power() {
++    for numerator in ["1/2", "-2/3", "(x+1)/2", "x/2+y/3", "0"] {
++        let numerator = Atom::parse(numerator, "factored_construction", ParseSettings::default())
++            .unwrap()
++            .to_polynomial::<_, u16>(&Q, None);
++        for factors in [
++            vec![],
++            vec![("(x+1)/2", 2)],
++            vec![("-2*(x+1)/3", 3)],
++            vec![("(x+1)/2", 2), ("(x+1)/3", 1)],
++            vec![("(x+1)/2", 2), ("(y+2)/5", 3)],
++            vec![("x/2+y/3", 2), ("-3/5", 3), ("z+1", 0)],
++            vec![("0", 0), ("(x+1)/2", 1)],
++        ] {
++            let bases = factors
++                .into_iter()
++                .map(|(base, power)| {
++                    (
++                        Atom::parse(base, "factored_construction", ParseSettings::default())
++                            .unwrap()
++                            .to_polynomial::<_, u16>(&Q, None),
++                        power,
++                    )
++                })
++                .collect::<Vec<_>>();
++            let denominator = bases
++                .iter()
++                .fold(numerator.one(), |acc, (base, p)| acc * &base.pow(*p));
++            let expected =
++                RationalPolynomial::from_num_den(numerator.clone(), denominator, &Z, true);
++            for do_factor in [false, true] {
++                let actual = FactorizedRationalPolynomial::from_num_den(
++                    numerator.clone(),
++                    bases.clone(),
++                    &Z,
++                    do_factor,
++                );
++                let mut actual = materialize(actual);
++                for variable in numerator.variables().iter().chain(
++                    bases
++                        .iter()
++                        .filter(|(_, power)| *power != 0)
++                        .flat_map(|(base, _)| base.variables().iter()),
++                ) {
++                    assert!(actual.get_variables().contains(variable));
++                }
++                let mut expected = expected.clone();
++                actual.unify_variables(&mut expected);
++                assert_eq!(actual, expected);
++            }
++        }
++    }
++}
++
++#[test]
++#[should_panic(expected = "Zero denominator")]
++fn rational_zero_denominator_is_rejected_before_zero_numerator_shortcuts() {
++    let zero = parse!("0").to_polynomial::<_, u16>(&Q, None);
++    let _ = FactorizedRationalPolynomial::from_num_den(zero.clone(), vec![(zero, 2)], &Z, true);
++}
++
++#[test]
++fn every_native_constructor_rejects_positive_powers_of_zero() {
++    fn verify<R>(zero: MultivariatePolynomial<R, u16>)
++    where
++        R: EuclideanDomain + PolynomialGCD<u16>,
++        FactorizedRationalPolynomial<R, u16>: FromNumeratorAndFactorizedDenominator<R, R, u16>,
++    {
++        for do_factor in [false, true] {
++            for numerator in [zero.clone(), zero.one()] {
++                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
++                    FactorizedRationalPolynomial::from_num_den(
++                        numerator.clone(),
++                        vec![(zero.clone(), 2)],
++                        zero.ring(),
++                        do_factor,
++                    )
++                }));
++                assert!(result.is_err());
++                let valid = FactorizedRationalPolynomial::from_num_den(
++                    numerator.clone(),
++                    vec![(zero.clone(), 0)],
++                    zero.ring(),
++                    do_factor,
++                );
++                assert_eq!(valid.numerator.is_zero(), numerator.is_zero());
++                assert!(!zero.ring().is_zero(&valid.denom_coeff));
++            }
++        }
++    }
++    verify(parse!("0").to_polynomial::<_, u16>(&Z, None));
++    verify(parse!("0").to_polynomial::<_, u16>(&Zp::new(17), None));
++    let algebraic = AlgebraicExtension::new(parse!("a^2-2").to_polynomial::<_, u16>(&Q, None));
++    verify(parse!("0").to_polynomial::<_, u16>(&algebraic, None));
++}
++
++fn assert_duplicate_arithmetic<R>(
++    duplicate: FactorizedRationalPolynomial<R, u16>,
++    single: FactorizedRationalPolynomial<R, u16>,
++) where
++    R: EuclideanDomain + PolynomialGCD<u16>,
++    MultivariatePolynomial<R, u16>: Factorize,
++    FactorizedRationalPolynomial<R, u16>: FromNumeratorAndFactorizedDenominator<R, R, u16>,
++    RationalPolynomial<R, u16>: FromNumeratorAndDenominator<R, R, u16>,
++{
++    if duplicate.is_zero() {
++        assert!(duplicate.denominators.is_empty());
++    } else {
++        assert_eq!(duplicate.denominators.len(), 1);
++    }
++    let duplicate_value = materialize(duplicate.clone());
++    let single_value = materialize(single.clone());
++    assert_eq!(
++        materialize(&duplicate + &single),
++        &duplicate_value + &single_value
++    );
++    assert_eq!(
++        materialize(&single + &duplicate),
++        &single_value + &duplicate_value
++    );
++    assert_eq!(
++        materialize(&duplicate - &single),
++        &duplicate_value - &single_value
++    );
++    assert_eq!(
++        materialize(&duplicate * &single),
++        &duplicate_value * &single_value
++    );
++    assert_eq!(
++        materialize(&single * &duplicate),
++        &single_value * &duplicate_value
++    );
++    assert_eq!(
++        materialize(&duplicate / &single),
++        &duplicate_value / &single_value
++    );
++}
++
++#[test]
++fn unfactored_integer_duplicates_and_sign_associates_support_exact_arithmetic() {
++    let base = parse!("x+1").to_polynomial::<_, u16>(&Z, None);
++    let single =
++        FactorizedRationalPolynomial::from_num_den(base.one(), vec![(base.clone(), 1)], &Z, false);
++    for numerator in [base.one(), base.clone(), base.zero()] {
++        for (first, second) in [(1, 1), (2, 3)] {
++            for sign in [1, -1] {
++                let duplicate = FactorizedRationalPolynomial::from_num_den(
++                    numerator.clone(),
++                    vec![
++                        (base.clone(), first),
++                        (base.clone().mul_coeff(sign.into()), second),
++                    ],
++                    &Z,
++                    false,
++                );
++                if !duplicate.is_zero() {
++                    assert_eq!(duplicate.denominators[0].1, first + second);
++                }
++                assert_duplicate_arithmetic(duplicate, single.clone());
++            }
++        }
++    }
++    let rational_base = parse!("(x+1)/2").to_polynomial::<_, u16>(&Q, None);
++    let other = parse!("-(x+1)/3").to_polynomial::<_, u16>(&Q, None);
++    let duplicate = FactorizedRationalPolynomial::from_num_den(
++        rational_base.one(),
++        vec![(rational_base, 2), (other, 3)],
++        &Z,
++        false,
++    );
++    assert_duplicate_arithmetic(duplicate, single);
++}
++
++#[test]
++fn unfactored_field_associates_merge_after_monic_normalization() {
++    let field = Zp::new(17);
++    let base = parse!("x+1").to_polynomial::<_, u16>(&field, None);
++    let single = FactorizedRationalPolynomial::from_num_den(
++        base.one(),
++        vec![(base.clone(), 1)],
++        &field,
++        false,
++    );
++    let duplicate = FactorizedRationalPolynomial::from_num_den(
++        base.one(),
++        vec![
++            (base.clone().mul_coeff(field.nth(3.into())), 2),
++            (base.mul_coeff(field.nth(5.into())), 3),
++        ],
++        &field,
++        false,
++    );
++    assert_eq!(duplicate.denominators[0].1, 5);
++    assert_duplicate_arithmetic(duplicate, single);
++
++    let field = AlgebraicExtension::new(parse!("a^2-2").to_polynomial::<_, u16>(&Q, None));
++    let base = parse!("x+1").to_polynomial::<_, u16>(&field, None);
++    let single = FactorizedRationalPolynomial::from_num_den(
++        base.one(),
++        vec![(base.clone(), 1)],
++        &field,
++        false,
++    );
++    let duplicate = FactorizedRationalPolynomial::from_num_den(
++        base.one(),
++        vec![
++            (base.clone().mul_coeff(field.generator()), 2),
++            (base.mul_coeff(field.nth(3.into())), 3),
++        ],
++        &field,
++        false,
++    );
++    assert_eq!(duplicate.denominators[0].1, 5);
++    assert_duplicate_arithmetic(duplicate, single);
++}
++
++#[test]
++#[should_panic(expected = "denominator factor exponent overflow")]
++fn duplicate_exponent_addition_is_checked_without_factorization() {
++    let base = parse!("x+1").to_polynomial::<_, u16>(&Z, None);
++    let _ = FactorizedRationalPolynomial::from_num_den(
++        base.one(),
++        vec![(base.clone(), usize::MAX), (base, 1)],
++        &Z,
++        false,
++    );
++}
++
++#[test]
++fn integer_negative_base_normalization_observes_power_parity() {
++    let base = parse!("-2*x-2").to_polynomial::<_, u16>(&Z, None);
++    for power in [1, 2, 3, 4] {
++        for do_factor in [false, true] {
++            let expected = RationalPolynomial::from_num_den(base.one(), base.pow(power), &Z, true);
++            let actual = FactorizedRationalPolynomial::from_num_den(
++                base.one(),
++                vec![(base.clone(), power)],
++                &Z,
++                do_factor,
++            );
++            assert_eq!(materialize(actual), expected);
++        }
++    }
++}
++
++#[test]
++fn finite_field_repeated_scalar_units_and_cancellations_are_exact() {
++    let field = Zp::new(17);
++    let base = parse!("3*x+3").to_polynomial::<_, u16>(&field, None);
++    for power in [2, 3] {
++        for do_factor in [false, true] {
++            for numerator in [base.one(), base.clone()] {
++                let expected = RationalPolynomial::from_num_den(
++                    numerator.clone(),
++                    base.pow(power),
++                    &field,
++                    true,
++                );
++                let actual = FactorizedRationalPolynomial::from_num_den(
++                    numerator,
++                    vec![(base.clone(), power)],
++                    &field,
++                    do_factor,
++                );
++                assert_eq!(materialize(actual), expected);
++            }
++        }
++    }
++}
++
++#[test]
++fn algebraic_field_repeated_leading_units_are_exact() {
++    let field = AlgebraicExtension::new(parse!("a^2-2").to_polynomial::<_, u16>(&Q, None));
++    let base = parse!("x+1")
++        .to_polynomial::<_, u16>(&field, None)
++        .mul_coeff(field.generator());
++    for power in [2, 3] {
++        for do_factor in [false, true] {
++            let expected =
++                RationalPolynomial::from_num_den(base.one(), base.pow(power), &field, true);
++            let actual = FactorizedRationalPolynomial::from_num_den(
++                base.one(),
++                vec![(base.clone(), power)],
++                &field,
++                do_factor,
++            );
++            assert_eq!(materialize(actual), expected);
++        }
++    }
++}
++
++#[test]
++#[should_panic(expected = "denominator factor exponent overflow")]
++fn factored_exponent_multiplication_is_checked() {
++    let base = parse!("(x+1)^2").to_polynomial::<_, u16>(&Z, None);
++    let _ =
++        FactorizedRationalPolynomial::from_num_den(base.one(), vec![(base, usize::MAX)], &Z, true);
++}
++
++#[test]
++fn scalar_only_rational_construction_never_factors_zero_variable_polynomials() {
++    for numerator in ["1/2", "-2/3", "0"] {
++        let numerator = parse!(numerator).to_polynomial::<_, u16>(&Q, None);
++        assert_eq!(numerator.nvars(), 0);
++        for factors in [vec![], vec![("3/5", 3)], vec![("-2/3", 2)]] {
++            let factors = factors
++                .into_iter()
++                .map(|(base, power)| (parse!(base).to_polynomial(&Q, None), power))
++                .collect::<Vec<_>>();
++            let denominator = factors.iter().fold(numerator.one(), |acc, (base, power)| {
++                acc * &base.pow(*power)
++            });
++            let expected =
++                RationalPolynomial::from_num_den(numerator.clone(), denominator, &Z, true);
++            for do_factor in [false, true] {
++                let actual = FactorizedRationalPolynomial::from_num_den(
++                    numerator.clone(),
++                    factors.clone(),
++                    &Z,
++                    do_factor,
++                );
++                assert_eq!(actual.numerator.nvars(), 0);
++                assert_eq!(materialize(actual), expected);
++            }
++        }
++    }
++}
+diff --git a/src/domains/rational_polynomial.rs b/src/domains/rational_polynomial.rs
+index d23eca1..0a3d540 100644
+--- a/src/domains/rational_polynomial.rs
++++ b/src/domains/rational_polynomial.rs
+@@ -1056,6 +1056,18 @@ where
+             return &a + &b;
+         }
+ 
++        if self.denominator == other.denominator {
++            // Avoid gcd(d,d), two exact divisions and denominator products.
++            // The numerator sum can expose a common factor, even when both
++            // operands were reduced, so normalize the result once.
++            return RationalPolynomial::from_num_den(
++                &self.numerator + &other.numerator,
++                self.denominator.clone(),
++                self.numerator.ring(),
++                true,
++            );
++        }
++
+         let denom_gcd = self.denominator.gcd(&other.denominator);
+ 
+         let mut a_denom_red = Cow::Borrowed(&self.denominator);
+@@ -1197,14 +1209,20 @@ where
+         }
+ 
+         let dn = self.numerator.derivative(var);
+-        let dd = self.denominator.derivative(var);
+-
+         let a = RationalPolynomial::from_num_den(
+             dn,
+             self.denominator.clone(),
+             self.numerator.ring(),
+             true, // derivative may expose scalar content
+         );
++        if self.denominator.degree(var) == E::zero() {
++            // A parameter-only denominator contributes no quotient-rule
++            // term. Keep the normalization above: differentiation can
++            // expose scalar or polynomial factors in the numerator.
++            return a;
++        }
++
++        let dd = self.denominator.derivative(var);
+         let b = RationalPolynomial::from_num_den(
+             &self.numerator * &dd,
+             &self.denominator * &self.denominator,
+@@ -1756,6 +1774,9 @@ where
+     }
+ }
+ 
++#[cfg(test)]
++mod arithmetic_tests;
++
+ #[cfg(test)]
+ mod test {
+     use std::sync::Arc;
+@@ -2103,6 +2124,92 @@ mod test {
+         );
+     }
+ 
++    #[test]
++    fn apart_omits_zero_coefficients_and_preserves_variable_maps() {
++        let variables = Arc::new(vec![
++            crate::poly::PolyVariable::Symbol(symbol!("apart_sparse_x")),
++            crate::poly::PolyVariable::Symbol(symbol!("apart_sparse_y")),
++        ]);
++        // The pole at -1 has orders three and one, but no order-two term.
++        // Its p-adic expansion therefore contains an interior zero.
++        let p: RationalPolynomial<_, u16> =
++            parse!("1+1/(apart_sparse_x+1)^3+1/(apart_sparse_x+1)+1/(apart_sparse_x+2)")
++                .to_rational_polynomial(&Q, &Z, Some(variables.clone()));
++        let terms = p.apart_factored_denominators(0);
++        let mut reconstructed: RationalPolynomial<_, _> = p.numerator.zero().into();
++        for (numerator, denominator, exponent) in &terms {
++            assert!(
++                !numerator.is_zero(),
++                "zero partial-fraction numerator has variables {:?}; expected {:?}",
++                numerator.get_variables(),
++                variables
++            );
++            assert_eq!(numerator.numerator.variables(), &variables);
++            assert_eq!(numerator.denominator.variables(), &variables);
++            assert_eq!(denominator.numerator.variables(), &variables);
++            assert_eq!(denominator.denominator.variables(), &variables);
++            reconstructed = &reconstructed + &(numerator / &denominator.pow(*exponent as u64));
++        }
++        assert_eq!(reconstructed, p);
++        assert_eq!(terms.len(), 4);
++        let first_pole: RationalPolynomial<_, u16> =
++            parse!("apart_sparse_x+1").to_rational_polynomial(&Q, &Z, Some(variables));
++        let mut orders = terms
++            .iter()
++            .filter(|(_, denominator, _)| *denominator == first_pole)
++            .map(|(_, _, exponent)| *exponent)
++            .collect::<Vec<_>>();
++        orders.sort_unstable();
++        assert_eq!(orders, [1, 3]);
++        let ordinary = p.apart(0);
++        assert_eq!(ordinary.len(), 4);
++        assert!(ordinary.iter().all(|term| !term.is_zero()));
++        assert_eq!(
++            ordinary.iter().fold(
++                p.numerator.zero().into(),
++                |sum: RationalPolynomial<_, _>, term| &sum + term
++            ),
++            p
++        );
++    }
++
++    #[test]
++    fn apart_sparse_powers_reconstruct_with_parameters_and_nonlinear_factors() {
++        let variables = Arc::new(vec![
++            crate::poly::PolyVariable::Symbol(symbol!("apart_gap_y")),
++            crate::poly::PolyVariable::Symbol(symbol!("apart_gap_x")),
++            crate::poly::PolyVariable::Symbol(symbol!("apart_gap_unused")),
++        ]);
++        for expression in [
++            parse!(
++                "apart_gap_x^2+apart_gap_y+(apart_gap_y+1)/(apart_gap_x+1)^5+(apart_gap_y-1)/(apart_gap_x+1)^2+1/(apart_gap_x+2)^4+(apart_gap_y+2)/(apart_gap_x+2)"
++            ),
++            parse!("1/(apart_gap_x^2+1)^3+apart_gap_x/(apart_gap_x^2+1)+1/(apart_gap_x+2)"),
++        ] {
++            let p: RationalPolynomial<_, u16> =
++                expression.to_rational_polynomial(&Q, &Z, Some(variables.clone()));
++            let mut reconstructed: RationalPolynomial<_, _> = p.numerator.zero().into();
++            for (numerator, denominator, exponent) in p.apart_factored_denominators(1) {
++                assert!(!numerator.is_zero());
++                assert!(exponent > 0);
++                // General coefficient-field arithmetic may permute maps.
++                // All original identities (including unused variables) must
++                // remain, with numerator and denominator using one map.
++                for term in [&numerator, &denominator] {
++                    assert_eq!(term.numerator.variables(), term.denominator.variables());
++                    assert_eq!(term.get_variables().len(), variables.len());
++                    assert!(
++                        variables
++                            .iter()
++                            .all(|variable| term.get_variables().contains(variable))
++                    );
++                }
++                reconstructed = &reconstructed + &(&numerator / &denominator.pow(exponent as u64));
++            }
++            assert_eq!(reconstructed, p);
++        }
++    }
++
+     #[test]
+     fn apart_preserves_factored_denominators() {
+         let p: RationalPolynomial<_, _> =
+diff --git a/src/domains/rational_polynomial/arithmetic_tests.rs b/src/domains/rational_polynomial/arithmetic_tests.rs
+new file mode 100644
+index 0000000..ffc17f5
+--- /dev/null
++++ b/src/domains/rational_polynomial/arithmetic_tests.rs
+@@ -0,0 +1,275 @@
++//! Arithmetic shortcuts must also work for publicly constructible, unreduced
++//! rational polynomials and coefficient domains other than the integers.
++
++use super::*;
++use crate::{
++    atom::{Atom, AtomCore},
++    domains::rational::Q,
++    parse, symbol,
++};
++
++fn fixture<R>(
++    ring: &R,
++    variables: &Arc<Vec<PolyVariable>>,
++    numerator: Atom,
++    denominator: Atom,
++    reduce: bool,
++) -> RationalPolynomial<R, u16>
++where
++    R: EuclideanDomain + PolynomialGCD<u16>,
++    RationalPolynomial<R, u16>: FromNumeratorAndDenominator<R, R, u16>,
++{
++    let convert = |atom: Atom| {
++        atom.to_polynomial::<_, u16>(&Z, Some(variables.clone()))
++            .map_coeff(|coefficient| ring.nth(coefficient.clone()), ring.clone())
++    };
++    RationalPolynomial::from_num_den(convert(numerator), convert(denominator), ring, reduce)
++}
++
++fn arithmetic_oracle<R>(
++    left: &RationalPolynomial<R, u16>,
++    right: &RationalPolynomial<R, u16>,
++    subtract: bool,
++) -> RationalPolynomial<R, u16>
++where
++    R: EuclideanDomain + PolynomialGCD<u16>,
++    RationalPolynomial<R, u16>: FromNumeratorAndDenominator<R, R, u16>,
++{
++    let (mut left, mut right) = (left.clone(), right.clone());
++    left.unify_variables(&mut right);
++    let first = &left.numerator * &right.denominator;
++    let second = &right.numerator * &left.denominator;
++    let numerator = if subtract {
++        first - second
++    } else {
++        first + second
++    };
++    RationalPolynomial::from_num_den(
++        numerator,
++        &left.denominator * &right.denominator,
++        left.numerator.ring(),
++        true,
++    )
++}
++
++fn shared_denominator_matrix<R>(ring: R)
++where
++    R: EuclideanDomain + PolynomialGCD<u16>,
++    RationalPolynomial<R, u16>: FromNumeratorAndDenominator<R, R, u16>,
++{
++    let variables = Arc::new(vec![
++        symbol!("rat_shortcut_x").into(),
++        symbol!("rat_shortcut_y").into(),
++        symbol!("rat_shortcut_unused").into(),
++    ]);
++    for (first, second, denominator, reduce) in [
++        (
++            parse!("rat_shortcut_x+rat_shortcut_y"),
++            parse!("1-rat_shortcut_x"),
++            parse!("rat_shortcut_y+1"),
++            true,
++        ),
++        (
++            parse!("rat_shortcut_x+1"),
++            parse!("(rat_shortcut_x+1)*rat_shortcut_y"),
++            parse!("(rat_shortcut_x+1)*(rat_shortcut_y+1)"),
++            false,
++        ),
++        (
++            parse!("3*rat_shortcut_x+6"),
++            parse!("-3*rat_shortcut_x-6"),
++            parse!("6*(rat_shortcut_y+1)"),
++            false,
++        ),
++        (
++            parse!("rat_shortcut_x+1"),
++            parse!("rat_shortcut_y-1"),
++            parse!("1"),
++            true,
++        ),
++    ] {
++        let left = fixture(&ring, &variables, first, denominator.clone(), reduce);
++        let right = fixture(&ring, &variables, second, denominator, reduce);
++        assert_eq!(left.denominator, right.denominator);
++        let inputs = (left.clone(), right.clone());
++        assert_eq!(&left + &right, arithmetic_oracle(&left, &right, false));
++        assert_eq!(&left - &right, arithmetic_oracle(&left, &right, true));
++        assert_eq!(
++            left.clone() - right.clone(),
++            arithmetic_oracle(&left, &right, true)
++        );
++        let zero = &left - &left;
++        assert!(zero.is_zero());
++        assert!(zero.denominator.is_one());
++        assert_eq!(zero.numerator.variables(), &variables);
++        assert_eq!(zero.denominator.variables(), &variables);
++        assert_eq!((left, right), inputs);
++    }
++
++    // Equal mathematical denominators reach the shortcut after the existing
++    // variable unification, not by comparing diagnostic names or indices.
++    let reordered = Arc::new(vec![
++        variables[1].clone(),
++        variables[0].clone(),
++        variables[2].clone(),
++    ]);
++    let left = fixture(
++        &ring,
++        &variables,
++        parse!("rat_shortcut_x+1"),
++        parse!("rat_shortcut_y+2"),
++        true,
++    );
++    let right = fixture(
++        &ring,
++        &reordered,
++        parse!("rat_shortcut_y-1"),
++        parse!("rat_shortcut_y+2"),
++        true,
++    );
++    for (actual, expected) in [
++        (&left + &right, arithmetic_oracle(&left, &right, false)),
++        (&left - &right, arithmetic_oracle(&left, &right, true)),
++    ] {
++        assert_eq!(actual, expected);
++        assert_eq!(actual.numerator.variables(), &variables);
++        assert_eq!(actual.denominator.variables(), &variables);
++    }
++
++    // Keep the non-equal-denominator path under the same independent oracle.
++    let other = fixture(
++        &ring,
++        &variables,
++        parse!("rat_shortcut_y+1"),
++        parse!("rat_shortcut_x+2"),
++        true,
++    );
++    assert_eq!(&left + &other, arithmetic_oracle(&left, &other, false));
++    assert_eq!(&left - &other, arithmetic_oracle(&left, &other, true));
++}
++
++fn parameter_derivative_matrix<R>(ring: R)
++where
++    R: EuclideanDomain + PolynomialGCD<u16>,
++    RationalPolynomial<R, u16>: FromNumeratorAndDenominator<R, R, u16>,
++{
++    let variables = Arc::new(vec![
++        symbol!("rat_shortcut_y").into(),
++        symbol!("rat_shortcut_x").into(),
++        symbol!("rat_shortcut_unused").into(),
++    ]);
++    for (numerator, denominator, reduce) in [
++        (
++            parse!(
++                "rat_shortcut_x^3+2*rat_shortcut_y*rat_shortcut_x^2+rat_shortcut_y^2*rat_shortcut_x+1"
++            ),
++            parse!("(rat_shortcut_y+1)^2"),
++            true,
++        ),
++        (
++            parse!("rat_shortcut_x^3+1"),
++            parse!("6*(rat_shortcut_y+1)"),
++            true,
++        ),
++        (
++            parse!("(rat_shortcut_y+1)*rat_shortcut_x^2"),
++            parse!("(rat_shortcut_y+1)^2"),
++            false,
++        ),
++        (
++            parse!("rat_shortcut_x^17"),
++            parse!("rat_shortcut_y+1"),
++            true,
++        ),
++        (parse!("1"), parse!("rat_shortcut_y+1"), true),
++        (
++            parse!("rat_shortcut_x^3+rat_shortcut_y"),
++            parse!("rat_shortcut_x+rat_shortcut_y+1"),
++            true,
++        ),
++    ] {
++        let input = fixture(&ring, &variables, numerator, denominator, reduce);
++        let original = input.clone();
++        for variable in 0..variables.len() {
++            let expected = RationalPolynomial::from_num_den(
++                &input.numerator.derivative(variable) * &input.denominator
++                    - &input.numerator * &input.denominator.derivative(variable),
++                &input.denominator * &input.denominator,
++                &ring,
++                true,
++            );
++            let actual = input.derivative(variable);
++            assert_eq!(actual, expected);
++            assert_eq!(actual.numerator.variables(), &variables);
++            assert_eq!(actual.denominator.variables(), &variables);
++        }
++        assert_eq!(input, original);
++    }
++}
++
++#[test]
++fn integer_shared_denominators_normalize_cancellations_and_unreduced_inputs() {
++    shared_denominator_matrix(Z);
++}
++
++#[test]
++fn rational_shared_denominators_normalize_cancellations_and_unreduced_inputs() {
++    // Symbolica represents Q-rational functions over Z; there is no
++    // RationalPolynomial<Q> constructor. Exercise its Q -> Z boundary.
++    let variables = Arc::new(vec![
++        symbol!("rat_shortcut_x").into(),
++        symbol!("rat_shortcut_y").into(),
++    ]);
++    for reduce in [false, true] {
++        let make = |numerator: Atom| {
++            RationalPolynomial::from_num_den(
++                numerator.to_polynomial::<_, u16>(&Q, Some(variables.clone())),
++                parse!("(rat_shortcut_y+1)/5").to_polynomial::<_, u16>(&Q, Some(variables.clone())),
++                &Z,
++                reduce,
++            )
++        };
++        let left = make(parse!("(rat_shortcut_x+rat_shortcut_y)/3"));
++        let right = make(parse!("(1-rat_shortcut_x)/3"));
++        assert_eq!(left.denominator, right.denominator);
++        assert_eq!(&left + &right, arithmetic_oracle(&left, &right, false));
++        assert_eq!(&left - &right, arithmetic_oracle(&left, &right, true));
++        assert!((&left - &left).is_zero());
++    }
++}
++
++#[test]
++fn finite_field_shared_denominators_normalize_cancellations_and_unreduced_inputs() {
++    shared_denominator_matrix(super::super::finite_field::Zp::new(17));
++}
++
++#[test]
++fn integer_parameter_derivatives_normalize_exposed_content() {
++    parameter_derivative_matrix(Z);
++}
++
++#[test]
++fn rational_parameter_derivatives_normalize_exposed_content() {
++    let variables = Arc::new(vec![
++        symbol!("rat_shortcut_x").into(),
++        symbol!("rat_shortcut_y").into(),
++    ]);
++    for reduce in [false, true] {
++        let input = RationalPolynomial::from_num_den(
++            parse!("(rat_shortcut_x^3+1)/7").to_polynomial::<_, u16>(&Q, Some(variables.clone())),
++            parse!("6*(rat_shortcut_y+1)/5").to_polynomial::<_, u16>(&Q, Some(variables.clone())),
++            &Z,
++            reduce,
++        );
++        let expected: RationalPolynomial<_, u16> = parse!(
++            "5*rat_shortcut_x^2/(14*(rat_shortcut_y+1))"
++        )
++        .to_rational_polynomial(&Q, &Z, Some(variables.clone()));
++        assert_eq!(input.derivative(0), expected);
++    }
++}
++
++#[test]
++fn finite_field_parameter_derivatives_keep_characteristic_cancellation() {
++    parameter_derivative_matrix(super::super::finite_field::Zp::new(17));
++}
+diff --git a/src/poly/gcd.rs b/src/poly/gcd.rs
+index 64950e8..e0a42ec 100755
+--- a/src/poly/gcd.rs
++++ b/src/poly/gcd.rs
+@@ -35,6 +35,8 @@ use super::polynomial::{
+ };
+ use super::univariate::{DenseFiniteFieldRootContext, DenseRootPrimeField};
+ 
++mod rational_division;
++
+ #[cfg(feature = "binary_size")]
+ type ModularGcdFieldWorkspace = u64;
+ #[cfg(not(feature = "binary_size"))]
+@@ -7602,6 +7604,13 @@ impl<E: PositiveExponent> PolynomialGCD<E> for IntegerRing {
+ }
+ 
+ impl<E: PositiveExponent> PolynomialGCD<E> for RationalField {
++    fn try_div_exact(
++        dividend: &MultivariatePolynomial<Self, E>,
++        divisor: &MultivariatePolynomial<Self, E>,
++    ) -> Option<MultivariatePolynomial<Self, E>> {
++        rational_division::try_div_exact(dividend, divisor)
++    }
++
+     fn heuristic_gcd(
+         _a: &MultivariatePolynomial<Self, E>,
+         _b: &MultivariatePolynomial<Self, E>,
+diff --git a/src/poly/gcd/rational_division.rs b/src/poly/gcd/rational_division.rs
+new file mode 100644
+index 0000000..0de705e
+--- /dev/null
++++ b/src/poly/gcd/rational_division.rs
+@@ -0,0 +1,218 @@
++//! Exact Q-polynomial division through a primitive integer divisor.
++//!
++//! This plan serves the coefficient-domain `try_div_exact` API. Ring-generic
++//! `try_div` remains the unmodified fallback and does not call this dispatch.
++
++use crate::domains::integer::{Integer, IntegerRing, Z};
++use crate::domains::rational::{Q, Rational, RationalField};
++use crate::domains::{EuclideanDomain, Ring, RingOps};
++use crate::poly::PositiveExponent;
++use crate::poly::polynomial::MultivariatePolynomial;
++
++// Clearing coefficient denominators has a linear setup cost. Keep short
++// speculative divisions on the ordinary heap path, and bound the coefficient
++// growth caused by large collections of unrelated rational denominators.
++const MIN_DIVIDEND_TERMS: usize = 32;
++const MIN_DIVISOR_TERMS: usize = 4;
++const MAX_COMMON_DENOMINATOR_BITS: u64 = 4096;
++
++pub(super) fn try_div_exact<E: PositiveExponent>(
++    dividend: &MultivariatePolynomial<RationalField, E>,
++    divisor: &MultivariatePolynomial<RationalField, E>,
++) -> Option<MultivariatePolynomial<RationalField, E>> {
++    if dividend.nterms() < MIN_DIVIDEND_TERMS || divisor.nterms() < MIN_DIVISOR_TERMS {
++        return dividend.try_div(divisor);
++    }
++    if dividend.variables() != divisor.variables() {
++        let mut dividend = dividend.clone();
++        let mut divisor = divisor.clone();
++        dividend.unify_variables(&mut divisor);
++        return try_div_exact(&dividend, &divisor);
++    }
++    if (0..dividend.nvars()).any(|variable| dividend.degree(variable) < divisor.degree(variable)) {
++        return None;
++    }
++
++    let Some(dividend_denominator) = common_denominator(dividend) else {
++        return dividend.try_div(divisor);
++    };
++    let Some(divisor_denominator) = common_denominator(divisor) else {
++        return dividend.try_div(divisor);
++    };
++    let dividend_integer = clear_denominator(dividend, &dividend_denominator);
++    let divisor_integer = clear_denominator(divisor, &divisor_denominator);
++    let divisor_content = divisor_integer.content();
++    let divisor_primitive = if divisor_content.is_one() {
++        divisor_integer
++    } else {
++        divisor_integer.div_coeff(&divisor_content)
++    };
++
++    // Gauss's lemma: a primitive Z-polynomial divides an integer polynomial
++    // over Q exactly when it divides it over Z. Removing the divisor content
++    // is essential: (x+1)/(2*x+2) is divisible over Q, but not over Z.
++    let quotient = dividend_integer.try_div(&divisor_primitive)?;
++    let scale = Rational::from((divisor_denominator, dividend_denominator * &divisor_content));
++    Some(if scale.is_integer() {
++        quotient.map_coeff(
++            |coefficient| Q.to_element_numerator(coefficient * scale.numerator_ref()),
++            Q,
++        )
++    } else {
++        quotient.map_coeff(
++            |coefficient| Q.mul(&Q.to_element_numerator(coefficient.clone()), &scale),
++            Q,
++        )
++    })
++}
++
++fn common_denominator<E: PositiveExponent>(
++    polynomial: &MultivariatePolynomial<RationalField, E>,
++) -> Option<Integer> {
++    let mut denominator = Integer::one();
++    for coefficient in &polynomial.coefficients {
++        let next = coefficient.denominator_ref();
++        if next.is_one() || next == &denominator {
++            continue;
++        }
++        let gcd = Z.gcd(&denominator, next);
++        denominator = Z.exact_div_owned(denominator, &gcd) * next;
++        if denominator.significant_bits() > MAX_COMMON_DENOMINATOR_BITS {
++            return None;
++        }
++    }
++    Some(denominator)
++}
++
++fn clear_denominator<E: PositiveExponent>(
++    polynomial: &MultivariatePolynomial<RationalField, E>,
++    denominator: &Integer,
++) -> MultivariatePolynomial<IntegerRing, E> {
++    polynomial.map_coeff(
++        |coefficient| {
++            if denominator.is_one() {
++                coefficient.numerator_ref().clone()
++            } else {
++                coefficient.numerator_ref()
++                    * &Z.exact_div_owned(denominator.clone(), coefficient.denominator_ref())
++            }
++        },
++        Z,
++    )
++}
++
++#[cfg(test)]
++mod tests {
++    use std::sync::Arc;
++
++    use super::*;
++    use crate::atom::Atom;
++    use crate::poly::PolyVariable;
++    use crate::prelude::{AtomCore, ParseSettings, Symbol};
++
++    fn polynomial(expression: &str) -> MultivariatePolynomial<RationalField, u16> {
++        let variables = Arc::new(
++            ["x", "y", "z"]
++                .map(|name| PolyVariable::Symbol(Symbol::parse(name, "rational_division").unwrap()))
++                .to_vec(),
++        );
++        Atom::parse(expression, "rational_division", ParseSettings::default())
++            .unwrap()
++            .to_polynomial(&Q, Some(variables))
++    }
++
++    fn dense(seed: usize, denominator: usize) -> MultivariatePolynomial<RationalField, u16> {
++        let terms = (0..=4)
++            .flat_map(|x| {
++                (0..=4 - x).flat_map(move |y| {
++                    (0..=4 - x - y).map(move |z| {
++                        let numerator = (1 + (17 * x + 11 * y + 5 * z + seed) % 29) as i64;
++                        let numerator = if (x + y + z + seed) % 3 == 0 {
++                            -numerator
++                        } else {
++                            numerator
++                        };
++                        // Distinct denominators, rather than merely one
++                        // common scalar denominator for the whole input.
++                        let denominator = 1 + (x + 3 * y + 7 * z + denominator) % 11;
++                        format!("({numerator}/{denominator})*x^{x}*y^{y}*z^{z}")
++                    })
++                })
++            })
++            .collect::<Vec<_>>()
++            .join("+");
++        polynomial(&terms)
++    }
++
++    #[test]
++    fn mixed_denominators_and_signed_content_reconstruct_exactly() {
++        for seed in 0..8 {
++            let quotient = dense(seed, 3).mul_coeff(Rational::from((-7, 13)));
++            let divisor = dense(seed + 1, 5).mul_coeff(Rational::from((17, 19)));
++            let dividend = &quotient * &divisor;
++            assert_eq!(try_div_exact(&dividend, &divisor), Some(quotient.clone()));
++            assert_eq!(dividend.try_div_exact(&divisor), Some(quotient));
++            assert_eq!(
++                try_div_exact(&dividend, &divisor),
++                dividend.try_div(&divisor)
++            );
++        }
++    }
++
++    #[test]
++    fn primitive_divisor_allows_fractional_quotient_content() {
++        let divisor = dense(7, 0).mul_coeff(Rational::from(210));
++        let expected = dense(2, 6).mul_coeff(Rational::from((-1, 330)));
++        let dividend = &divisor * &expected;
++        assert_eq!(try_div_exact(&dividend, &divisor), Some(expected));
++    }
++
++    #[test]
++    fn nondivision_trivial_cases_and_large_denominator_fallback() {
++        let divisor = dense(1, 5);
++        let dividend = &divisor * &dense(3, 2) + polynomial("1");
++        assert_eq!(try_div_exact(&dividend, &divisor), None);
++        let zero = divisor.zero();
++        assert_eq!(try_div_exact(&divisor, &zero), None);
++        assert_eq!(try_div_exact(&zero, &divisor), Some(zero.clone()));
++        assert_eq!(try_div_exact(&zero, &zero), None);
++        let constant = polynomial("-7/11");
++        assert_eq!(
++            try_div_exact(&divisor, &constant),
++            divisor.try_div(&constant)
++        );
++
++        let huge = Integer::from(2).pow(MAX_COMMON_DENOMINATOR_BITS + 1) + Integer::one();
++        let divisor = dense(1, 5).mul_coeff(Rational::from((Integer::one(), huge)));
++        let dividend = &divisor * &dense(3, 2);
++        assert!(common_denominator(&divisor).is_none());
++        assert_eq!(
++            try_div_exact(&dividend, &divisor),
++            dividend.try_div(&divisor)
++        );
++    }
++
++    #[test]
++    fn context_unification_and_sparse_high_degrees_match_generic_division() {
++        let divisor = dense(1, 0);
++        let quotient = dense(2, 1);
++        let dividend = &divisor * &quotient;
++        let mut variables = divisor.variables().as_ref().clone();
++        variables.reverse();
++        variables.push(PolyVariable::Symbol(
++            Symbol::parse("unused", "rational_division").unwrap(),
++        ));
++        let divisor = divisor.rearrange_with_growth(&variables).unwrap();
++        assert_eq!(
++            try_div_exact(&dividend, &divisor),
++            dividend.try_div(&divisor)
++        );
++
++        let divisor = polynomial("x^1024 + 2*y^512 + 3*z^256 + 7");
++        let dividend = &divisor * &polynomial("x^500 + y^100 + z^50 + 1");
++        assert_eq!(
++            try_div_exact(&dividend, &divisor),
++            dividend.try_div(&divisor)
++        );
++    }
++}
+-- 
+2.55.0
+

@@ -1,21 +1,102 @@
 # Hyperbolica-maintained Symbolica patches
 
-## Current HyperLica audit patch
+## Exponent scratch recycling, 2026-09-08
 
-The selected checkout contains the three-commit
-[`symbolica-hyperlica.patch`](symbolica-hyperlica.patch) series on top of official
-`dev` revision `0b57776bf911faeea7e28ea133706fb03740ffeb`. It adds generic
-rational-polynomial optimizations, factored-denominator correctness fixes,
-native partial fractions, regression tests and standalone bug reproducers.
-See [`SYMBOLICA.md`](SYMBOLICA.md) for commit/source identities, commands and
-the two unresolved upstream diagnostics. These new commits have not been
-pushed to GitHub or submitted as a PR.
+The selected source now adds [`symbolica-heap-scratch-20260908.patch`](symbolica-heap-scratch-20260908.patch)
+after the cumulative development patch. Its SHA-256 is `e8ceb492594793354a5c811a24747f2fec9237e7b35c918247eee6550494aa0d`.
+Commit `1a01bdbc166c040d176584a7c9ecd1810e73537a` produces tree `d8925723c37ec35a80a40c6b432b565d747ac29f`.
+The generic polynomial heap multiplier recycles exponent slots after duplicate
+candidates or consumed heap entries release them, avoiding scratch storage
+proportional to all visited coefficient pairs. Heap/cache keys remain immutable
+while referenced; arithmetic and output order are preserved.
 
-## Earlier `dev` integration status
+The regression failed before the fix with 65,536 retained exponent slots for
+256 rows, then passed with a linear scratch bound. All 639 native tests and
+471 port tests pass; port all-target/all-feature Clippy also passes. The native
+test command enables `native_code_generation` because upstream evaluator tests
+require it; the production feature selection is unchanged. Updated benchmark
+and qbox evidence is in [`qbox-allocation-20260908.md`](../docs/qbox-allocation-20260908.md).
 
-The audit baseline is official `dev` at
-`0b57776bf911faeea7e28ea133706fb03740ffeb`. The two improvements formerly
-carried here were already integrated upstream as:
+## Cumulative base patch, before scratch recycling
+
+The selected checkout is official upstream base
+`fb845d34bda8ccf1fedef6544d3aa46dc24944e3` plus the one-commit
+[`symbolica-hyperlica-dev-20260908.patch`](symbolica-hyperlica-dev-20260908.patch).
+Its SHA-256 is
+`7c76d4741d8eb3c2e6b75837129c898edb974857694163a2605f42fb0392a3e5`.
+The cumulative reconstruction commit is
+`df7eb980ecd3040ac0fd0bacc37b0f34d74b4701`; the active vendor tip is
+`15bd1f6d8f604582e24e6186875b2e12cfa23143`. Both produce the complete tree
+`7b1c3dde94a48d77bf072f58a54a610e9964240d`. Independent temporary-index
+application to pristine `fb845d34` reproduced that tree with strict whitespace
+validation and no vendor worktree/index changes.
+
+The new upstream base includes powered-denominator and polynomial edge-case
+fixes from `bd29c4704eaa4ea5754330a7c43d59d2bd50e065`. The cumulative patch
+retains fraction arithmetic and coefficient-domain kernels, rational exact
+division, rational addition/derivative shortcuts, native factored-coefficient
+partial fractions, checked multiplicities and regression/benchmark examples.
+It uses upstream's constructor implementation, including its canonical-zero
+and removable zero-power-factor representation choices, plus the scalar-only
+correction from `6e20db0336fbaa2d84df22ce6ca8ff5ac259f072`.
+
+The five resolved standalone MRE examples are omitted from the current patch;
+their native unit tests and historical sources remain preserved. The new
+`examples/mre_factored_scalar.rs` is retained. Cleanup commit `15bd1f6` changes
+only those five obsolete examples and their documentation; production source,
+library tests and Cargo manifests match the tested scalar-fixed implementation.
+
+Pristine native validation passed 604/604 tests. The scalar-corrected
+implementation passed 637/637 native tests, 25 focused tests and 17 standalone
+invocations before the obsolete-example cleanup. The corrected port passed
+449 library tests, its remaining all-target checks, 79 debug and 79 release C++
+differential cases (24 normalized), and the all-targets/all-features check.
+Corrected release compilation completed; executable SHA-256 is
+`cf72945dcada1632e31dca72e883ad91997d741e755b8050af335a16963ffea4`.
+
+The final corrected matrix passed all 162 exact comparisons and repeatability
+checks, with all paired runtime ratios favoring Rust. This is measured-corpus
+evidence, not a universal or memory-parity claim; see
+[`performance-dev-20260908.md`](../docs/performance-dev-20260908.md) for timings
+and limits. The preliminary matrix measured `7094dda` before the scalar fix
+and remains separate. Historical failures or timings must not be presented as
+observations of the corrected final build.
+See [`SYMBOLICA.md`](SYMBOLICA.md) for the validation boundary and
+[`SYMBOLICA_SNAPSHOT.md`](SYMBOLICA_SNAPSHOT.md) for the current recipe.
+
+## Standalone scalar correction: already included
+
+[`symbolica-hyperlica-scalar-fix-20260908.patch`](symbolica-hyperlica-scalar-fix-20260908.patch)
+is retained as the isolated correction against pre-scalar-fix local commit
+`7094ddabc18ee535cb8dd169a4976a519f26f8c7`. Its SHA-256 is
+`535d483ac29c1688c8b75d07be719b71ded385b25e086630e668a950df5e06bf`.
+It avoids sending scalar bases with empty variable maps into polynomial
+factorization, adds eighteen scalar-only combinations to the native regression
+matrix, and includes the exact `1/2` standalone reproducer.
+
+Do not stack this artifact on the cumulative current patch: its correction is
+already included. Use the cumulative patch on pristine `fb845d34` for the
+selected source recipe. The final source archive `symbolica-final-source.tar`
+has SHA-256
+`2da5a6bc1d2ea3a6a61479f009df050105c9a2d9961f6c78ac6ed7ce4d009573`.
+
+## Preserved earlier three-commit series
+
+[`symbolica-hyperlica.patch`](symbolica-hyperlica.patch) is the unchanged
+historical series on base `0b57776bf911faeea7e28ea133706fb03740ffeb`, with
+SHA-256 `7cb664d6287ce31d13681b75c0bd4f3ec512d95d90ba8624e1c5af397ad35133`.
+Its commits are `c4433a33bbcae1639f4c391700f37278875c8da9`,
+`d016b123a4c7d463d10e3b56279e2fb66a41f75e`, and
+`e33a1fb70abe70e774dd6a55baa5a8e1f42cc8e3`; its resulting tree is
+`49dfd8a2b3e16c21ef78425c945578ce8a7815fd`.
+It preserves the old implementations, original diagnostic expectations and
+provenance. Do not apply it to the new base or stack it with the current patch.
+
+## Historical `dev` integration status
+
+The earlier audit baseline was official `dev` at
+`0b57776bf911faeea7e28ea133706fb03740ffeb`. Two improvements formerly
+carried here had already been integrated in that history as:
 
 - `4fd8443c` — `Add resultant trait for best algorithm selection per ring`;
 - `b8fa6b53` — `Use binary exponentation for rational polynomials`.
@@ -24,7 +105,9 @@ The powering commit is byte-identical to the standalone patch below. The
 resultant commit contains the same coefficient-domain trait, primitive-integer
 Ducos path, CRT path, and rational selector, with the selector's private
 organization and documentation streamlined upstream. Applying either patch to
-current `dev` correctly fails because its changes are already present.
+that baseline failed because its changes were already present. Upstream history
+has since been rewritten; these old commit IDs are historical provenance, not
+ancestry requirements for the newly selected tree.
 
 ## Standalone binary-powering patch
 
@@ -69,7 +152,8 @@ git -C vendor/symbolica apply ../symbolica-dev-resultant.patch
 ```
 
 Substitute `symbolica-dev-rational-power.patch` or `symbolica-dev.patch` as
-needed. On current `dev`, run the already-upstream focused regressions instead:
+needed. The corresponding focused regression commands used for the historical
+baseline were:
 
 ```sh
 cargo test --manifest-path vendor/symbolica/Cargo.toml \
@@ -82,7 +166,7 @@ cargo test --manifest-path vendor/symbolica/Cargo.toml --lib \
 ```
 
 The exact scalar-content `from_num_den(..., true)` regression and the F4
-same-matrix regression also pass on pristine current `dev`. Commit `bd0c137`
+same-matrix regression also passed on the pristine historical baseline. Commit `bd0c137`
 contains the formerly local factorized-`is_one` and rational-derivative
 scalar-normalization fixes, so Hyperbolica carries no workaround for either.
 
@@ -252,7 +336,8 @@ At that archived revision, Hyperbolica invoked the method on every reduced
 Euler basis because an incomplete leading ideal could also retain pure powers
 and produce a wrong finite count. Verification operated on the already reduced
 result and used Buchberger's product criterion to skip relatively-prime leading
-monomials. Current `dev` contains the native fix and needs no fallback.
+monomials. The later historical `0b57776` baseline contained the native fix and
+needed no fallback.
 
 ### Defensive fallback patch
 

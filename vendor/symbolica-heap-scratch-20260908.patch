@@ -1,0 +1,232 @@
+From 1a01bdbc166c040d176584a7c9ecd1810e73537a Mon Sep 17 00:00:00 2001
+From: Ben Ruijl <ben@ruijl.ch>
+Date: Tue, 8 Sep 2026 18:16:46 +0000
+Subject: [PATCH] Recycle exponent scratch slots in generic heap multiplication
+
+---
+ src/poly/polynomial.rs | 151 ++++++++++++++++++++++++++++++++++++-----
+ 1 file changed, 133 insertions(+), 18 deletions(-)
+
+diff --git a/src/poly/polynomial.rs b/src/poly/polynomial.rs
+index 243a6b2..8d134ce 100755
+--- a/src/poly/polynomial.rs
++++ b/src/poly/polynomial.rs
+@@ -288,6 +288,11 @@ thread_local! {
+     };
+ }
+ 
++#[cfg(test)]
++thread_local! {
++    static HEAP_MUL_SCRATCH_SLOTS: Cell<usize> = const { Cell::new(0) };
++}
++
+ impl TotalDegreeRankTable {
+     #[inline(always)]
+     fn choose(&self, n: usize, k: usize) -> usize {
+@@ -3894,9 +3899,16 @@ impl<F: Ring, E: Exponent> MultivariatePolynomial<F, E, LexOrder> {
+ 
+         let monomials = UnsafeCell::new((self.nvars(), monomials));
+ 
+-        /// In order to prevent allocations of the exponents, store them in a single
+-        /// append-only vector and use a key to index into it. For performance,
+-        /// we use an unsafe cell.
++        // A slot remains immutable while its key is in the heap/cache, or while
++        // the popped monomial is still needed for output. Duplicate candidates
++        // and fully consumed monomials release their slots for the next product.
++        // Retaining every visited product here makes scratch grow with the
++        // Cartesian product, even when almost all monomials coalesce.
++        let mut free_monomials = Vec::new();
++
++        /// Exponents live in a slot arena indexed by heap/cache keys. Mutation
++        /// through the unsafe cell is restricted to unreferenced slots and
++        /// appending storage; comparisons never overlap a mutation.
+         #[derive(Clone, Copy)]
+         struct Key<'a, E: Exponent> {
+             index: usize,
+@@ -3989,13 +4001,24 @@ impl<F: Ring, E: Exponent> MultivariatePolynomial<F, E, LexOrder> {
+                 if i + 1 < self.nterms() && (j == 0 || merged_index[j - 1] > i + 1) {
+                     let m = unsafe {
+                         let b = &mut *monomials.get();
+-                        let index = b.1.len();
+-                        b.1.extend(
+-                            self.exponents(i + 1)
+-                                .iter()
+-                                .zip(rhs.exponents(j))
+-                                .map(|(e1, e2)| *e1 + *e2),
+-                        );
++                        let index = if let Some(index) = free_monomials.pop() {
++                            for (target, (e1, e2)) in b.1[index..index + b.0]
++                                .iter_mut()
++                                .zip(self.exponents(i + 1).iter().zip(rhs.exponents(j)))
++                            {
++                                *target = *e1 + *e2;
++                            }
++                            index
++                        } else {
++                            let index = b.1.len();
++                            b.1.extend(
++                                self.exponents(i + 1)
++                                    .iter()
++                                    .zip(rhs.exponents(j))
++                                    .map(|(e1, e2)| *e1 + *e2),
++                            );
++                            index
++                        };
+ 
+                         Key {
+                             index,
+@@ -4005,6 +4028,9 @@ impl<F: Ring, E: Exponent> MultivariatePolynomial<F, E, LexOrder> {
+ 
+                     if let Some(e) = cache.get_mut(&m) {
+                         e.push((i + 1, j));
++                        // The existing key owns its slot; this candidate was
++                        // never inserted and can be overwritten immediately.
++                        free_monomials.push(m.index);
+                     } else {
+                         h.push(Reverse(m)); // only add when new
+                         if let Some(mut qq) = q_cache.pop() {
+@@ -4021,13 +4047,24 @@ impl<F: Ring, E: Exponent> MultivariatePolynomial<F, E, LexOrder> {
+                 if j + 1 < rhs.nterms() && !in_heap[j + 1] {
+                     let m = unsafe {
+                         let b = &mut *monomials.get();
+-                        let index = b.1.len();
+-                        b.1.extend(
+-                            self.exponents(i)
+-                                .iter()
+-                                .zip(rhs.exponents(j + 1))
+-                                .map(|(e1, e2)| *e1 + *e2),
+-                        );
++                        let index = if let Some(index) = free_monomials.pop() {
++                            for (target, (e1, e2)) in b.1[index..index + b.0]
++                                .iter_mut()
++                                .zip(self.exponents(i).iter().zip(rhs.exponents(j + 1)))
++                            {
++                                *target = *e1 + *e2;
++                            }
++                            index
++                        } else {
++                            let index = b.1.len();
++                            b.1.extend(
++                                self.exponents(i)
++                                    .iter()
++                                    .zip(rhs.exponents(j + 1))
++                                    .map(|(e1, e2)| *e1 + *e2),
++                            );
++                            index
++                        };
+ 
+                         Key {
+                             index,
+@@ -4037,6 +4074,9 @@ impl<F: Ring, E: Exponent> MultivariatePolynomial<F, E, LexOrder> {
+ 
+                     if let Some(e) = cache.get_mut(&m) {
+                         e.push((i, j + 1));
++                        // The existing key owns its slot; this candidate was
++                        // never inserted and can be overwritten immediately.
++                        free_monomials.push(m.index);
+                     } else {
+                         h.push(Reverse(m)); // only add when new
+ 
+@@ -4063,8 +4103,13 @@ impl<F: Ring, E: Exponent> MultivariatePolynomial<F, E, LexOrder> {
+                         .extend_from_slice(&b.1[cur_mon.0.index..cur_mon.0.index + b.0]);
+                 }
+             }
++            // cur_mon has left both collections, and its output exponents
++            // have now been copied (or its coefficient canceled to zero).
++            free_monomials.push(cur_mon.0.index);
+         }
+ 
++        #[cfg(test)]
++        HEAP_MUL_SCRATCH_SLOTS.set(unsafe { (&*monomials.get()).1.len() / self.nvars() });
+         res
+     }
+ 
+@@ -6990,7 +7035,7 @@ impl<R: Ring + FractionNormalization + EuclideanDomain, E: Exponent, O: Monomial
+ mod test {
+     use std::{collections::BTreeMap, mem::size_of, sync::Arc};
+ 
+-    use rand::{SeedableRng, rngs::StdRng};
++    use rand::{Rng, SeedableRng, rngs::StdRng};
+ 
+     #[cfg(feature = "integer-gmp")]
+     use crate::domains::integer::MultiPrecisionInteger;
+@@ -7811,6 +7856,76 @@ mod test {
+         assert_eq!(large.heap_mul_result_capacity(&large), large.nterms());
+     }
+ 
++    #[test]
++    fn generic_heap_multiplication_recycles_exponent_scratch() {
++        let mut variables = packed_row_merge_variables().as_ref().clone();
++        variables.extend([
++            symbol!("x9").into(),
++            symbol!("x10").into(),
++            symbol!("x11").into(),
++            symbol!("x12").into(),
++            symbol!("x13").into(),
++            symbol!("x14").into(),
++        ]);
++        let mut left = MultivariatePolynomial::new(&Z, Some(256), Arc::new(variables));
++        for degree in 0..256u16 {
++            left.append_monomial(1.into(), &[degree; 14]);
++        }
++        let expected = reference_integer_product(&left, &left);
++        super::HEAP_MUL_SCRATCH_SLOTS.set(0);
++        let actual = left.heap_mul(&left);
++        let slots = super::HEAP_MUL_SCRATCH_SLOTS.get();
++        assert_eq!(actual, expected);
++        assert_eq!(actual.nterms(), 511);
++        assert!(slots > 0, "the generic heap path must be exercised");
++        assert!(
++            slots <= 2 * left.nterms() + 2,
++            "retained {slots} exponent slots for 256 rows"
++        );
++    }
++
++    #[test]
++    fn generic_heap_recycling_preserves_collisions_cancellation_and_domains() {
++        let mut variables = packed_row_merge_variables().as_ref().clone();
++        variables.push(symbol!("x9").into());
++        let variables = Arc::new(variables);
++        let mut rng = StdRng::seed_from_u64(0x5142_4f58);
++        for round in 0..12 {
++            let mut left = MultivariatePolynomial::new(&Z, None, variables.clone());
++            let mut right = left.zero();
++            for _ in 0..48 {
++                let exponents: Vec<u16> = (0..9).map(|_| rng.random_range(0..3)).collect();
++                left.append_monomial(rng.random_range(-4i64..=4).into(), &exponents);
++                right.append_monomial(rng.random_range(-4i64..=4).into(), &exponents);
++            }
++            let expected = reference_integer_product(&left, &right);
++            assert_eq!(left.heap_mul(&right), expected, "round {round}");
++            assert_eq!(right.heap_mul(&left), expected, "swapped round {round}");
++            let field = Zp::new(17);
++            let left_mod = left.map_coeff(|c| field.nth(c.clone()), field.clone());
++            let right_mod = right.map_coeff(|c| field.nth(c.clone()), field.clone());
++            let expected_mod = expected.map_coeff(|c| field.nth(c.clone()), field.clone());
++            assert_eq!(left_mod.heap_mul(&right_mod), expected_mod);
++            let mut diagonal = left.zero();
++            diagonal.append_monomial(1.into(), &[0; 9]);
++            diagonal.append_monomial(1.into(), &[1; 9]);
++            let mut alternating = left.zero();
++            for degree in 0..32u16 {
++                alternating.append_monomial(
++                    if degree % 2 == 0 {
++                        1.into()
++                    } else {
++                        (-1).into()
++                    },
++                    &[degree; 9],
++                );
++            }
++            let product = diagonal.heap_mul(&alternating);
++            assert_eq!(product, reference_integer_product(&diagonal, &alternating));
++            assert_eq!(product.nterms(), 2);
++        }
++    }
++
+     #[test]
+     fn mixed_radix_dense_dispatch_rejects_polybench_sparse_boxes() {
+         assert!(!mixed_radix_dense_work_is_bounded(5_025_500, 47, 48));
+-- 
+2.55.0
+

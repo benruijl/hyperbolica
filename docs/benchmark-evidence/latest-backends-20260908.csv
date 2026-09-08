@@ -1,0 +1,11 @@
+case,workers,status,symbolica_build,flint_seconds,flint_peak_mib,symbolica_seconds,symbolica_peak_mib,flint_over_symbolica,comparison
+tst0,8,measured,scratch fix + rolling queue,0.366234551,59.04296875,0.083519203,31.6015625,4.385034074139812,archived_outputs_equal
+tst1,8,measured,scratch fix + rolling queue,1.956795071,92.015625,1.270852109,147.8359375,1.539750421895865,archived_outputs_equal
+tst2,8,measured,scratch fix + rolling queue,19.651734835,480.53515625,16.983352475,198.8671875,1.157117528116309,archived_outputs_equal
+tst3,8,measured,scratch fix + rolling queue,258.327733097,7897.34765625,281.873777532,1347.67578125,0.9164659989263212,archived_outputs_equal
+parity_face,8,measured,scratch fix + rolling queue,5.656392399,87.27734375,6.105195418,317.1328125,0.9264883450451413,archived_outputs_equal
+findroots21_a,8,measured,scratch fix + rolling queue,0.124179519,30.203125,0.013887247,14.4453125,8.941982453397712,symbolically_equal
+findroots21_b,8,measured,scratch fix + rolling queue,0.042974065,30.26953125,0.009521798,14.5234375,4.513230064321886,symbolically_equal
+tst4,8,ok / ok (symbolically equal),earlier batch build,4314.39837413,141355.03515625,7367.829463559,18674.35546875,0.5855725075436189,symbolically_equal
+qbox_one_mass,8,running / running,scratch fix + rolling queue,14612.021731,87147.74609375,2212.266214,12818.5546875,,pending
+qbox_collaborator,8,queued / queued,scratch fix + rolling queue,,,,,,pending

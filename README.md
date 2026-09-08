@@ -47,9 +47,10 @@ Rust 1.89 or newer is required.
 ```sh
 git clone --branch dev --single-branch \
   https://github.com/symbolica-dev/symbolica.git vendor/symbolica
-git -C vendor/symbolica checkout 0b57776bf911faeea7e28ea133706fb03740ffeb
-git -C vendor/symbolica switch -c codex/hyperlica-rational-fastpaths
-git -C vendor/symbolica am ../symbolica-hyperlica.patch
+git -C vendor/symbolica checkout fb845d34bda8ccf1fedef6544d3aa46dc24944e3
+git -C vendor/symbolica switch -c codex/hyperlica-dev-20260908
+git -C vendor/symbolica am ../symbolica-hyperlica-dev-20260908.patch
+git -C vendor/symbolica am ../symbolica-heap-scratch-20260908.patch
 scripts/check-pure-symbolica.sh
 cargo build --release
 cargo test --locked --lib --tests --bins --examples
@@ -270,9 +271,10 @@ review and retain/wrap/replace decisions are in
 
 ## License
 
-Hyperbolica-authored code is MIT licensed. Symbolica is vendored under
-separate terms that require express prior permission to copy or distribute
-its code. Do not publish this repository or a built wheel until that
-permission is obtained and recorded. See
+Hyperbolica-authored code is MIT licensed. The selected Symbolica checkout
+provides the separate Symbolica Source-Available License 1.0; the archived
+source copy retains its own notice. Runtime rights are not included or
+transferred by Hyperbolica. This checkout contains local Symbolica modifications;
+check the applicable terms and permissions before publishing it or built artifacts. See
 [`DISTRIBUTION-LICENSE.md`](DISTRIBUTION-LICENSE.md) and
 `vendor/symbolica/License.md` in the selected checkout.
