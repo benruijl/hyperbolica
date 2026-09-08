@@ -31,7 +31,7 @@ Run the dependency and source audit with:
 scripts/check-pure-symbolica.sh
 ```
 
-The exact clean upstream revision and checkout command are recorded in
+The exact upstream base, local patch series, and checkout command are recorded in
 [`vendor/SYMBOLICA_SNAPSHOT.md`](vendor/SYMBOLICA_SNAPSHOT.md). The former
 `vendor/symbolica-src` source copy is retained only as a historical audit
 artifact and is not selected by Cargo.
@@ -48,7 +48,9 @@ Rust 1.89 or newer is required.
 git clone --branch dev --single-branch \
   https://github.com/symbolica-dev/symbolica.git vendor/symbolica
 git -C vendor/symbolica checkout 0b57776bf911faeea7e28ea133706fb03740ffeb
-git -C vendor/symbolica switch -C dev
+git -C vendor/symbolica switch -c codex/hyperlica-rational-fastpaths
+git -C vendor/symbolica am ../symbolica-hyperlica.patch
+scripts/check-pure-symbolica.sh
 cargo build --release
 cargo test --locked --lib --tests --bins --examples
 cargo test --locked --benches

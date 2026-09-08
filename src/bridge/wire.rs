@@ -9,7 +9,7 @@ use symbolica::prelude::{
     Atom, AtomCore, Exponent, MonomialOrder, MultivariatePolynomial, Rational, Ring,
 };
 
-use crate::core::{Poly, PolyCtx, Rat};
+use crate::core::{FactoredRat, Poly, PolyCtx, Rat};
 use crate::error::{Error, Result};
 use crate::integrator::{RegTerm, RegTermSym, Regulator, RegulatorSym, regkey_structural_cmp};
 use crate::reduce::MzvReductionTable;
@@ -281,6 +281,11 @@ pub(super) fn result_response(op: &str, ctx: &PolyCtx, result: impl WireValue) -
 pub(super) fn parse_wire_rat(ctx: &Arc<PolyCtx>, expression: &str) -> Result<Rat> {
     let atom = legacy::parse_expression(expression)?;
     Rat::from_atom(ctx.clone(), atom.as_view())
+}
+
+pub(super) fn parse_wire_factored_rat(ctx: &Arc<PolyCtx>, expression: &str) -> Result<FactoredRat> {
+    let atom = legacy::parse_expression(expression)?;
+    FactoredRat::from_atom(ctx.clone(), atom.as_view())
 }
 
 pub(super) fn parse_wire_poly(ctx: &Arc<PolyCtx>, expression: &str) -> Result<Poly> {

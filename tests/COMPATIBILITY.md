@@ -58,6 +58,10 @@ exactly after the same narrow metadata ignores. The C++ oracle runs with all
 Symbolica license variables removed, while the Rust backend and semantic
 parser may inherit the caller's license.
 
+Full-integration fixtures use the explicit `result[].coef` semantic field to
+canonicalize every coefficient while retaining the shuffle keys and response
+envelope for exact comparison.
+
 `scripts/benchmark-compare.sh` builds the LTO Rust release binary, validates
 fixture-controlled response equality, and measures adjacent balanced backend
 pairs with monotonic wall time, process CPU time, and peak RSS. Process startup

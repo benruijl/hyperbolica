@@ -206,6 +206,12 @@ impl PolyCtx {
         self.variables.as_slice()
     }
 
+    /// Compare a native polynomial's shared map without scanning every
+    /// indeterminate when it was constructed in this context.
+    pub(crate) fn has_variable_map(&self, variables: &Arc<Vec<PolyVariable>>) -> bool {
+        Arc::ptr_eq(&self.variables, variables) || self.variables.as_ref() == variables.as_ref()
+    }
+
     /// Return the context variables as Symbolica symbols.
     pub fn symbol_variables(&self) -> Result<Vec<Symbol>> {
         self.variables
@@ -228,6 +234,6 @@ impl PolyCtx {
     /// same variable can acquire a qualified or stripped diagnostic name
     /// depending on which Atom-native constructor supplied it.
     pub fn is_compatible_with(&self, other: &Self) -> bool {
-        self.variables == other.variables
+        self.has_variable_map(&other.variables)
     }
 }

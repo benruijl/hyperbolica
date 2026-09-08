@@ -1,5 +1,6 @@
 //! Symbolica-native decomposition of an already factored denominator.
 
+use symbolica::domains::factorized_rational_polynomial::FromNumeratorAndFactorizedDenominator;
 use symbolica::domains::rational_polynomial::FromNumeratorAndDenominator;
 use symbolica::prelude::*;
 
@@ -12,31 +13,16 @@ type NativeFactoredRat = FactorizedRationalPolynomial<IntegerRing, u16>;
 
 /// Clear coefficient denominators and split off the exact rational unit.
 ///
-/// Symbolica exposes all primitives needed here (`Integer::lcm`, mapped
-/// coefficients, and polynomial content). Keeping each denominator's unit
+/// Symbolica exposes all primitives needed here (mapped coefficients and
+/// polynomial content). Keeping each denominator's unit
 /// separate is important: applying one common scale to factors with different
 /// powers would change the represented rational function.
-fn primitive_integer(polynomial: &Poly) -> (IntegerPoly, Rational) {
+pub(super) fn primitive_integer(polynomial: &Poly) -> (IntegerPoly, Rational) {
     debug_assert!(!polynomial.is_zero());
-    let denominator_lcm = polynomial
-        .inner()
-        .coefficients
-        .iter()
-        .fold(Integer::one(), |lcm, coefficient| {
-            lcm.lcm(coefficient.denominator_ref())
-        });
-    let integer = polynomial.inner().map_coeff(
-        |coefficient| {
-            Z.mul(
-                coefficient.numerator_ref(),
-                &Z.quot(&denominator_lcm, coefficient.denominator_ref()),
-            )
-        },
-        Z,
-    );
+    let (integer, scalar) = polynomial.integer_associate();
     let content = integer.content();
     let mut primitive = integer.div_coeff(&content);
-    let mut unit = Rational::from((content, denominator_lcm));
+    let mut unit = Q.mul(&scalar, &Rational::from(content));
     if primitive.lcoeff().is_negative() {
         primitive = -primitive;
         unit = -unit;
@@ -75,6 +61,27 @@ fn component_to_rat(
 }
 
 impl FactoredRat {
+    /// Transfer deferred Q-polynomial bases to Symbolica without expanding
+    /// their powers. Native construction owns coefficient-unit normalization.
+    pub(crate) fn to_native_factored(&self) -> Result<NativeFactoredRat> {
+        let denominators = self
+            .den_factors()
+            .iter()
+            .map(|factor| {
+                Ok((
+                    factor.base.inner().clone(),
+                    usize::try_from(factor.exp).map_err(|_| Error::InvalidExponent(factor.exp))?,
+                ))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        Ok(NativeFactoredRat::from_num_den(
+            self.numerator().inner().clone(),
+            denominators,
+            &Z,
+            false,
+        ))
+    }
+
     /// Split pairwise-coprime target-dependent denominator blocks with
     /// Symbolica's public factorized-rational `apart` implementation.
     ///

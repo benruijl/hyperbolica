@@ -71,7 +71,10 @@ if ! rg -q \
 fi
 
 symbolica_checkout="$repo_root/vendor/symbolica"
-symbolica_revision=0b57776bf911faeea7e28ea133706fb03740ffeb
+symbolica_base=0b57776bf911faeea7e28ea133706fb03740ffeb
+# Pin source identity rather than commit metadata: applying the tracked patch
+# with git am changes the committer/date but must reproduce exactly this tree.
+symbolica_tree=49dfd8a2b3e16c21ef78425c945578ce8a7815fd
 
 if [[ ! -d "$symbolica_checkout/.git" ]]; then
     echo "pure-Symbolica gate: vendor/symbolica is not a Git checkout" >&2
@@ -79,9 +82,8 @@ if [[ ! -d "$symbolica_checkout/.git" ]]; then
 fi
 if [[ $(git -C "$symbolica_checkout" remote get-url origin) \
         != https://github.com/symbolica-dev/symbolica.git \
-    || $(git -C "$symbolica_checkout" rev-parse --abbrev-ref HEAD) != dev \
-    || $(git -C "$symbolica_checkout" rev-parse HEAD) != "$symbolica_revision" ]]; then
-    echo "pure-Symbolica gate: vendor/symbolica is not the audited dev revision" >&2
+    || $(git -C "$symbolica_checkout" rev-parse 'HEAD^{tree}') != "$symbolica_tree" ]]; then
+    echo "pure-Symbolica gate: vendor/symbolica is not the audited patched source tree" >&2
     exit 1
 fi
 mapfile -t symbolica_untracked < <(
@@ -99,6 +101,7 @@ if ! git -C "$symbolica_checkout" diff --quiet --ignore-submodules -- \
 fi
 
 for integrated_commit in \
+    "$symbolica_base" \
     4fd8443c \
     b8fa6b53; do
     if ! git -C "$symbolica_checkout" merge-base --is-ancestor \
@@ -108,4 +111,4 @@ for integrated_commit in \
     fi
 done
 
-echo "pure-Symbolica gate: dependency graphs, source imports, special symbols, and the dev checkout are clean"
+echo "pure-Symbolica gate: dependency graphs, source imports, special symbols, and the pinned Symbolica checkout are clean"

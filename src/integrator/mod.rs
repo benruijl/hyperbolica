@@ -5,6 +5,7 @@ pub mod lr_scan;
 pub mod lr_search;
 pub mod lr_verify;
 
+mod accumulator;
 mod differentiate;
 mod hyper_int;
 mod integration_step;
@@ -33,6 +34,7 @@ pub use lr_verify::{OrderVerifyResult, verify_order_is_lr};
 pub(crate) use primitive::integrate_ii_with_factored_prefactor;
 pub use primitive::{IntegrateIiOptions, integrate_ii, integrate_ii_with_options};
 pub use regularize::{reg_head, reg_tail, reg0, regzero_word, regzero_word_in_ctx};
+pub(crate) use transform::TransformSession;
 pub(crate) use transform::regkey_structural_cmp;
 pub(crate) use transform::transform_shuffle_with_options_and_table;
 pub(crate) use transform::transform_word_with_options_and_table;

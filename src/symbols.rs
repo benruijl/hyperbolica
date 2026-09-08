@@ -10,6 +10,8 @@ pub(crate) mod legacy;
 mod mpl;
 mod word;
 
+use std::sync::OnceLock;
+
 use symbolica::prelude::{Atom, AtomCore, AtomView, Symbol, get_symbol, initialize, symbol};
 use symbolica::printer::PrintOptions;
 
@@ -72,7 +74,10 @@ pub struct HyperbolicaSymbols {
 
 /// Fetch the centrally initialized Symbolica heads.
 pub fn heads() -> HyperbolicaSymbols {
-    HyperbolicaSymbols {
+    // Symbols are registered once at initialization and are process-stable.
+    // Avoid ten global symbol-table lookups on every algebra/period operation.
+    static HEADS: OnceLock<HyperbolicaSymbols> = OnceLock::new();
+    *HEADS.get_or_init(|| HyperbolicaSymbols {
         hlog: get_symbol!(HLOG_NAME).expect("Hyperbolica Hlog head was not initialized"),
         mpl: get_symbol!(MPL_NAME).expect("Hyperbolica Mpl head was not initialized"),
         mzv: get_symbol!(MZV_NAME).expect("Hyperbolica MZV head was not initialized"),
@@ -87,7 +92,7 @@ pub fn heads() -> HyperbolicaSymbols {
         sqrt_discriminant: get_symbol!(SQRT_DISCRIMINANT_NAME)
             .expect("Hyperbolica discriminant head was not initialized"),
         log_two: get_symbol!(LOG_TWO_NAME).expect("Hyperbolica Log2 head was not initialized"),
-    }
+    })
 }
 
 /// The four registered function indeterminates associated with one quadratic

@@ -6,6 +6,8 @@
 
 use hyperbolica::bridge;
 use hyperbolica::core::{PolyCtx, Rat};
+use hyperbolica::reduce::mzv_expression_atom;
+use hyperbolica::symbols::mzv_atom;
 use serde_json::json;
 
 #[test]
@@ -51,22 +53,26 @@ fn smirnov_tst0_runs_through_the_complete_hyperflint_pipeline() {
         })
         .collect::<Vec<_>>();
     assert_eq!(
-        &variables[..5],
+        variables,
         ["t1", "t2", "t3", "t4", "t5"],
-        "the user-variable prefix drifted"
+        "period constants must not inflate the integration context"
     );
 
     // Compare normalized rational functions rather than printer strings. This
     // keeps the gate sensitive to the period while tolerating harmless changes
     // in Symbolica's term ordering or parenthesization.
-    let ctx = PolyCtx::new(variables).expect("response variables form a context");
-    let actual = Rat::parse(
-        ctx.clone(),
+    // Period tuples deliberately do not add constants to response.vars. Use
+    // an independent oracle ring containing the expected MZV generators.
+    let ctx = PolyCtx::from_indeterminates([mzv_atom(&[2]), mzv_atom(&[3])]).unwrap();
+    let actual_atom = mzv_expression_atom(
         result[0]["coef"]
             .as_str()
             .expect("a shuffle coefficient is a string"),
     )
-    .expect("the terminal coefficient parses");
-    let expected = Rat::parse(ctx, "1+mzv_3-4*mzv_2^2/5").unwrap();
+    .unwrap();
+    let actual = Rat::from_atom(ctx.clone(), actual_atom.as_view())
+        .expect("the terminal coefficient parses");
+    let expected_atom = mzv_expression_atom("1+mzv_3-4*mzv_2^2/5").unwrap();
+    let expected = Rat::from_atom(ctx, expected_atom.as_view()).unwrap();
     assert_eq!(actual, expected);
 }

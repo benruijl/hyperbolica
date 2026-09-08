@@ -18,6 +18,7 @@ pub use collection::{
     shuffle_symbolic, shuffle_symbolic_sym,
 };
 pub use limits::{reglim_word, reglim_word_with_table};
+pub(crate) use shuffle::TransformSession;
 pub(crate) use shuffle::transform_shuffle_with_options_and_table;
 pub use shuffle::{transform_shuffle, transform_shuffle_with_options};
 pub(crate) use word::transform_word_with_options_and_table;

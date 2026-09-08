@@ -3,7 +3,7 @@ use std::sync::Arc;
 use symbolica::prelude::{Atom, AtomCore, Symbol};
 
 use crate::algebra::AlgebraicLetterEntry;
-use crate::core::{PolyCtx, SymCoef, SymMonomial};
+use crate::core::{PolyCtx, SymCoef, SymMonomial, global_period_table};
 use crate::integrator::RegulatorSym;
 use crate::symbols::{Word, heads};
 
@@ -133,7 +133,12 @@ fn monomial_to_atom(ctx: &PolyCtx, monomial: &SymMonomial) -> AtomIntegrationRes
         factors.push(power(heads().delta.call(variable), exponent));
     }
     for (&period, &exponent) in &monomial.period_powers {
-        factors.push(power(heads().period.call(period), exponent));
+        let atom = global_period_table()
+            .key_for(period)
+            .ok()
+            .and_then(|key| crate::reduce::mzv_constant_atom(&key))
+            .unwrap_or_else(|| heads().period.call(period));
+        factors.push(power(atom, exponent));
     }
     Ok(factors.into_iter().product())
 }
@@ -181,13 +186,31 @@ mod tests {
         monomial.i_power = 1;
         monomial.log_powers = BTreeMap::from([(2, 1)]);
         monomial.delta_powers.insert(0, 1);
-        monomial.period_powers = BTreeMap::from([(7, 2)]);
+        let opaque = global_period_table()
+            .id_for("api_output_opaque_period")
+            .unwrap();
+        monomial.period_powers = BTreeMap::from([(opaque, 2)]);
         let coefficient = SymCoef::from_monomials(ctx, vec![monomial]);
         let atom = symcoef_to_atom(&coefficient).unwrap();
         assert!(atom.contains_symbol(Symbol::PI));
         assert!(atom.contains_symbol(Symbol::LOG));
         assert!(atom.contains_symbol(heads().delta));
         assert!(atom.contains_symbol(heads().period));
+    }
+
+    #[test]
+    fn known_period_tuples_materialize_as_registered_constants() {
+        let ctx = PolyCtx::new(["api_output_basis_x"]).unwrap();
+        let zeta = global_period_table().id_for("mzv_2").unwrap();
+        let log_two = global_period_table().id_for("Log2").unwrap();
+        let mut monomial = SymMonomial::new(Rat::from_int(ctx.clone(), 3));
+        monomial.period_powers = BTreeMap::from([(zeta, 2), (log_two, 1)]);
+        let atom = symcoef_to_atom(&SymCoef::from_monomials(ctx, vec![monomial])).unwrap();
+        assert_eq!(
+            atom,
+            Atom::num(3) * crate::symbols::mzv_atom(&[2]).pow(2) * crate::symbols::log_two_atom()
+        );
+        assert!(!atom.contains_symbol(heads().period));
     }
 
     #[test]

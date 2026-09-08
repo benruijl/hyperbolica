@@ -1,0 +1,59 @@
+{
+  "schema": 1,
+  "purpose": "Exploratory performance inventory; independent of the locked qualification corpus and policy.",
+  "sources": [
+    {"path": "tests/fixtures/benchmark.jsonl", "prefix": "benchmark", "tier": "core", "timeout_seconds": 60, "memory_mib": 4096},
+    {"path": "tests/fixtures/differential.jsonl", "prefix": "api", "tier": "api", "timeout_seconds": 20, "memory_mib": 2048}
+  ],
+  "scaling": {
+    "tier": "scaling", "timeout_seconds": 60, "memory_mib": 4096,
+    "multiply_degrees": [8, 32, 128], "multiply_variables": [1, 3, 8],
+    "dense_degrees": [4, 8, 12], "dense_variables": [2, 3],
+    "rational_powers": [-3, -2, -1, 2, 3, 5], "derivative_denominator_powers": [1, 2, 4, 8],
+    "gcd_degrees": [2, 4, 8], "resultant_degrees": [2, 4, 6],
+    "partial_fraction_multiplicities": [1, 3, 6],
+    "series_orders": [8, 32, 128], "period_weights": [2, 4, 6, 8],
+    "integration_log_weights": [0, 1, 2, 3], "integration_dimensions": [1, 2, 3, 5]
+  },
+  "attachment": {
+    "sha256": "909be0ef1bc030a00ea823190733329c228a183e8f8e55ff909c56000c461e3c",
+    "expected_cases": 33,
+    "direct": [
+      {"index": 0, "id": "tst0", "tier": "attachment", "timeout_seconds": 60, "memory_mib": 4096},
+      {"index": 1, "id": "tst1", "tier": "attachment", "timeout_seconds": 180, "memory_mib": 4096},
+      {"index": 2, "id": "tst2", "tier": "heavy", "timeout_seconds": 900, "memory_mib": 8192},
+      {"index": 3, "id": "tst3", "tier": "heavy", "timeout_seconds": 1800, "memory_mib": 8192},
+      {"index": 4, "id": "tst4", "tier": "heavy", "timeout_seconds": 1800, "memory_mib": 8192},
+      {"index": 5, "id": "findroots21_a", "tier": "attachment", "timeout_seconds": 60, "memory_mib": 4096, "algebraic_letters": true},
+      {"index": 6, "id": "findroots21_b", "tier": "attachment", "timeout_seconds": 60, "memory_mib": 4096, "algebraic_letters": true},
+      {"index": 7, "id": "parity_face", "tier": "heavy", "timeout_seconds": 600, "memory_mib": 8192},
+      {"index": 8, "id": "qbox_one_mass", "tier": "heavy", "timeout_seconds": 600, "memory_mib": 8192},
+      {"index": 9, "id": "qbox_collaborator", "tier": "heavy", "timeout_seconds": 600, "memory_mib": 8192}
+    ],
+    "pipeline": [
+      {"index": 10, "id": "dbox1m"},
+      {"index": 11, "id": "three_loop_form_factor"},
+      {"index": 12, "id": "tri_1L", "literal_zero": true},
+      {"index": 13, "id": "bub_1L"},
+      {"index": 14, "id": "sunset_2L"},
+      {"index": 15, "id": "ss2L_mid"},
+      {"index": 16, "id": "p3L_a"},
+      {"index": 17, "id": "vac3L"},
+      {"index": 18, "id": "vac4L"},
+      {"index": 19, "id": "vac5L"},
+      {"index": 20, "id": "box_1L"},
+      {"index": 21, "id": "pent1L"},
+      {"index": 22, "id": "lib10_equal_mass_bubble"},
+      {"index": 23, "id": "lib10_massive_triangle"},
+      {"index": 24, "id": "lib10_massive_box"},
+      {"index": 25, "id": "lib10_theta"},
+      {"index": 26, "id": "lib10_parachute"},
+      {"index": 27, "id": "lib10_bubble_pentagon"},
+      {"index": 28, "id": "lib10_sudakov"},
+      {"index": 29, "id": "tladder_L1"},
+      {"index": 30, "id": "tladder_L2"},
+      {"index": 31, "id": "tladder_L3"},
+      {"index": 32, "id": "tladder_L4"}
+    ]
+  }
+}

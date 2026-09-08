@@ -138,9 +138,10 @@ lint_differential() {
                 else [] end;
             def allowed_semantic:
                 .request.op as $op |
-                if (["rat_add", "mul", "gcd", "resultant", "rat_sum",
-                     "series_expansion", "apply_mzv_reductions"] |
-                    index($op)) != null then ["result"] else [] end;
+                if $op == "hyperflint" then ["result[].coef"]
+                elif (["rat_add", "mul", "gcd", "resultant", "rat_sum",
+                       "series_expansion", "apply_mzv_reductions"] |
+                      index($op)) != null then ["result"] else [] end;
             ((keys_unsorted - allowed_keys) | length == 0)
             and (.compare == "byte" or .compare == "normalized" or
                  .compare == "semantic")
@@ -231,9 +232,10 @@ lint_benchmark() {
                 else [] end;
             def allowed_semantic:
                 .request.op as $op |
-                if (["rat_add", "mul", "gcd", "resultant", "rat_sum",
-                     "series_expansion", "apply_mzv_reductions"] |
-                    index($op)) != null then ["result"] else [] end;
+                if $op == "hyperflint" then ["result[].coef"]
+                elif (["rat_add", "mul", "gcd", "resultant", "rat_sum",
+                       "series_expansion", "apply_mzv_reductions"] |
+                      index($op)) != null then ["result"] else [] end;
             ((keys_unsorted - allowed_keys) | length == 0)
             and ((.tier // "qualification") |
                  . == "qualification" or . == "nightly" or

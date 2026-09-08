@@ -422,6 +422,75 @@ hf_semantic_response "$2" '[]' '[]' '["result"]' '["x","y"]' "$3"
             self.assertEqual(changed.returncode, 0, changed.stderr.decode())
             self.assertNotEqual(outputs[0], changed.stdout)
 
+    def test_full_integration_coefficients_are_canonicalized_without_changing_keys(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            parser = directory / "semantic-parser"
+            parser.write_text(
+                """#!/usr/bin/env python3
+import json
+import sys
+
+request = json.load(sys.stdin)
+canonical = {"2*x/2": "x", "x": "x", "4*y/2": "2*y", "2*y": "2*y"}
+json.dump({"op": "parse_expr", "canonical": canonical[request["expr"]]}, sys.stdout)
+""",
+                encoding="utf-8",
+            )
+            parser.chmod(0o755)
+            responses = []
+            for name, coefficients in (
+                ("cpp", ["2*x/2", "4*y/2"]),
+                ("rust", ["x", "2*y"]),
+            ):
+                response = directory / f"{name}.json"
+                response.write_bytes(
+                    compact_json(
+                        {
+                            "op": "hyperflint",
+                            "result": [
+                                {"coef": coefficients[0], "key": []},
+                                {"coef": coefficients[1], "key": [["x"]]},
+                            ],
+                            "timing_compute_s": 1.0,
+                        }
+                    )
+                )
+                completed = subprocess.run(
+                    [
+                        "bash",
+                        "-c",
+                        """
+set -euo pipefail
+source "$1"
+hf_semantic_response "$2" '["timing_compute_s"]' '[]' \
+    '["result[].coef"]' '["x","y"]' "$3"
+""",
+                        "semantic-integration-response-test",
+                        str(RESPONSE_COMPARISON_SCRIPT),
+                        str(response),
+                        str(parser),
+                    ],
+                    cwd=REPOSITORY,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    timeout=5,
+                    check=False,
+                )
+                self.assertEqual(completed.returncode, 0, completed.stderr.decode())
+                responses.append(completed.stdout)
+
+            self.assertEqual(responses[0], responses[1])
+            self.assertEqual(
+                json.loads(responses[0])["result"],
+                [
+                    {"coef": "x", "key": []},
+                    {"coef": "2*y", "key": [["x"]]},
+                ],
+            )
+
     def test_failed_canonical_response_replacement_is_not_silently_accepted(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             directory = Path(temporary)

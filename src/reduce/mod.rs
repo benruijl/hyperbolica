@@ -3,6 +3,7 @@
 mod break_up_contour;
 mod mzv_expansion;
 mod mzv_reduce;
+mod period_scratch;
 mod periods;
 
 pub use break_up_contour::{
@@ -21,6 +22,7 @@ pub use mzv_reduce::{
     load_mzv_reductions, mzv_constant_atom, mzv_expression_atom, standard_mzv_reductions,
     substitute_var_rat,
 };
+pub(crate) use period_scratch::period_tuples_active;
 pub use periods::{
     FibrationBasisResult, FibrationBasisResultSym, evaluate_periods, fibration_basis,
     fibration_basis_sym, test_zero_function, test_zero_function_sym, to_mzv, to_mzv_with_expansion,

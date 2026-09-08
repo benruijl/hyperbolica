@@ -15,6 +15,9 @@ use super::mzv_reduce::{
     mzv_expression_atom, standard_mzv_reductions, substitute_var_rat,
 };
 
+mod lazy;
+pub(crate) use lazy::{ExpansionSource, StandardMzvExpansion, standard_mzv_expansion_lazy};
+
 #[derive(Clone, Debug)]
 pub struct MzvExpansionTable {
     pub basis_ctx: Arc<PolyCtx>,
@@ -118,6 +121,9 @@ pub fn build_basis_atom_list(
 /// rearrangement preserves coprimality, so only denominator-sign
 /// normalization is required after the transfer.
 pub fn cross_ctx_transfer_rat(source: &Rat, destination: Arc<PolyCtx>) -> Result<Rat> {
+    if Arc::ptr_eq(source.ctx(), &destination) {
+        return Ok(source.clone());
+    }
     let numerator = source
         .native()
         .numerator

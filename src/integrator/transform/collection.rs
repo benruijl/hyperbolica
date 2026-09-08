@@ -8,6 +8,7 @@ use crate::core::{
     structural_bucket_digest_by,
 };
 use crate::error::{Error, Result};
+use crate::integrator::accumulator::BalancedSum;
 use crate::symbols::Word;
 
 const REGKEY_BUCKET_DOMAIN: u64 = 0x5245_474b_4559_0001;
@@ -205,7 +206,7 @@ pub(super) fn collect_regulator_with_digest(
     };
     let ctx = first.coef.ctx().clone();
     let mut indices = DigestBuckets::default();
-    let mut collected = Vec::<RegTerm>::new();
+    let mut collected = Vec::<(RegKey, BalancedSum<Rat>)>::new();
 
     for term in regulator {
         require_rat_context(&term.coef, &ctx)?;
@@ -213,19 +214,24 @@ pub(super) fn collect_regulator_with_digest(
         let key = canonicalize_regkey(&term.key);
         let digest = digest_key(&key);
         if let Some(index) = indices.find(digest, |index| {
-            collected.get(index).is_some_and(|term| term.key == key)
+            collected
+                .get(index)
+                .is_some_and(|(candidate, _)| *candidate == key)
         }) {
-            collected[index].coef = collected[index].coef.try_add(&term.coef)?;
+            collected[index].1.push(term.coef.clone())?;
         } else {
             indices.insert(digest, collected.len());
-            collected.push(RegTerm {
-                coef: term.coef.clone(),
-                key,
-            });
+            collected.push((key, BalancedSum::new(term.coef.clone())));
         }
     }
-    collected.retain(|term| !term.coef.is_zero());
-    Ok(collected)
+    let mut result = Vec::with_capacity(collected.len());
+    for (key, coefficients) in collected {
+        let coef = coefficients.finish()?;
+        if !coef.is_zero() {
+            result.push(RegTerm { coef, key });
+        }
+    }
+    Ok(result)
 }
 
 /// Collect equal symbolic regulator keys, preserving first occurrence.
@@ -242,7 +248,7 @@ pub(super) fn collect_regulator_sym_with_digest(
     };
     let ctx = first.coef.ctx().clone();
     let mut indices = DigestBuckets::default();
-    let mut collected = Vec::<RegTermSym>::new();
+    let mut collected = Vec::<(RegKey, BalancedSum<SymCoef>)>::new();
 
     for term in regulator {
         if !same_context(term.coef.ctx(), &ctx) {
@@ -252,19 +258,24 @@ pub(super) fn collect_regulator_sym_with_digest(
         let key = canonicalize_regkey(&term.key);
         let digest = digest_key(&key);
         if let Some(index) = indices.find(digest, |index| {
-            collected.get(index).is_some_and(|term| term.key == key)
+            collected
+                .get(index)
+                .is_some_and(|(candidate, _)| *candidate == key)
         }) {
-            collected[index].coef = collected[index].coef.try_add(&term.coef)?;
+            collected[index].1.push(term.coef.clone())?;
         } else {
             indices.insert(digest, collected.len());
-            collected.push(RegTermSym {
-                coef: term.coef.clone(),
-                key,
-            });
+            collected.push((key, BalancedSum::new(term.coef.clone())));
         }
     }
-    collected.retain(|term| !term.coef.is_zero());
-    Ok(collected)
+    let mut result = Vec::with_capacity(collected.len());
+    for (key, coefficients) in collected {
+        let coef = coefficients.finish()?;
+        if !coef.is_zero() {
+            result.push(RegTermSym { coef, key });
+        }
+    }
+    Ok(result)
 }
 
 /// Multiply regulator monomials by joining and canonically sorting keys.

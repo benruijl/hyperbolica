@@ -2,6 +2,7 @@ use symbolica::domains::InternalOrdering;
 use symbolica::poly::PolynomialResultant;
 use symbolica::prelude::*;
 
+use super::integer::restore_scalar;
 use super::{Factored, Poly, ResultantStrategy, SymbolicaPoly};
 use crate::error::{Error, Result};
 
@@ -32,6 +33,14 @@ impl Poly {
 
     pub fn try_mul(&self, other: &Self) -> Result<Self> {
         self.require_same_context(other)?;
+        if self.inner.nterms().saturating_mul(other.inner.nterms()) >= 64 {
+            let (left, left_scalar) = self.integer_associate();
+            let (right, right_scalar) = other.integer_associate();
+            return Ok(Self::from_inner(
+                self.ctx.clone(),
+                restore_scalar(&(&left * &right), &Q.mul(&left_scalar, &right_scalar)),
+            ));
+        }
         Ok(Self::from_inner(
             self.ctx.clone(),
             &self.inner * &other.inner,
@@ -39,6 +48,13 @@ impl Poly {
     }
 
     pub fn pow(&self, exponent: usize) -> Self {
+        if exponent >= 3 && self.inner.nterms() >= 2 {
+            let (integer, scalar) = self.integer_associate();
+            return Self::from_inner(
+                self.ctx.clone(),
+                restore_scalar(&integer.pow(exponent), &Q.pow(&scalar, exponent as u64)),
+            );
+        }
         Self::from_inner(self.ctx.clone(), self.inner.pow(exponent))
     }
 

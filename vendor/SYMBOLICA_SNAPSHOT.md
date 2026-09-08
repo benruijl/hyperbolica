@@ -1,16 +1,17 @@
-# Symbolica `dev` checkout
+# Pinned Symbolica checkout
 
-Hyperbolica builds against an official Symbolica Git checkout at
+Hyperbolica builds against a patched official Symbolica Git checkout at
 `vendor/symbolica`. The directory is intentionally ignored by the parent
 repository; Cargo selects it directly rather than the archived
 `vendor/symbolica-src` copy.
 
 - Remote: `https://github.com/symbolica-dev/symbolica.git`
-- Branch: `dev`
-- Audited revision: `0b57776bf911faeea7e28ea133706fb03740ffeb`
+- Upstream base: `0b57776bf911faeea7e28ea133706fb03740ffeb` (`dev`)
+- Local audited tip: `e33a1fb70abe70e774dd6a55baa5a8e1f42cc8e3`
+- Audited source tree: `49dfd8a2b3e16c21ef78425c945578ce8a7815fd`
 - Symbolica package version: `2.2.0`
-- Local tracked diff: none
-- Audit date: 2026-09-02
+- Worktree diff: none; three local commits are preserved in `symbolica-hyperlica.patch`
+- Packaging date: 2026-09-08
 
 Create the exact clean checkout with:
 
@@ -18,16 +19,19 @@ Create the exact clean checkout with:
 git clone --branch dev --single-branch \
   https://github.com/symbolica-dev/symbolica.git vendor/symbolica
 git -C vendor/symbolica checkout 0b57776bf911faeea7e28ea133706fb03740ffeb
-git -C vendor/symbolica switch -C dev
+git -C vendor/symbolica switch -c codex/hyperlica-rational-fastpaths
+git -C vendor/symbolica am ../symbolica-hyperlica.patch
 scripts/check-pure-symbolica.sh
 ```
 
-The revision is pinned because `dev` is a moving branch. Updating it requires
+The source tree is pinned because `dev` is a moving branch. Updating it requires
 refreshing this record and all correctness and performance evidence. The clean
 source identity check in `scripts/check-pure-symbolica.sh` prevents unnoticed
-checkout drift or local modifications.
+checkout drift or local modifications. Applying the mail patch can produce
+different commit IDs due to committer metadata, but must produce the pinned
+source tree. See [`SYMBOLICA.md`](SYMBOLICA.md) for the patch hash and bug MREs.
 
-## Optimized-source provenance
+## Original upstream baseline provenance
 
 On 2026-09-02, `git ls-remote --heads origin dev`, the local branch, and
 the fetched remote-tracking branch all resolved to the audited revision above
@@ -57,10 +61,9 @@ changes as well as the complete resultant and power improvements:
 - `b8fa6b53` replaces linear rational-polynomial powering with exponentiation
   by squaring and delegates the coefficient-field implementation to it.
 
-Both commits are ancestors of the audited revision; the nested checkout has no
-local patch. Numerica's
-polynomial kernels, the benchmark sources, and the checked-in PolyBench results
-are untouched. The root crate enables
+Both commits are ancestors of the upstream baseline. The new HyperLica series
+adds further rational and polynomial changes and standalone diagnostics; it
+does not change the existing checked-in PolyBench results. The root crate enables
 Symbolica's `faster_alloc`, GMP-integer, and MPFR-float features; none of the
 omitted features selects an alternative polynomial kernel.
 

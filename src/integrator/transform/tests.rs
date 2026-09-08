@@ -4,7 +4,7 @@ use symbolica::prelude::{AtomCore, Symbol};
 
 use super::collection::collect_regulator_with_digest;
 use super::limits::{first_positive_letters, one_regulator, word_depends_on_variable};
-use super::shuffle::group_log_powers_with_digest;
+use super::shuffle::{TransformSession, group_log_powers_with_digest};
 use super::word::{TransformCache, collect_result_rows_with_forced_collision, identity_transform};
 use super::{
     RegTerm, RegTermSym, TransformOptions, canonicalize_regkey, canonicalize_regulator,
@@ -147,6 +147,75 @@ fn transform_word_has_identity_constant_and_failed_tail_cases() {
 
     let failure = transform_word(&ctx, &word(&ctx, &["x", "0"]), 0).unwrap_err();
     assert!(failure.to_string().contains("$Failed"));
+}
+
+#[test]
+fn step_transform_session_matches_isolated_transforms_across_shared_spines() {
+    let ctx = context();
+    let first = word(&ctx, &["0", "-x"]);
+    let second = word(&ctx, &["-x", "-1"]);
+    let logarithm = word(&ctx, &["-x"]);
+    let mut session = TransformSession::new(&ctx, 0, TransformOptions::default(), None).unwrap();
+    for words in [
+        vec![first.clone(), second.clone()],
+        vec![second, first.clone()],
+        vec![logarithm.clone(), logarithm],
+        vec![first],
+        Vec::new(),
+    ] {
+        let isolated = transform_shuffle(&ctx, &words, 0).unwrap();
+        assert_eq!(session.transform(&words).unwrap(), isolated);
+        assert_eq!(session.transform(&words).unwrap(), isolated);
+    }
+
+    // Cache hits must not bypass validation of another context's input.
+    let other = PolyCtx::new(["x", "z"]).unwrap();
+    assert!(matches!(
+        session.transform(&[word(&other, &["-x"])]),
+        Err(Error::ContextMismatch)
+    ));
+    // An unsuccessful transform must not poison subsequent cached results.
+    assert!(session.transform(&[word(&ctx, &["x", "0"])]).is_err());
+    assert_eq!(
+        session.transform(&[word(&ctx, &["-x"])]).unwrap(),
+        transform_shuffle(&ctx, &[word(&ctx, &["-x"])], 0).unwrap()
+    );
+}
+
+#[test]
+fn algebraic_transform_cache_keeps_the_registry_session_alive() {
+    use std::sync::mpsc;
+    use std::time::Duration;
+
+    let ctx = context();
+    let mut transforms = TransformSession::new(
+        &ctx,
+        0,
+        TransformOptions {
+            introduce_algebraic_letters: true,
+            forbidden_variables: &[],
+        },
+        None,
+    )
+    .unwrap();
+    assert_eq!(transforms.transform(&[]).unwrap(), identity_transform(&ctx));
+    assert!(begin_algebraic_letter_session().is_err());
+
+    let (started_tx, started_rx) = mpsc::channel();
+    let (entered_tx, entered_rx) = mpsc::channel();
+    let other = std::thread::spawn(move || {
+        started_tx.send(()).unwrap();
+        let _session = begin_algebraic_letter_session().unwrap();
+        entered_tx.send(()).unwrap();
+    });
+    started_rx.recv_timeout(Duration::from_secs(10)).unwrap();
+    assert!(matches!(
+        entered_rx.recv_timeout(Duration::from_millis(30)),
+        Err(mpsc::RecvTimeoutError::Timeout)
+    ));
+    drop(transforms);
+    entered_rx.recv_timeout(Duration::from_secs(10)).unwrap();
+    other.join().unwrap();
 }
 
 #[test]

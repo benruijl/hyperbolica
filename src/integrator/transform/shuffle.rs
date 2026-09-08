@@ -1,10 +1,10 @@
 use std::sync::Arc;
 
 use super::collection::{require_word_context, shuffle_symbolic_sym};
-use super::word::{
-    identity_transform, transform_word_with_options, transform_word_with_options_and_table,
-};
+use super::word::{TransformCache, identity_transform, transform_word_impl};
 use super::{RegTermSym, RegulatorSym, TransformOptions, TransformPair, TransformResult};
+use crate::algebra::AlgebraicLetterSession;
+use crate::algebra::algebraic_letters::join_algebraic_letter_session;
 use crate::algebra::shuffle::shuffle_product;
 use crate::core::{DigestBuckets, PolyCtx, Rat, structural_bucket_digest};
 use crate::error::{Error, Result};
@@ -111,7 +111,7 @@ pub fn transform_shuffle_with_options(
     variable: usize,
     options: &TransformOptions<'_>,
 ) -> Result<TransformResult> {
-    transform_shuffle_impl(ctx, words, variable, options, None)
+    TransformSession::new(ctx, variable, *options, None)?.transform(words)
 }
 
 pub(crate) fn transform_shuffle_with_options_and_table(
@@ -121,7 +121,60 @@ pub(crate) fn transform_shuffle_with_options_and_table(
     options: &TransformOptions<'_>,
     table: &MzvReductionTable,
 ) -> Result<TransformResult> {
-    transform_shuffle_impl(ctx, words, variable, options, Some(table))
+    TransformSession::new(ctx, variable, *options, Some(table))?.transform(words)
+}
+
+/// Own a word/subword cache for a fixed integration context and policy.
+/// Different shuffle spines within one step commonly contain the same words;
+/// retaining their recursive transforms avoids repeating factorization and
+/// endpoint regularization. The session cannot be reused with another table,
+/// variable, or algebraic-letter policy, and is dropped at the step boundary.
+pub(crate) struct TransformSession<'a> {
+    ctx: &'a Arc<PolyCtx>,
+    variable: usize,
+    options: TransformOptions<'a>,
+    table: Option<&'a MzvReductionTable>,
+    cache: TransformCache,
+    // Cached Wm/Wp indices must remain associated with their quadratics.
+    _algebraic_session: Option<AlgebraicLetterSession>,
+}
+
+impl<'a> TransformSession<'a> {
+    pub(crate) fn new(
+        ctx: &'a Arc<PolyCtx>,
+        variable: usize,
+        options: TransformOptions<'a>,
+        table: Option<&'a MzvReductionTable>,
+    ) -> Result<Self> {
+        if variable >= ctx.len() {
+            return Err(Error::UnknownVariable(variable.to_string()));
+        }
+        Ok(Self {
+            ctx,
+            variable,
+            options,
+            table,
+            cache: TransformCache::default(),
+            _algebraic_session: options
+                .introduce_algebraic_letters
+                .then(join_algebraic_letter_session)
+                .transpose()?,
+        })
+    }
+
+    pub(crate) fn transform(&mut self, words: &[Word]) -> Result<TransformResult> {
+        for word in words {
+            require_word_context(word, self.ctx)?;
+        }
+        transform_shuffle_impl(
+            self.ctx,
+            words,
+            self.variable,
+            &self.options,
+            self.table,
+            &mut self.cache,
+        )
+    }
 }
 
 fn transform_shuffle_impl(
@@ -130,13 +183,8 @@ fn transform_shuffle_impl(
     variable: usize,
     options: &TransformOptions<'_>,
     table: Option<&MzvReductionTable>,
+    cache: &mut TransformCache,
 ) -> Result<TransformResult> {
-    if variable >= ctx.len() {
-        return Err(Error::UnknownVariable(variable.to_string()));
-    }
-    for word in words {
-        require_word_context(word, ctx)?;
-    }
     if words.is_empty() {
         return Ok(identity_transform(ctx));
     }
@@ -155,7 +203,7 @@ fn transform_shuffle_impl(
             combined.push(Word::from(vec![letter; count]));
             combinatorial_factor = combinatorial_factor.try_mul(&factorial_rat(ctx, count)?)?;
         }
-        let transformed = transform_shuffle_impl(ctx, &combined, variable, options, table)?;
+        let transformed = transform_shuffle_impl(ctx, &combined, variable, options, table, cache)?;
         return transformed
             .into_iter()
             .map(|pair| {
@@ -169,11 +217,7 @@ fn transform_shuffle_impl(
 
     let mut accumulator = identity_transform(ctx);
     for word in words {
-        let transformed = if let Some(table) = table {
-            transform_word_with_options_and_table(ctx, word, variable, options, Some(table))?
-        } else {
-            transform_word_with_options(ctx, word, variable, options)?
-        };
+        let transformed = transform_word_impl(ctx, word, variable, options, table, cache)?;
         if transformed.is_empty() {
             return Ok(Vec::new());
         }

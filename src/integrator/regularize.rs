@@ -205,7 +205,17 @@ fn regularize_side(
                 .count(),
         };
 
+        // Most words need no edge regularization. Avoid the unit shuffle,
+        // concatenation, and coefficient multiplications in that case.
+        if run_length == 0 {
+            result.terms.push(term.clone());
+            continue;
+        }
+
         if run_length == term.word.len() {
+            if substitute.is_zero() {
+                continue;
+            }
             let prefactor = substitute
                 .pow(i64::try_from(run_length).map_err(|_| {
                     Error::InvalidInput("regularization exponent does not fit in i64".into())
@@ -233,6 +243,11 @@ fn regularize_side(
         };
 
         for shuffle_length in 0..=run_length {
+            // Every shorter shuffle is multiplied by a positive power of
+            // the zero substitute, so it cannot contribute to the result.
+            if substitute.is_zero() && shuffle_length != run_length {
+                continue;
+            }
             emit_partial_regularization(
                 &mut result,
                 side,
@@ -370,5 +385,29 @@ mod tests {
 
         assert_eq!(reg_head(&input, &zero, &three).unwrap(), expected);
         assert_eq!(reg_tail(&input, &zero, &three).unwrap(), expected);
+    }
+
+    #[test]
+    fn zero_substitute_discards_removed_powers_and_preserves_unaffected_words() {
+        let ctx = context();
+        let zero = integer(&ctx, 0);
+        let input = Wordlist::from(vec![
+            term(&ctx, "7", &[0, 0, 2]),
+            term(&ctx, "3", &[0, 0]),
+            term(&ctx, "x", &[2, 1]),
+        ]);
+        assert_eq!(
+            reg_head(&input, &zero, &zero).unwrap(),
+            Wordlist::from(vec![term(&ctx, "7", &[2, 0, 0]), term(&ctx, "x", &[2, 1])])
+        );
+        let reversed = Wordlist::from(vec![
+            term(&ctx, "7", &[2, 0, 0]),
+            term(&ctx, "3", &[0, 0]),
+            term(&ctx, "x", &[1, 2]),
+        ]);
+        assert_eq!(
+            reg_tail(&reversed, &zero, &zero).unwrap(),
+            Wordlist::from(vec![term(&ctx, "7", &[0, 0, 2]), term(&ctx, "x", &[1, 2])])
+        );
     }
 }

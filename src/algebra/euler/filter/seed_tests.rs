@@ -75,3 +75,22 @@ fn marginal_cache_identity_includes_the_generic_sampling_seed() {
     cache.insert(retry, Some(3));
     assert_eq!(cache.len(), 2);
 }
+
+#[test]
+fn concurrent_filter_requests_cannot_reset_each_others_statistics() {
+    use super::{chi_filter_stats, reset_chi_filter_stats, update_stats};
+
+    reset_chi_filter_stats();
+    update_stats(|stats| stats.boundary_exempt = 1);
+    let other = std::thread::spawn(|| {
+        reset_chi_filter_stats();
+        assert_eq!(chi_filter_stats().boundary_exempt, 0);
+        update_stats(|stats| stats.boundary_exempt = 2);
+        chi_filter_stats()
+    })
+    .join()
+    .unwrap();
+    assert_eq!(other.boundary_exempt, 2);
+    assert_eq!(chi_filter_stats().boundary_exempt, 1);
+    reset_chi_filter_stats();
+}

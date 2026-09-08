@@ -6,6 +6,7 @@ use super::collection::{
 };
 use super::limits::{one_regulator, reglim_word_impl, word_depends_on_variable};
 use super::{RegulatorSym, TransformOptions, TransformPair, TransformResult};
+use crate::algebra::algebraic_letters::join_algebraic_letter_session;
 use crate::algebra::linear_factors::{LinearFactorOptions, linear_factors_with_options};
 use crate::core::{DigestBuckets, PolyCtx, Rat, structural_bucket_digest};
 use crate::error::{Error, Result};
@@ -53,7 +54,7 @@ fn bump_result(
     bump_canonical_result(
         rows,
         row_indices,
-        canonical_regulator,
+        &canonical_regulator,
         word,
         coefficient,
         ResultBucketDigests {
@@ -66,14 +67,14 @@ fn bump_result(
 fn bump_canonical_result(
     rows: &mut Vec<ResultRow>,
     row_indices: &mut DigestBuckets,
-    canonical_regulator: RegulatorSym,
+    canonical_regulator: &RegulatorSym,
     word: Word,
     coefficient: Rat,
     digests: ResultBucketDigests,
 ) -> Result<()> {
     let row_index = if let Some(index) = row_indices.find(digests.regulator, |index| {
         rows.get(index).is_some_and(|row| {
-            regulator_sym_structurally_equal(&row.regulator, &canonical_regulator)
+            regulator_sym_structurally_equal(&row.regulator, canonical_regulator)
         })
     }) {
         index
@@ -81,7 +82,7 @@ fn bump_canonical_result(
         let index = rows.len();
         row_indices.insert(digests.regulator, index);
         rows.push(ResultRow {
-            regulator: canonical_regulator,
+            regulator: canonical_regulator.clone(),
             word_indices: DigestBuckets::default(),
             terms: Vec::new(),
         });
@@ -122,7 +123,7 @@ pub(super) fn collect_result_rows_with_forced_collision(
         bump_canonical_result(
             &mut rows,
             &mut row_indices,
-            canonicalize_regulator_sym(regulator)?,
+            &canonicalize_regulator_sym(regulator)?,
             word.clone(),
             coefficient.clone(),
             ResultBucketDigests {
@@ -232,6 +233,10 @@ pub(crate) fn transform_word_with_options_and_table(
         return Err(Error::UnknownVariable(variable.to_string()));
     }
     require_word_context(word, ctx)?;
+    let _algebraic_session = options
+        .introduce_algebraic_letters
+        .then(join_algebraic_letter_session)
+        .transpose()?;
     transform_word_impl(
         ctx,
         word,
@@ -242,7 +247,7 @@ pub(crate) fn transform_word_with_options_and_table(
     )
 }
 
-fn transform_word_impl(
+pub(super) fn transform_word_impl(
     ctx: &Arc<PolyCtx>,
     word: &Word,
     variable: usize,
@@ -370,6 +375,10 @@ fn append_factored_rows(
     ctx: &Arc<PolyCtx>,
 ) -> Result<()> {
     for pair in transformed {
+        // The regulator does not depend on the appended letter. Canonicalize
+        // and hash it once, and clone it only when a new result row is needed.
+        let regulator = canonicalize_regulator_sym(&pair.regulator)?;
+        let regulator_digest = regulator_sym_bucket_digest(&regulator);
         for term in &pair.shuffle.terms {
             for factor in factors {
                 let mut letters = Vec::with_capacity(term.word.len() + 1);
@@ -381,12 +390,18 @@ fn append_factored_rows(
                     })?;
                 let coefficient =
                     Rat::from_int(ctx.clone(), signed_multiplicity).try_mul(&term.coef)?;
-                bump_result(
+                let word = Word::from(letters);
+                let word_digest = structural_bucket_digest(WORD_ROW_BUCKET_DOMAIN, &word);
+                bump_canonical_result(
                     rows,
                     row_indices,
-                    &pair.regulator,
-                    Word::from(letters),
+                    &regulator,
+                    word,
                     coefficient,
+                    ResultBucketDigests {
+                        regulator: regulator_digest,
+                        word: word_digest,
+                    },
                 )?;
             }
         }

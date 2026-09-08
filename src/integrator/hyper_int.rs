@@ -1,6 +1,7 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
+use crate::algebra::algebraic_letters::join_algebraic_letter_session;
 use crate::core::{Poly, PolyCtx, Rat, SymCoef};
 use crate::error::Error;
 use crate::reduce::{MzvReductionTable, substitute_var_rat};
@@ -124,6 +125,11 @@ pub fn hyper_int_with_options_and_spectators(
     if variables.is_empty() {
         return input_as_regulator(input);
     }
+    let _algebraic_session = options
+        .step
+        .introduce_algebraic_letters
+        .then(join_algebraic_letter_session)
+        .transpose()?;
 
     let mut current = input
         .iter()

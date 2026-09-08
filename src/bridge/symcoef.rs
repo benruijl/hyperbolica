@@ -10,7 +10,7 @@ use super::wire::{
     array_field, mzv_context, parse_wire_rat, result_response, string_field,
     unique_diagnostic_variable_index, wire_context_variable, wire_rat,
 };
-use crate::core::{PolyCtx, SymCoef, SymMonomial, simplify_symcoef};
+use crate::core::{PolyCtx, SymCoef, SymMonomial, global_period_table, simplify_symcoef};
 use crate::error::{Error, Result};
 
 fn legacy_power_key(term: &SymMonomial, deltas: &[(String, i32, usize)]) -> String {
@@ -227,7 +227,13 @@ pub(super) fn symcoef_string(value: &SymCoef) -> String {
                 }
             }
             for (period, power) in &term.period_powers {
-                output.push_str(&format!("*Period[{period}]"));
+                output.push('*');
+                match global_period_table().key_for(*period) {
+                    Ok(name) if crate::reduce::mzv_constant_atom(&name).is_some() => {
+                        output.push_str(&name)
+                    }
+                    _ => output.push_str(&format!("Period[{period}]")),
+                }
                 if *power != 1 {
                     output.push_str(&format!("^{power}"));
                 }
@@ -244,6 +250,24 @@ mod tests {
     use symbolica::prelude::Symbol;
 
     use super::*;
+
+    #[test]
+    fn period_basis_keys_emit_in_legacy_spelling() {
+        let ctx = PolyCtx::new(["bridge_period_basis_x"]).unwrap();
+        let id = global_period_table().id_for("mzv_2").unwrap();
+        let value = SymCoef::period_factor(ctx, id);
+        assert_eq!(symcoef_string(&value), "1*mzv_2");
+    }
+
+    #[test]
+    fn opaque_period_keys_are_not_interpreted_as_expressions() {
+        let ctx = PolyCtx::new(["bridge_opaque_period_x"]).unwrap();
+        let id = global_period_table().id_for("a+b").unwrap();
+        let mut monomial = SymMonomial::new(crate::core::Rat::one(ctx.clone()));
+        monomial.period_powers.insert(id, 2);
+        let value = SymCoef::from_monomials(ctx, vec![monomial]);
+        assert_eq!(symcoef_string(&value), format!("1*Period[{id}]^2"));
+    }
 
     #[test]
     fn legacy_delta_input_rejects_an_ambiguous_diagnostic_name() {

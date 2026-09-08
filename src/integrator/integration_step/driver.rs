@@ -9,11 +9,12 @@ use super::{
     Boundary, IntegrationError, IntegrationResult, IntegrationStepOptions, ShuffleEntrySym,
     ShuffleList, ShuffleListSym,
 };
+use crate::algebra::algebraic_letters::join_algebraic_letter_session;
 use crate::core::{DigestBuckets, PolyCtx, SymCoef, structural_bucket_digest};
 use crate::error::Error;
+use crate::integrator::transform::TransformSession;
 use crate::integrator::{
     RegulatorSym, TransformOptions, TransformResult, canonicalize_regulator_sym,
-    transform_shuffle_with_options_and_table,
 };
 use crate::reduce::MzvReductionTable;
 use crate::symbols::Word;
@@ -291,6 +292,10 @@ pub(crate) fn integration_step_core_sym_with_options(
     {
         return Err(Error::UnknownVariable(fibration.to_string()).into());
     }
+    let _algebraic_session = options
+        .introduce_algebraic_letters
+        .then(join_algebraic_letter_session)
+        .transpose()?;
     // Transform only the shuffle spine, so equal spines across independently
     // weighted entries share one result. The cache is step-local: it cannot
     // retain context-owned Symbolica objects beyond their useful lifetime.
@@ -300,22 +305,22 @@ pub(crate) fn integration_step_core_sym_with_options(
         introduce_algebraic_letters: options.introduce_algebraic_letters,
         forbidden_variables: forbidden_algebraic_variables,
     };
+    let mut transform_session =
+        TransformSession::new(ctx, variable, transform_options, Some(table))?;
     for entry in input {
         let value = if let Some(value) = transform_cache.get(&entry.shuffle, variable) {
             value.clone()
         } else {
-            let value = Arc::new(transform_shuffle_with_options_and_table(
-                ctx,
-                &entry.shuffle,
-                variable,
-                &transform_options,
-                table,
-            )?);
+            let value = Arc::new(transform_session.transform(&entry.shuffle)?);
             transform_cache.insert(&entry.shuffle, variable, value.clone());
             value
         };
         transformed.push(value);
     }
+    // All entries now own their shared results. Release recursive subwords
+    // and lookup keys before the memory-intensive primitive/endpoint phase.
+    drop(transform_session);
+    drop(transform_cache);
 
     // Pair indices are allocated in encounter order by the upstream-compatible
     // registry. Keep that encounter order deterministic until the table is

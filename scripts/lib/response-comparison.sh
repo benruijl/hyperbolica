@@ -62,7 +62,7 @@ hf_semantic_response() {
     local fields=$4
     local variables=$5
     local parser=$6
-    local temporary working next parsed field status=0
+    local temporary working next parsed field count index status=0
 
     [[ -x "$parser" ]] || {
         printf 'semantic response parser is not executable: %s\n' "$parser" >&2
@@ -89,6 +89,48 @@ hf_semantic_response() {
 
     if ((status == 0)); then
         while IFS= read -r field; do
+            if [[ "$field" == "result[].coef" ]]; then
+                if ! count=$(jq -er '
+                    .result |
+                    if type == "array" and all(.[]; .coef | type == "string")
+                    then length
+                    else error("result is not an array of coefficient objects")
+                    end
+                ' "$working"); then
+                    printf "semantic response field '%s' is absent or malformed\n" "$field" >&2
+                    status=1
+                    break
+                fi
+                for ((index = 0; index < count; index++)); do
+                    if ! jq -c --argjson index "$index" --argjson vars "$variables" \
+                        '{op:"parse_expr",expr:.result[$index].coef,vars:$vars}' \
+                        "$working" |
+                        env SYMBOLICA_HIDE_BANNER=1 OMP_NUM_THREADS=1 \
+                            OPENBLAS_NUM_THREADS=1 RAYON_NUM_THREADS=1 \
+                            "$parser" eval-json >"$parsed"; then
+                        printf "semantic parser failed for response field '%s[%d]'\n" \
+                            "$field" "$index" >&2
+                        status=1
+                        break
+                    fi
+                    if ! jq -e 'type == "object" and .op == "parse_expr" and
+                        (.canonical | type == "string") and (has("error") | not)' \
+                        "$parsed" >/dev/null; then
+                        printf "semantic parser returned an invalid response for field '%s[%d]'\n" \
+                            "$field" "$index" >&2
+                        status=1
+                        break
+                    fi
+                    if ! jq -S -c --argjson index "$index" --slurpfile parsed "$parsed" \
+                        '.result[$index].coef = $parsed[0].canonical' \
+                        "$working" >"$next" || ! mv -- "$next" "$working"; then
+                        status=1
+                        break
+                    fi
+                done
+                ((status == 0)) || break
+                continue
+            fi
             if ! jq -e --arg field "$field" \
                 'has($field) and (.[$field] | type == "string")' "$working" >/dev/null; then
                 printf "semantic response field '%s' is absent or is not a string\n" "$field" >&2

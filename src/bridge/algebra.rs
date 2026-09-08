@@ -6,8 +6,8 @@ use serde_json::{Value, json};
 
 use super::wire::{
     array_field, context_for, context_for_variable, explicit_variables, optional_bool,
-    parse_wire_poly, parse_wire_rat, parse_wire_rational_scalar, result_response, string_field,
-    variable_index, wire_context_variables, wire_poly, wire_rat,
+    parse_wire_factored_rat, parse_wire_poly, parse_wire_rat, parse_wire_rational_scalar,
+    result_response, string_field, variable_index, wire_context_variables, wire_poly, wire_rat,
 };
 use crate::algebra::algebraic_letters::{
     DEFAULT_ALGEBRAIC_LETTER_POOL_SIZE, algebraic_letters_allocate, algebraic_letters_clear,
@@ -16,7 +16,9 @@ use crate::algebra::algebraic_letters::{
     simplify_with_vieta,
 };
 use crate::algebra::linear_factors::{LinearFactorOptions, linear_factors_with_options};
-use crate::algebra::partial_fractions::{PartialFractionOptions, partial_fractions_with_options};
+use crate::algebra::partial_fractions::{
+    PartialFractionOptions, partial_fractions_factored_with_options,
+};
 use crate::core::{Poly, PolyCtx, Rat};
 use crate::error::{Error, Result};
 
@@ -356,8 +358,8 @@ fn evaluate_supported(request: &Value, op: &str) -> Result<Value> {
                 .transpose()?;
             let ctx = factor_context(request, &[expression], introduce_algebraic_letters)?;
             let variable = variable_index(&ctx, request)?;
-            let fractions = partial_fractions_with_options(
-                &parse_wire_rat(&ctx, expression)?,
+            let fractions = partial_fractions_factored_with_options(
+                &parse_wire_factored_rat(&ctx, expression)?,
                 variable,
                 &PartialFractionOptions {
                     introduce_algebraic_letters,

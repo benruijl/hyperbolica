@@ -22,6 +22,36 @@ fn arithmetic_and_exact_division() {
 }
 
 #[test]
+fn integer_associates_and_products_match_rational_coefficient_oracle() {
+    let ctx = context();
+    let expressions = [
+        "0",
+        "(x+y+1)^4",
+        "(x/3-y/5+7/11)^4",
+        "18446744073709551616*x^5-17*x^3*y+11*y^4/19+23/29",
+    ];
+    let polynomials = expressions
+        .iter()
+        .map(|expression| Poly::parse(ctx.clone(), expression).unwrap())
+        .collect::<Vec<_>>();
+    for left in &polynomials {
+        let (integer, scalar) = left.integer_associate();
+        let restored = integer.map_coeff(
+            |coefficient| Q.mul(&Rational::from(coefficient), &scalar),
+            Q,
+        );
+        assert_eq!(&restored, left.inner());
+        for right in &polynomials {
+            let actual = left.try_mul(right).unwrap();
+            assert_eq!(actual.inner(), &(left.inner() * right.inner()));
+        }
+        for exponent in [0, 1, 2, 3, 5] {
+            assert_eq!(left.pow(exponent).inner(), &left.inner().pow(exponent));
+        }
+    }
+}
+
+#[test]
 fn structural_hash_matches_polynomial_and_context_equality() {
     let first_ctx = context();
     let equivalent_ctx = context();

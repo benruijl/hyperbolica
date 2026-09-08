@@ -1,5 +1,29 @@
 use super::*;
 
+#[test]
+fn native_linear_decomposition_preserves_scalar_content_and_keeps_input_views_cold() {
+    let ctx = PolyCtx::new(["x", "y", "z"]).unwrap();
+    for expression in [
+        "(3*x^4+y*x+z)/(14*(2*x-y)^3*(3*x+z)^2*(y+1))",
+        "(x^3/5+y/7)/(x^2*(x+y)^2)",
+        "(x+y)/(x^3*(2*x-z)^2)",
+    ] {
+        let value = Rat::parse(ctx.clone(), expression).unwrap();
+        let result = partial_fractions(&value, 0).unwrap();
+        assert_eq!(reconstruct(&result, 0), value, "{expression}");
+        assert!(!value.compatibility_views_initialized());
+        assert!(!result.polynomial_part.compatibility_views_initialized());
+        for pole in result.poles {
+            assert!(!pole.pole.compatibility_views_initialized());
+            assert!(
+                pole.coefs
+                    .iter()
+                    .all(|coefficient| !coefficient.compatibility_views_initialized())
+            );
+        }
+    }
+}
+
 use symbolica::prelude::{AtomCore, Symbol};
 
 use crate::algebra::algebraic_letters::{

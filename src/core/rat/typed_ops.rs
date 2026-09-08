@@ -15,6 +15,23 @@ fn lift_native_polynomial(polynomial: &MultivariatePolynomial<IntegerRing, u16>)
     polynomial.map_coeff(|coefficient| Q.to_element_numerator(coefficient.clone()), Q)
 }
 
+fn native_polynomial_coefficient(
+    polynomial: &MultivariatePolynomial<IntegerRing, u16>,
+    variable: usize,
+    exponent: u16,
+) -> MultivariatePolynomial<IntegerRing, u16> {
+    let mut coefficient = polynomial.zero();
+    let mut powers = vec![0; polynomial.nvars()];
+    for (term, value) in polynomial.exponents_iter().zip(&polynomial.coefficients) {
+        if term[variable] == exponent {
+            powers.copy_from_slice(term);
+            powers[variable] = 0;
+            coefficient.append_monomial_back(value.clone(), &powers);
+        }
+    }
+    coefficient
+}
+
 fn evaluate_native_polynomial_at_rat(
     polynomial: &MultivariatePolynomial<IntegerRing, u16>,
     variable: usize,
@@ -44,6 +61,12 @@ impl Rat {
         self.require_same_context(replacement)?;
         if variable >= self.ctx.len() {
             return Err(Error::UnknownVariable(variable.to_string()));
+        }
+        if !self.depends_on(variable)? {
+            return Ok(self.clone());
+        }
+        if let Some(value) = replacement.rational_constant() {
+            return self.substitute_rational(variable, &value);
         }
 
         let numerator = evaluate_native_polynomial_at_rat(
@@ -76,6 +99,9 @@ impl Rat {
         if value.is_integer() {
             return self.substitute_integer(variable, value.numerator_ref());
         }
+        if !self.depends_on(variable)? {
+            return Ok(self.clone());
+        }
         let numerator = lift_native_polynomial(&self.native.numerator).replace(variable, value);
         let denominator = lift_native_polynomial(&self.native.denominator).replace(variable, value);
         if denominator.is_zero() {
@@ -92,6 +118,9 @@ impl Rat {
     pub fn substitute_integer(&self, variable: usize, value: &Integer) -> Result<Self> {
         if variable >= self.ctx.len() {
             return Err(Error::UnknownVariable(variable.to_string()));
+        }
+        if !self.depends_on(variable)? {
+            return Ok(self.clone());
         }
         let numerator = self.native.numerator.replace(variable, value);
         let denominator = self.native.denominator.replace(variable, value);
@@ -214,11 +243,11 @@ impl Rat {
 
     /// Signed Laurent order at `variable = 0`; `i64::MAX` denotes zero.
     pub fn pole_degree(&self, variable: usize) -> Result<i64> {
-        if self.is_zero() {
-            return Ok(i64::MAX);
-        }
         if variable >= self.ctx.len() {
             return Err(Error::UnknownVariable(variable.to_string()));
+        }
+        if self.is_zero() {
+            return Ok(i64::MAX);
         }
         let numerator_min = i64::from(self.native.numerator.degree_bounds(variable).0);
         let denominator_min = i64::from(self.native.denominator.degree_bounds(variable).0);
@@ -227,16 +256,26 @@ impl Rat {
 
     /// Leading Laurent coefficient at `variable = 0`.
     pub fn residue(&self, variable: usize) -> Result<Self> {
-        if self.is_zero() {
-            return Ok(Self::zero(self.ctx().clone()));
+        if variable >= self.ctx.len() {
+            return Err(Error::UnknownVariable(variable.to_string()));
         }
-        let numerator_degree = self.numerator().min_exponent(variable)?;
-        let denominator_degree = self.denominator().min_exponent(variable)?;
-        Self::new(
-            self.numerator()
-                .coefficient_of(variable, numerator_degree)?,
-            self.denominator()
-                .coefficient_of(variable, denominator_degree)?,
+        if self.is_zero() {
+            return Ok(self.clone());
+        }
+        let numerator_degree = self.native.numerator.degree_bounds(variable).0;
+        let denominator_degree = self.native.denominator.degree_bounds(variable).0;
+        Self::from_native(
+            self.ctx.clone(),
+            NativeRat::from_num_den(
+                native_polynomial_coefficient(&self.native.numerator, variable, numerator_degree),
+                native_polynomial_coefficient(
+                    &self.native.denominator,
+                    variable,
+                    denominator_degree,
+                ),
+                &Z,
+                true,
+            ),
         )
     }
 }

@@ -20,6 +20,80 @@ fn parse_and_cancel() {
 }
 
 #[test]
+fn native_scalar_constructors_handle_signs_and_large_rationals() {
+    let ctx = context();
+    for value in [0, 1, -1, i64::MIN, i64::MAX] {
+        let scalar = Rat::from_int(ctx.clone(), value);
+        assert_eq!(scalar, Rat::parse(ctx.clone(), &value.to_string()).unwrap());
+        assert!(!scalar.compatibility_views_initialized());
+    }
+    for expression in ["0", "-13/17", "18446744073709551616/3"] {
+        let expected = Rat::parse(ctx.clone(), expression).unwrap();
+        let scalar = Rat::from_rational(ctx.clone(), expected.rational_constant().unwrap());
+        assert_eq!(scalar, expected);
+        assert!(!scalar.compatibility_views_initialized());
+    }
+}
+
+#[test]
+fn arithmetic_identities_preserve_left_context_and_reject_foreign_contexts() {
+    let symbol = Symbol::parse("identity_x", "rat_identity_context").unwrap();
+    let left_ctx = PolyCtx::from_symbols([symbol]).unwrap();
+    let right_ctx = PolyCtx::from_indeterminates([symbol.to_atom()]).unwrap();
+    let left = Rat::from_poly(Poly::generator(left_ctx.clone(), 0).unwrap());
+    let right = Rat::from_poly(Poly::generator(right_ctx.clone(), 0).unwrap());
+    let zero = Rat::zero(left_ctx.clone());
+    let one = Rat::one(left_ctx.clone());
+    let right_zero = Rat::zero(right_ctx.clone());
+    let right_one = Rat::one(right_ctx);
+
+    for (actual, expected) in [
+        (zero.try_add(&right).unwrap(), left.clone()),
+        (left.try_add(&right_zero).unwrap(), left.clone()),
+        (zero.try_sub(&right).unwrap(), left.negated()),
+        (left.try_sub(&right_zero).unwrap(), left.clone()),
+        (one.try_mul(&right).unwrap(), left.clone()),
+        (left.try_mul(&right_one).unwrap(), left.clone()),
+        (left.try_mul(&right_zero).unwrap(), zero.clone()),
+        (zero.try_div(&right).unwrap(), zero.clone()),
+        (left.try_div(&right_one).unwrap(), left.clone()),
+    ] {
+        assert_eq!(actual, expected);
+        assert!(Arc::ptr_eq(actual.ctx(), &left_ctx));
+        assert!(Arc::ptr_eq(actual.numerator().ctx(), &left_ctx));
+    }
+
+    let foreign = Rat::zero(PolyCtx::new(["unrelated_identity_y"]).unwrap());
+    for error in [
+        zero.try_add(&foreign),
+        zero.try_sub(&foreign),
+        zero.try_mul(&foreign),
+        zero.try_div(&foreign),
+    ] {
+        assert!(matches!(error, Err(Error::ContextMismatch)));
+    }
+    assert!(matches!(
+        zero.try_div(&right_zero),
+        Err(Error::DivisionByZero)
+    ));
+}
+
+#[test]
+fn native_constructor_checks_both_polynomial_variable_maps() {
+    let ctx = context();
+    let source = Rat::parse(ctx.clone(), "x+y").unwrap();
+    let foreign = Rat::one(PolyCtx::new(["x", "z"]).unwrap());
+    let mixed = super::NativeRat {
+        numerator: source.native().numerator.clone(),
+        denominator: foreign.native().denominator.clone(),
+    };
+    assert!(matches!(
+        Rat::from_native(ctx, mixed),
+        Err(Error::InvalidInput(_))
+    ));
+}
+
+#[test]
 fn equality_and_hash_use_native_variables_not_diagnostic_context_names() {
     let symbol = Symbol::parse("x", "rat_context_shared").unwrap();
     let qualified_ctx = PolyCtx::from_symbols([symbol]).unwrap();
@@ -425,6 +499,55 @@ fn derivative_and_laurent_residue() {
         rational.derivative(0).unwrap(),
         Rat::parse(ctx, "(-x-2)/(x^3*y)").unwrap()
     );
+}
+
+#[test]
+fn laurent_leading_coefficients_stay_native_for_sparse_inputs_and_validate_zero() {
+    let ctx = context();
+    for (expression, variable, expected, order) in [
+        ("x^40000*(y+1)/(x^3*(y^2-1))", 0, "1/(y-1)", 39997),
+        ("(y^4*x+y^4+y^9)/(y^2*(x+2)+y^3)", 1, "(x+1)/(x+2)", 2),
+        ("(2*x+4*y)/(6*y)", 0, "2/3", 0),
+    ] {
+        let value = Rat::parse(ctx.clone(), expression).unwrap();
+        let residue = value.residue(variable).unwrap();
+        assert_eq!(value.pole_degree(variable).unwrap(), order);
+        assert_eq!(residue, Rat::parse(ctx.clone(), expected).unwrap());
+        assert!(!value.compatibility_views_initialized());
+        assert!(!residue.compatibility_views_initialized());
+    }
+    let zero = Rat::zero(ctx);
+    assert!(matches!(zero.residue(2), Err(Error::UnknownVariable(_))));
+    assert!(matches!(
+        zero.pole_degree(2),
+        Err(Error::UnknownVariable(_))
+    ));
+}
+
+#[test]
+fn absent_variable_and_scalar_composition_keep_exact_semantics() {
+    let ctx = context();
+    let value = Rat::parse(ctx.clone(), "(y^5+1)/(y^3+2)").unwrap();
+    let replacement = Rat::parse(ctx.clone(), "1/(x+y)").unwrap();
+    assert_eq!(value.substitute_rat(0, &replacement).unwrap(), value);
+    assert_eq!(
+        value.substitute_rational(0, &Rational::new(2, 3)).unwrap(),
+        value
+    );
+    assert_eq!(
+        value.substitute_integer(0, &Integer::from(7)).unwrap(),
+        value
+    );
+    let scalar = Rat::from_rational(ctx.clone(), Rational::new(2, 3));
+    assert_eq!(
+        value.substitute_rat(1, &scalar).unwrap(),
+        value.substitute_rational(1, &Rational::new(2, 3)).unwrap()
+    );
+    assert!(matches!(
+        value.substitute_rat(2, &scalar),
+        Err(Error::UnknownVariable(_))
+    ));
+    assert!(!value.compatibility_views_initialized());
 }
 
 #[test]

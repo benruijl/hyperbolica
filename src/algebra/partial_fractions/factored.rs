@@ -3,6 +3,7 @@
 use crate::core::{FactoredRat, Rat};
 use crate::error::{Error, Result};
 
+use super::linear::native_linear_partial_fractions;
 use super::{
     PartialFractionOptions, PartialFractionization, canonicalize_poles, merge_decomposition,
     partial_fractions_with_options,
@@ -25,13 +26,19 @@ pub fn partial_fractions_factored(
 /// Decompose a deferred denominator with Symbolica-backed exact arithmetic and
 /// public factorization/partial-fraction primitives.
 ///
+/// Proper inputs with supplied linear denominator blocks use Symbolica's
+/// native factored-coefficient recurrence, without materializing their powered
+/// denominator product. Symbolica preserves rational units, independent
+/// factors and leading coefficients; this adapter maps the resulting monic
+/// poles to HyperFLINT order and materializes only final coefficients.
+///
 /// With algebraic-letter introduction enabled, Hyperbolica materializes the
 /// complete function once so all quadratic blocks are split in one formal
 /// coefficient field. Otherwise, `FactorizedRationalPolynomial::apart`
 /// separates already-known pairwise-coprime target-dependent denominator
 /// blocks. Hyperbolica eagerly materializes each resulting component (one
 /// target-dependent block plus all target-independent factors) and hands it to
-/// the ordinary adapter. Linear components use its Taylor/Cauchy recurrence;
+/// the ordinary adapter. Linear components use the native factored recurrence;
 /// nonlinear components fall back to
 /// `RationalPolynomial::apart_factored_denominators`. The pinned native `apart`
 /// still expands powered blocks and intermediate suffix products internally;
@@ -61,6 +68,10 @@ pub fn partial_fractions_factored_with_options(
         return partial_fractions_with_options(&function.materialize()?, variable, options);
     }
 
+    if let Some(output) = try_proper_linear_factored(function, variable)? {
+        return Ok(output);
+    }
+
     let Some(components) = function.apart_components(variable)? else {
         return partial_fractions_with_options(&function.materialize()?, variable, options);
     };
@@ -76,6 +87,41 @@ pub fn partial_fractions_factored_with_options(
     }
     canonicalize_poles(&mut output);
     Ok(output)
+}
+
+fn try_proper_linear_factored(
+    function: &FactoredRat,
+    variable: usize,
+) -> Result<Option<PartialFractionization>> {
+    let ctx = function.ctx();
+    if function.is_zero() {
+        return Ok(Some(PartialFractionization {
+            polynomial_part: Rat::zero(ctx.clone()),
+            poles: Vec::new(),
+        }));
+    }
+
+    // Check the complete shape before doing any powered coefficient-field
+    // arithmetic. Improper or nonlinear inputs retain the ordinary fallback.
+    let mut denominator_degree = 0_usize;
+    for factor in function.den_factors() {
+        match factor.base.inner().degree(variable) {
+            0 => {}
+            1 => {
+                let exponent =
+                    usize::try_from(factor.exp).map_err(|_| Error::InvalidExponent(factor.exp))?;
+                denominator_degree = denominator_degree.checked_add(exponent).ok_or_else(|| {
+                    Error::InvalidInput("partial-fraction multiplicity overflow".into())
+                })?;
+            }
+            _ => return Ok(None),
+        }
+    }
+    if usize::from(function.numerator().inner().degree(variable)) >= denominator_degree {
+        return Ok(None);
+    }
+
+    native_linear_partial_fractions(ctx, &function.to_native_factored()?, variable).map(Some)
 }
 
 #[cfg(test)]
@@ -185,6 +231,87 @@ mod tests {
             ],
         );
         assert_equivalent(&function, 0);
+    }
+
+    #[test]
+    fn direct_linear_path_retains_parameter_leading_coefficients_and_units() {
+        let ctx = PolyCtx::new(["x", "y", "z"]).unwrap();
+        let function = build(
+            &ctx,
+            "(x^2+y*x+z+1)/13",
+            &[
+                ("((y+1)*x+z)/3", 2),
+                ("((z+2)*x+y-1)/5", 2),
+                ("(y*z+2)/7", 3),
+                ("-11/17", 1),
+            ],
+        );
+        let direct = try_proper_linear_factored(&function, 0).unwrap().unwrap();
+        let materialized = function.materialize().unwrap();
+        let ordinary = super::super::partial_fractions(&materialized, 0).unwrap();
+        assert_eq!(direct, ordinary);
+        assert_eq!(reconstruct(&direct, 0), materialized);
+    }
+
+    #[test]
+    fn direct_linear_path_removes_cancelled_poles_and_high_orders() {
+        let ctx = PolyCtx::new(["x", "y"]).unwrap();
+        let function = build(
+            &ctx,
+            "(x+1)^2*(x+y)*(y+1)^2",
+            &[("2*(y+1)*(x+1)", 1), ("-3*(y+1)*(x+1)", 2), ("x+y", 1)],
+        );
+        let direct = try_proper_linear_factored(&function, 0).unwrap().unwrap();
+        assert_eq!(direct.poles.len(), 1);
+        assert_eq!(direct.poles[0].multiplicity, 1);
+        assert_eq!(direct.poles[0].pole, Rat::from_int(ctx.clone(), -1));
+        assert_eq!(
+            direct.poles[0].coefs,
+            [Rat::parse(ctx, "1/(18*(y+1))").unwrap()]
+        );
+        assert_eq!(reconstruct(&direct, 0), function.materialize().unwrap());
+    }
+
+    #[test]
+    fn direct_linear_path_rejects_improper_and_nonlinear_shapes() {
+        let ctx = PolyCtx::new(["x", "y"]).unwrap();
+        for function in [
+            build(&ctx, "x^3+y", &[("x+1", 3)]),
+            build(&ctx, "x+y", &[("x^2+1", 2), ("x+1", 1)]),
+            build(&ctx, "x+y", &[("y+1", 2)]),
+        ] {
+            assert!(try_proper_linear_factored(&function, 0).unwrap().is_none());
+        }
+    }
+
+    #[test]
+    fn wide_powered_linear_block_is_never_expanded() {
+        // Expanding this 14-term base to power 32 would contain
+        // binomial(45, 13) terms. Its partial fractions have one nonzero
+        // coefficient, so the deferred path must only inspect the base.
+        let mut variables = vec!["x".to_owned()];
+        variables.extend((0..12).map(|index| format!("y{index}")));
+        let ctx = PolyCtx::new(&variables).unwrap();
+        let base = format!("{}+1", variables.join("+"));
+        let function = build(&ctx, "1", &[(&base, 32)]);
+        let direct = try_proper_linear_factored(&function, 0).unwrap().unwrap();
+        let public = partial_fractions_factored(&function, 0).unwrap();
+        assert_eq!(direct, public);
+        assert!(direct.polynomial_part.is_zero());
+        assert_eq!(direct.poles.len(), 1);
+        assert_eq!(direct.poles[0].multiplicity, 32);
+        assert!(direct.poles[0].coefs[..31].iter().all(Rat::is_zero));
+        assert!(direct.poles[0].coefs[31].is_one());
+        let expected = Rat::from_poly(
+            Poly::parse(ctx, &base)
+                .unwrap()
+                .coefficient_of(0, 0)
+                .unwrap(),
+        )
+        .negated();
+        assert_eq!(direct.poles[0].pole, expected);
+        assert_eq!(function.den_factors()[0].base.inner().nterms(), 14);
+        assert_eq!(function.den_factors()[0].exp, 32);
     }
 
     #[test]

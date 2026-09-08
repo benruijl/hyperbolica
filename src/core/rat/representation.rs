@@ -37,15 +37,33 @@ impl Rat {
     }
 
     pub fn zero(ctx: Arc<PolyCtx>) -> Self {
-        Self::from_poly(Poly::zero(ctx))
+        let native = NativeRat::new(&Z, ctx.variable_map());
+        Self::from_native(ctx, native).expect("zero preserves the polynomial context")
     }
 
     pub fn one(ctx: Arc<PolyCtx>) -> Self {
-        Self::from_poly(Poly::one(ctx))
+        Self::from_int(ctx, 1)
     }
 
     pub fn from_int(ctx: Arc<PolyCtx>, value: i64) -> Self {
-        Self::from_poly(Poly::from_int(ctx, value))
+        let mut native = NativeRat::new(&Z, ctx.variable_map());
+        native.numerator = native.numerator.constant(Integer::from(value));
+        Self::from_native(ctx, native).expect("integer constants preserve the polynomial context")
+    }
+
+    /// Construct an exact scalar directly in the native integer coefficient
+    /// ring, without allocating intermediate rational-coefficient polynomials.
+    pub fn from_rational(ctx: Arc<PolyCtx>, value: Rational) -> Self {
+        let template = NativeRat::new(&Z, ctx.variable_map());
+        let native = NativeRat::from_num_den(
+            template.numerator.constant(value.numerator_ref().clone()),
+            template
+                .denominator
+                .constant(value.denominator_ref().clone()),
+            &Z,
+            true,
+        );
+        Self::from_native(ctx, native).expect("rational constants preserve the polynomial context")
     }
 
     pub fn parse(ctx: Arc<PolyCtx>, expression: &str) -> Result<Self> {
@@ -129,16 +147,40 @@ impl Rat {
         self.views.get().is_some()
     }
 
-    pub(crate) fn from_native(ctx: Arc<PolyCtx>, native: NativeRat) -> Result<Self> {
+    pub(crate) fn from_native(ctx: Arc<PolyCtx>, mut native: NativeRat) -> Result<Self> {
         if native.denominator.is_zero() {
             return Err(Error::DivisionByZero);
         }
-        if native.get_variables().as_ref() != ctx.variable_map().as_ref()
-            || native.denominator.get_vars_ref() != ctx.variable_map().as_ref()
+        if !ctx.has_variable_map(native.get_variables())
+            || !ctx.has_variable_map(native.denominator.variables())
         {
-            return Err(Error::InvalidInput(
-                "rational function contains an indeterminate outside its context".into(),
-            ));
+            let variables = ctx.native_variables();
+            // Native coefficient-field operations may return a permutation
+            // or a subset of the context. Match structural identities, not
+            // diagnostic names; even an unused foreign declaration remains
+            // an error at this boundary.
+            if native
+                .numerator
+                .variables()
+                .iter()
+                .chain(native.denominator.variables().iter())
+                .any(|variable| !variables.contains(variable))
+            {
+                return Err(Error::InvalidInput(
+                    "rational function contains an indeterminate outside its context".into(),
+                ));
+            }
+            let numerator = native
+                .numerator
+                .rearrange_with_growth(variables)
+                .map_err(Error::InvalidInput)?;
+            let denominator = native
+                .denominator
+                .rearrange_with_growth(variables)
+                .map_err(Error::InvalidInput)?;
+            // A permutation preserves coprimality but can change the leading
+            // denominator sign. Restore native normalization without a GCD.
+            native = NativeRat::from_num_den(numerator, denominator, &Z, false);
         }
         Ok(Self {
             ctx,
@@ -178,6 +220,20 @@ impl Rat {
 
     pub(super) fn same_context(&self, other: &Self) -> bool {
         self.ctx.is_compatible_with(&other.ctx)
+    }
+
+    /// Share an unchanged value while preserving the caller's diagnostic
+    /// context. Arithmetic only calls this after checking compatibility.
+    pub(super) fn clone_in_context(&self, ctx: &Arc<PolyCtx>) -> Self {
+        if Arc::ptr_eq(&self.ctx, ctx) {
+            self.clone()
+        } else {
+            Self {
+                ctx: ctx.clone(),
+                native: self.native.clone(),
+                views: Arc::new(OnceLock::new()),
+            }
+        }
     }
 
     pub(super) fn require_same_context(&self, other: &Self) -> Result<()> {

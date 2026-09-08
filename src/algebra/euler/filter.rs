@@ -1,6 +1,6 @@
+use std::cell::Cell;
 use std::collections::HashMap;
 use std::hash::Hash;
-use std::sync::atomic::{AtomicU64, Ordering};
 
 use symbolica::prelude::{AtomCore, Rational};
 
@@ -58,28 +58,27 @@ pub struct ChiFilterStats {
     pub failure_abstentions: u64,
 }
 
-static JUDGED: AtomicU64 = AtomicU64::new(0);
-static DROPPED: AtomicU64 = AtomicU64::new(0);
-static BOUNDARY_EXEMPT: AtomicU64 = AtomicU64::new(0);
-static CHI_CALLS: AtomicU64 = AtomicU64::new(0);
-static FAILURE_ABSTENTIONS: AtomicU64 = AtomicU64::new(0);
+// LR filtering runs sequentially on its caller's thread. Process-global
+// counters let another concurrent request reset or overwrite these results.
+thread_local! {
+    static STATS: Cell<ChiFilterStats> = const { Cell::new(ChiFilterStats {
+        judged: 0, dropped: 0, boundary_exempt: 0, chi_calls: 0, failure_abstentions: 0,
+    }) };
+}
 
+/// Counters for the calling thread since its last reset.
 pub fn chi_filter_stats() -> ChiFilterStats {
-    ChiFilterStats {
-        judged: JUDGED.load(Ordering::Relaxed),
-        dropped: DROPPED.load(Ordering::Relaxed),
-        boundary_exempt: BOUNDARY_EXEMPT.load(Ordering::Relaxed),
-        chi_calls: CHI_CALLS.load(Ordering::Relaxed),
-        failure_abstentions: FAILURE_ABSTENTIONS.load(Ordering::Relaxed),
-    }
+    STATS.get()
 }
 
 pub fn reset_chi_filter_stats() {
-    JUDGED.store(0, Ordering::Relaxed);
-    DROPPED.store(0, Ordering::Relaxed);
-    BOUNDARY_EXEMPT.store(0, Ordering::Relaxed);
-    CHI_CALLS.store(0, Ordering::Relaxed);
-    FAILURE_ABSTENTIONS.store(0, Ordering::Relaxed);
+    STATS.set(ChiFilterStats::default());
+}
+
+fn update_stats(update: impl FnOnce(&mut ChiFilterStats)) {
+    let mut stats = STATS.get();
+    update(&mut stats);
+    STATS.set(stats);
 }
 
 fn counted_chi(
@@ -90,7 +89,7 @@ fn counted_chi(
     constraint: Option<&Poly>,
     seed: u64,
 ) -> ChiCount {
-    CHI_CALLS.fetch_add(1, Ordering::Relaxed);
+    update_stats(|stats| stats.chi_calls = stats.chi_calls.wrapping_add(1));
     chi_count_sectors(
         factors,
         exponents,
@@ -227,7 +226,7 @@ pub fn chi_letter_genuine(
             .iter()
             .any(|variable| *variable >= letter.ctx().len())
     {
-        FAILURE_ABSTENTIONS.fetch_add(1, Ordering::Relaxed);
+        update_stats(|stats| stats.failure_abstentions = stats.failure_abstentions.wrapping_add(1));
         return true;
     }
 
@@ -244,7 +243,9 @@ pub fn chi_letter_genuine(
         let mut charted = Vec::with_capacity(factors.len());
         for factor in factors {
             let Ok(value) = factor.substitute_rational(chart, &Rational::one()) else {
-                FAILURE_ABSTENTIONS.fetch_add(1, Ordering::Relaxed);
+                update_stats(|stats| {
+                    stats.failure_abstentions = stats.failure_abstentions.wrapping_add(1)
+                });
                 return true;
             };
             charted.push(value);
@@ -265,7 +266,7 @@ pub fn chi_letter_genuine(
         generic_seed: twist_seed,
     };
     let Some(exponents) = twist_exponents(factors.len(), twist_seed) else {
-        FAILURE_ABSTENTIONS.fetch_add(1, Ordering::Relaxed);
+        update_stats(|stats| stats.failure_abstentions = stats.failure_abstentions.wrapping_add(1));
         return true;
     };
     let parameters = (0..letter.ctx().len())
@@ -300,7 +301,7 @@ pub fn chi_letter_genuine(
         value
     };
     let Some(generic) = generic else {
-        FAILURE_ABSTENTIONS.fetch_add(1, Ordering::Relaxed);
+        update_stats(|stats| stats.failure_abstentions = stats.failure_abstentions.wrapping_add(1));
         return true;
     };
 
@@ -321,7 +322,9 @@ pub fn chi_letter_genuine(
     );
     match first.status {
         ChiStatus::PositiveDim | ChiStatus::Failed => {
-            FAILURE_ABSTENTIONS.fetch_add(1, Ordering::Relaxed);
+            update_stats(|stats| {
+                stats.failure_abstentions = stats.failure_abstentions.wrapping_add(1)
+            });
             return true;
         }
         ChiStatus::Finite if first.count < generic => return true,
@@ -339,7 +342,9 @@ pub fn chi_letter_genuine(
     match second.status {
         ChiStatus::Finite => second.count < generic,
         ChiStatus::PositiveDim | ChiStatus::Failed => {
-            FAILURE_ABSTENTIONS.fetch_add(1, Ordering::Relaxed);
+            update_stats(|stats| {
+                stats.failure_abstentions = stats.failure_abstentions.wrapping_add(1)
+            });
             true
         }
     }
@@ -356,11 +361,11 @@ pub fn chi_filter_letters(
     let mut kept = Vec::with_capacity(letters.len());
     for letter in letters {
         if is_boundary_monomial(letter) {
-            BOUNDARY_EXEMPT.fetch_add(1, Ordering::Relaxed);
+            update_stats(|stats| stats.boundary_exempt = stats.boundary_exempt.wrapping_add(1));
             kept.push(letter.clone());
             continue;
         }
-        JUDGED.fetch_add(1, Ordering::Relaxed);
+        update_stats(|stats| stats.judged = stats.judged.wrapping_add(1));
         if chi_letter_genuine(
             augmented_group,
             subset_variable_indices,
@@ -370,7 +375,7 @@ pub fn chi_filter_letters(
         ) {
             kept.push(letter.clone());
         } else {
-            DROPPED.fetch_add(1, Ordering::Relaxed);
+            update_stats(|stats| stats.dropped = stats.dropped.wrapping_add(1));
         }
     }
     kept

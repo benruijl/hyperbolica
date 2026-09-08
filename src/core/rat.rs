@@ -11,6 +11,10 @@ mod traits;
 mod typed_ops;
 
 #[cfg(test)]
+mod context_tests;
+#[cfg(test)]
+mod power_tests;
+#[cfg(test)]
 mod property_tests;
 #[cfg(test)]
 mod tests;

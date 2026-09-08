@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use symbolica::prelude::Symbol;
+use symbolica::prelude::{Atom, AtomCore, Symbol};
 
 use super::conversion::integer_letter;
 use super::fibration::{FibBasisAcc, FibBasisAccSym};
@@ -182,6 +182,47 @@ fn fibration_basis_transforms_requested_variable_and_aggregates() {
     assert_eq!(result.terms.len(), 1);
     assert_eq!(result.terms[0].0, vec![word(&ctx, &[0])]);
     assert_eq!(result.terms[0].1, Rat::from_int(ctx, -5));
+}
+
+#[test]
+fn symbolic_fibration_agrees_between_slim_and_wide_period_contexts() {
+    let table = standard_mzv_reductions();
+    let x = Symbol::parse("fibration_period_x", SYMBOL_NAMESPACE).unwrap();
+    let slim = PolyCtx::from_indeterminates([x.to_atom()]).unwrap();
+    let wide =
+        PolyCtx::from_indeterminates(build_mzv_atom_list(&table, [x.to_atom()]).unwrap()).unwrap();
+    let project = |ctx: &Arc<PolyCtx>| {
+        let input = [
+            (2, vec!["0", "-fibration_period_x"]),
+            (-3, vec!["-fibration_period_x", "-2"]),
+            (5, vec!["-2", "-1"]),
+        ]
+        .into_iter()
+        .map(|(factor, letters)| RegTermSym {
+            coef: SymCoef::from_rat(&Rat::from_int(ctx.clone(), factor)),
+            key: vec![expression_word(ctx, &letters)],
+        })
+        .collect();
+        let result = fibration_basis_sym(
+            ctx,
+            &input,
+            &[ctx.index_of_indeterminate(x.to_atom().as_view()).unwrap()],
+            &table,
+        )
+        .unwrap();
+        result
+            .terms
+            .iter()
+            .map(|(key, coefficient)| {
+                key.iter().fold(
+                    crate::api::symcoef_to_atom(coefficient).unwrap(),
+                    |value, word| value * crate::api::period_word_to_atom(word),
+                )
+            })
+            .sum::<Atom>()
+            .expand()
+    };
+    assert_eq!(project(&slim), project(&wide));
 }
 
 #[test]

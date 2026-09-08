@@ -1,7 +1,8 @@
-use std::collections::{HashMap, hash_map::RandomState};
+use std::collections::{HashMap, VecDeque, hash_map::RandomState};
 use std::hash::BuildHasher;
 use std::sync::Arc;
 
+use super::accumulator::BalancedSum;
 use crate::algebra::partial_fractions::{
     PartialFractionOptions, partial_fractions_factored_with_options, partial_fractions_with_options,
 };
@@ -22,7 +23,7 @@ fn antiderivative_polynomial_part(polynomial: &Rat, variable: usize) -> Result<R
 
 struct AccumulatorCell {
     word: Word,
-    coefficient: FactoredRat,
+    coefficient: BalancedSum<Rat>,
 }
 
 #[derive(Clone)]
@@ -100,21 +101,19 @@ fn bump<S: BuildHasher>(
     }
     let (digest, existing) = indices.find(rows, &word);
     if let Some(index) = existing {
-        rows[index].coefficient = rows[index]
-            .coefficient
-            .try_add(&FactoredRat::from_rat(&coefficient))?;
+        rows[index].coefficient.push(coefficient)?;
     } else {
         indices.insert(digest, rows.len());
         rows.push(AccumulatorCell {
             word,
-            coefficient: FactoredRat::from_rat(&coefficient),
+            coefficient: BalancedSum::new(coefficient),
         });
     }
     Ok(())
 }
 
 fn push_integration_by_parts(
-    queue: &mut Vec<WorkTerm>,
+    queue: &mut VecDeque<WorkTerm>,
     primitive: &Rat,
     word: &Word,
     variable_rat: &Rat,
@@ -128,7 +127,7 @@ fn push_integration_by_parts(
     }
     let coefficient = primitive.negated().try_div(&chain_denominator)?;
     if !coefficient.is_zero() {
-        queue.push(WorkTerm {
+        queue.push_back(WorkTerm {
             coefficient: WorkCoefficient::Rational(coefficient),
             word: Word::from(word.letters[1..].to_vec()),
         });
@@ -195,24 +194,24 @@ pub(crate) fn integrate_ii_with_factored_prefactor(
                 word: term.word.clone(),
             })
         })
-        .collect::<Result<Vec<_>>>()?;
+        .collect::<Result<VecDeque<_>>>()?;
     integrate_ii_work_queue(ctx, queue, variable, options)
 }
 
 fn integrate_ii_work_queue(
     ctx: &Arc<PolyCtx>,
-    mut queue: Vec<WorkTerm>,
+    mut queue: VecDeque<WorkTerm>,
     variable: usize,
     options: &IntegrateIiOptions<'_>,
 ) -> Result<Wordlist> {
     let variable_rat = Rat::from_poly(Poly::generator(ctx.clone(), variable)?);
-    let mut queue_index = 0_usize;
     let mut rows = Vec::<AccumulatorCell>::new();
     let mut indices = WordIndex::default();
 
-    while queue_index < queue.len() {
-        let term = queue[queue_index].clone();
-        queue_index += 1;
+    // Integration-by-parts corrections append to the same FIFO. Consuming
+    // entries releases their coefficients instead of retaining every already
+    // processed term and cloning it a second time.
+    while let Some(term) = queue.pop_front() {
         if !term.coefficient.ctx().is_compatible_with(ctx)
             || term
                 .word
@@ -289,7 +288,7 @@ fn integrate_ii_work_queue(
 
     let mut output = Wordlist::default();
     for row in rows {
-        let coefficient = row.coefficient.materialize()?;
+        let coefficient = row.coefficient.finish()?;
         if !coefficient.is_zero() {
             output.terms.push(WordlistTerm::new(coefficient, row.word));
         }
@@ -378,6 +377,20 @@ mod tests {
             rows[1].coefficient.materialize().unwrap(),
             Rat::from_int(ctx, 5)
         );
+    }
+
+    #[test]
+    fn primitive_accumulation_retains_native_rational_coefficients() {
+        let ctx = PolyCtx::new(["x", "y"]).unwrap();
+        let value = Rat::parse(ctx.clone(), "(x+y)/((x+1)^2*(y+1))").unwrap();
+        let mut rows = Vec::new();
+        let mut indices = WordIndex::default();
+        bump(&mut rows, &mut indices, Word::default(), value.clone()).unwrap();
+        assert_eq!(rows[0].coefficient.materialize().unwrap(), value);
+        assert!(!value.compatibility_views_initialized());
+        bump(&mut rows, &mut indices, Word::default(), value.negated()).unwrap();
+        assert!(rows[0].coefficient.materialize().unwrap().is_zero());
+        assert!(!value.compatibility_views_initialized());
     }
 
     #[test]

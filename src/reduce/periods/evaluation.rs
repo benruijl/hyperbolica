@@ -1,16 +1,15 @@
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
-use super::conversion::{integer_letter, to_mzv_with_expansion};
+use super::conversion::{integer_letter, to_mzv_with_source};
 use crate::algebra::convert::{convert_one_infinity_to_zero_one, convert_zero_one};
 use crate::core::{Poly, PolyCtx, Rat};
 use crate::error::{Error, Result};
 use crate::integrator::{RegKey, RegTerm, Regulator, canonicalize_regulator, reg_head, reg0};
 use crate::symbols::{Word, Wordlist, WordlistTerm, log_two_atom};
 
-use crate::reduce::mzv_expansion::MzvExpansionTable;
+use crate::reduce::mzv_expansion::{ExpansionSource, MzvExpansionTable};
 use crate::reduce::mzv_reduce::{MzvReductionTable, apply_mzv_reductions};
-use crate::reduce::standard_mzv_expansion;
 
 fn all_zero(word: &Word) -> bool {
     !word.is_empty() && word.letters.iter().all(Rat::is_zero)
@@ -22,11 +21,11 @@ pub(super) fn zero_one_period(
     table: &MzvReductionTable,
 ) -> Result<Rat> {
     let expansion = if table.is_embedded_standard() {
-        Some(standard_mzv_expansion()?)
+        ExpansionSource::Standard
     } else {
-        None
+        ExpansionSource::None
     };
-    zero_one_period_with_expansion(ctx, word, table, expansion)
+    zero_one_period_with_source(ctx, word, table, expansion)
 }
 
 pub(super) fn zero_one_period_with_expansion(
@@ -34,6 +33,15 @@ pub(super) fn zero_one_period_with_expansion(
     word: &Word,
     table: &MzvReductionTable,
     expansion: Option<&MzvExpansionTable>,
+) -> Result<Rat> {
+    zero_one_period_with_source(ctx, word, table, expansion.into())
+}
+
+pub(crate) fn zero_one_period_with_source(
+    ctx: &Arc<PolyCtx>,
+    word: &Word,
+    table: &MzvReductionTable,
+    expansion: ExpansionSource<'_>,
 ) -> Result<Rat> {
     if word.is_empty() {
         return Ok(Rat::one(ctx.clone()));
@@ -47,7 +55,7 @@ pub(super) fn zero_one_period_with_expansion(
         let regularized = reg0(&seed)?;
         let mut result = Rat::zero(ctx.clone());
         for term in regularized.terms {
-            let period = zero_one_period_with_expansion(ctx, &term.word, table, expansion)?;
+            let period = zero_one_period_with_source(ctx, &term.word, table, expansion)?;
             result = result.try_add(&term.coef.try_mul(&period)?)?;
         }
         return Ok(result);
@@ -58,7 +66,7 @@ pub(super) fn zero_one_period_with_expansion(
         let regularized = reg_head(&seed, &Rat::one(ctx.clone()), &Rat::zero(ctx.clone()))?;
         let mut result = Rat::zero(ctx.clone());
         for term in regularized.terms {
-            let period = zero_one_period_with_expansion(ctx, &term.word, table, expansion)?;
+            let period = zero_one_period_with_source(ctx, &term.word, table, expansion)?;
             result = result.try_add(&term.coef.try_mul(&period)?)?;
         }
         return Ok(result);
@@ -72,7 +80,7 @@ pub(super) fn zero_one_period_with_expansion(
         }
     }
     let seed = Wordlist::new(vec![WordlistTerm::new(Rat::one(ctx.clone()), word.clone())]);
-    let raw = to_mzv_with_expansion(ctx, &seed, expansion)?;
+    let raw = to_mzv_with_source(ctx, &seed, expansion)?;
     apply_mzv_reductions(table, &raw)
 }
 
@@ -82,11 +90,11 @@ pub(super) fn zero_inf_period(
     table: &MzvReductionTable,
 ) -> Result<Rat> {
     let expansion = if table.is_embedded_standard() {
-        Some(standard_mzv_expansion()?)
+        ExpansionSource::Standard
     } else {
-        None
+        ExpansionSource::None
     };
-    zero_inf_period_with_expansion(ctx, word, table, expansion)
+    zero_inf_period_with_source(ctx, word, table, expansion)
 }
 
 pub(super) fn zero_inf_period_with_expansion(
@@ -94,6 +102,15 @@ pub(super) fn zero_inf_period_with_expansion(
     word: &Word,
     table: &MzvReductionTable,
     expansion: Option<&MzvExpansionTable>,
+) -> Result<Rat> {
+    zero_inf_period_with_source(ctx, word, table, expansion.into())
+}
+
+pub(crate) fn zero_inf_period_with_source(
+    ctx: &Arc<PolyCtx>,
+    word: &Word,
+    table: &MzvReductionTable,
+    expansion: ExpansionSource<'_>,
 ) -> Result<Rat> {
     if word.is_empty() {
         return Ok(Rat::one(ctx.clone()));
@@ -120,7 +137,7 @@ pub(super) fn zero_inf_period_with_expansion(
         let regularized = reg0(&seed)?;
         let mut result = Rat::zero(ctx.clone());
         for term in regularized.terms {
-            let period = zero_inf_period_with_expansion(ctx, &term.word, table, expansion)?;
+            let period = zero_inf_period_with_source(ctx, &term.word, table, expansion)?;
             result = result.try_add(&term.coef.try_mul(&period)?)?;
         }
         return Ok(result);
@@ -133,7 +150,7 @@ pub(super) fn zero_inf_period_with_expansion(
         )]))?;
         let mut result = Rat::zero(ctx.clone());
         for term in converted.terms {
-            let period = zero_one_period_with_expansion(ctx, &term.word, table, expansion)?;
+            let period = zero_one_period_with_source(ctx, &term.word, table, expansion)?;
             result = result.try_add(&term.coef.try_mul(&period)?)?;
         }
         return Ok(result);
@@ -171,7 +188,7 @@ pub(super) fn zero_inf_period_with_expansion(
         let mut result = Rat::zero(ctx.clone());
         for offset in 0..=scaled.len() {
             let tail = Word::new(scaled.letters[offset..].to_vec());
-            let period = zero_inf_period_with_expansion(ctx, &tail, table, expansion)?;
+            let period = zero_inf_period_with_source(ctx, &tail, table, expansion)?;
             result = result.try_add(&log_factor.try_mul(&period)?)?;
             if offset < scaled.len() {
                 log_factor = log_factor
@@ -204,7 +221,7 @@ pub(super) fn zero_inf_period_with_expansion(
         )]))?;
         let mut result = Rat::zero(ctx.clone());
         for term in converted.terms {
-            let period = zero_one_period_with_expansion(ctx, &term.word, table, expansion)?;
+            let period = zero_one_period_with_source(ctx, &term.word, table, expansion)?;
             result = result.try_add(&term.coef.try_mul(&period)?)?;
         }
         return Ok(result);

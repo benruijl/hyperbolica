@@ -6,6 +6,7 @@
 mod algebra;
 mod construction;
 mod context;
+mod integer;
 mod traits;
 
 #[cfg(test)]

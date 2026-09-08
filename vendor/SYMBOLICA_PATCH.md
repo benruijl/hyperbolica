@@ -1,10 +1,21 @@
 # Hyperbolica-maintained Symbolica patches
 
-## Current `dev` status
+## Current HyperLica audit patch
 
-The selected dependency is a clean official `dev` checkout at
-`0b57776bf911faeea7e28ea133706fb03740ffeb`. No Hyperbolica patch is applied.
-The two improvements formerly carried here were integrated upstream as:
+The selected checkout contains the three-commit
+[`symbolica-hyperlica.patch`](symbolica-hyperlica.patch) series on top of official
+`dev` revision `0b57776bf911faeea7e28ea133706fb03740ffeb`. It adds generic
+rational-polynomial optimizations, factored-denominator correctness fixes,
+native partial fractions, regression tests and standalone bug reproducers.
+See [`SYMBOLICA.md`](SYMBOLICA.md) for commit/source identities, commands and
+the two unresolved upstream diagnostics. These new commits have not been
+pushed to GitHub or submitted as a PR.
+
+## Earlier `dev` integration status
+
+The audit baseline is official `dev` at
+`0b57776bf911faeea7e28ea133706fb03740ffeb`. The two improvements formerly
+carried here were already integrated upstream as:
 
 - `4fd8443c` — `Add resultant trait for best algorithm selection per ring`;
 - `b8fa6b53` — `Use binary exponentation for rational polynomials`.

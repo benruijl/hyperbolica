@@ -13,6 +13,7 @@ use crate::integrator::{
 use crate::symbols::{Word, Wordlist, WordlistTerm};
 
 use super::mzv_reduce::MzvReductionTable;
+use super::period_scratch::{mint_period_sym, period_tuples_active};
 use super::periods::{zero_inf_period, zero_one_period};
 
 const SYMBOLIC_WORD_COLLECTION_DOMAIN: u64 = 0x434f_4e54_4f55_5257;
@@ -146,7 +147,14 @@ fn reg_tail_sym(
             .rev()
             .take_while(|candidate| candidate.equal(letter))
             .count();
+        if run == 0 {
+            result.terms.push(term.clone());
+            continue;
+        }
         if run == term.word.len() {
+            if substitute.is_zero() {
+                continue;
+            }
             let mut prefactor = SymCoef::one(ctx.clone());
             for _ in 0..run {
                 prefactor = prefactor.try_mul(substitute)?;
@@ -165,6 +173,9 @@ fn reg_tail_sym(
         let anchor = term.word[anchor_index].clone();
         let stripped = Word::new(term.word.letters[..anchor_index].to_vec());
         for shuffle_length in 0..=run {
+            if substitute.is_zero() && shuffle_length != run {
+                continue;
+            }
             let sign = if shuffle_length % 2 == 0 { 1 } else { -1 };
             let left = Wordlist::new(vec![WordlistTerm::new(
                 Rat::from_int(ctx.clone(), sign),
@@ -215,8 +226,13 @@ pub fn break_up_contour_sym(
         let mut output = RegulatorSym::new();
         for term in &wordlist.terms {
             if period_word(&term.word) {
-                let period = zero_inf_period(ctx, &term.word, table)?;
-                constant = constant.try_add(&term.coef.try_mul_rat(&period)?)?;
+                if period_tuples_active(ctx, table) {
+                    let period = mint_period_sym(ctx, &term.word, table, false)?;
+                    constant = constant.try_add(&term.coef.try_mul(&period)?)?;
+                } else {
+                    let period = zero_inf_period(ctx, &term.word, table)?;
+                    constant = constant.try_add(&term.coef.try_mul_rat(&period)?)?;
+                }
             } else {
                 output.push(RegTermSym {
                     coef: term.coef.clone(),
@@ -272,10 +288,14 @@ pub fn break_up_contour_sym(
             let tail = Word::new(term.word.letters[split..].to_vec());
             let mut temporary = RegulatorSym::new();
             if smallest_integer == 1 && numeric_word(&tail) {
-                let period = zero_one_period(ctx, &tail, table)?;
+                let period = if period_tuples_active(ctx, table) {
+                    mint_period_sym(ctx, &tail, table, true)?
+                } else {
+                    SymCoef::from_rat(&zero_one_period(ctx, &tail, table)?)
+                };
                 if !period.is_zero() {
                     temporary.push(RegTermSym {
-                        coef: SymCoef::from_rat(&period),
+                        coef: period,
                         key: RegKey::new(),
                     });
                 }

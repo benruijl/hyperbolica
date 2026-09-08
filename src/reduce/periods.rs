@@ -14,6 +14,8 @@ mod conversion;
 mod evaluation;
 mod fibration;
 
+pub(crate) use evaluation::{zero_inf_period_with_source, zero_one_period_with_source};
+
 #[cfg(test)]
 mod tests;
 

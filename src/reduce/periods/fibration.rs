@@ -5,12 +5,13 @@ use super::{FibrationBasisResult, FibrationBasisResultSym};
 use crate::core::{DigestBuckets, PolyCtx, Rat, SymCoef, structural_bucket_digest};
 use crate::error::{Error, Result};
 use crate::integrator::{
-    RegKey, RegTerm, Regulator, RegulatorSym, canonicalize_regkey, regkey_content_key,
-    regkey_structural_cmp, transform_shuffle,
+    RegKey, RegTerm, Regulator, RegulatorSym, TransformOptions, TransformSession,
+    canonicalize_regkey, regkey_content_key, regkey_structural_cmp,
 };
 use crate::symbols::Wordlist;
 
 use crate::reduce::mzv_reduce::MzvReductionTable;
+use crate::reduce::period_scratch::{mint_period_sym, period_tuples_active};
 
 const FIBRATION_REGKEY_BUCKET_DOMAIN: u64 = 0x4649_4252_4547_0001;
 
@@ -252,8 +253,14 @@ impl FibBasisWorker<'_> {
             return self.base_case(regulator, prefix, value_factor);
         };
 
+        let mut transforms = TransformSession::new(
+            self.ctx,
+            variable,
+            TransformOptions::default(),
+            Some(self.table),
+        )?;
         for term in regulator {
-            for transformed in transform_shuffle(self.ctx, &term.key, variable)? {
+            for transformed in transforms.transform(&term.key)? {
                 let mut inner = Regulator::with_capacity(transformed.regulator.len());
                 for inner_term in transformed.regulator {
                     let coefficient = inner_term.coef.as_rat().map_err(|_| {
@@ -326,15 +333,22 @@ impl FibBasisWorkerSym<'_> {
         prefix: &[Wordlist],
         value_factor: &SymCoef,
     ) -> Result<()> {
+        let tuple_mode = period_tuples_active(self.ctx, self.table);
         for term in regulator {
             let entry_coefficient = value_factor.try_mul(&term.coef)?;
-            let mut period_product = Rat::one(self.ctx.clone());
+            let mut period_product = SymCoef::one(self.ctx.clone());
             let mut evaluable = true;
             for word in &term.key {
                 if word.is_empty() {
                     continue;
                 }
-                match zero_inf_period(self.ctx, word, self.table) {
+                let period = if tuple_mode {
+                    mint_period_sym(self.ctx, word, self.table, false)
+                } else {
+                    zero_inf_period(self.ctx, word, self.table)
+                        .map(|value| SymCoef::from_rat(&value))
+                };
+                match period {
                     Ok(period) => period_product = period_product.try_mul(&period)?,
                     Err(_) => {
                         evaluable = false;
@@ -344,7 +358,7 @@ impl FibBasisWorkerSym<'_> {
             }
 
             if evaluable {
-                let coefficient = entry_coefficient.try_mul_rat(&period_product)?;
+                let coefficient = entry_coefficient.try_mul(&period_product)?;
                 self.emit_prefix_product(prefix, &RegKey::new(), &coefficient)?;
             } else {
                 let passthrough = canonicalize_regkey(&term.key);
@@ -365,8 +379,14 @@ impl FibBasisWorkerSym<'_> {
             return self.base_case(regulator, prefix, value_factor);
         };
 
+        let mut transforms = TransformSession::new(
+            self.ctx,
+            variable,
+            TransformOptions::default(),
+            Some(self.table),
+        )?;
         for term in regulator {
-            for transformed in transform_shuffle(self.ctx, &term.key, variable)? {
+            for transformed in transforms.transform(&term.key)? {
                 let next_factor = value_factor.try_mul(&term.coef)?;
                 prefix.push(transformed.shuffle);
                 let result = self.recurse(&transformed.regulator, rest, prefix, &next_factor);

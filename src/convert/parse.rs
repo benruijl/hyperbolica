@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use crate::convert::Expr;
@@ -468,11 +469,27 @@ pub fn parse_expression(
     lazy_top_sum: bool,
 ) -> Result<ParseResult> {
     let tokens = tokenize(input)?;
-    let augmented_vars = collect_variables(&tokens, user_variables);
-    let indeterminates = augmented_vars
-        .iter()
-        .map(|name| legacy::atom_from_name(name))
-        .collect::<Result<Vec<_>>>()?;
+    let names = collect_variables(&tokens, user_variables);
+    let mut augmented_vars = Vec::with_capacity(names.len());
+    let mut indeterminates = Vec::with_capacity(names.len());
+    let mut seen_names = HashSet::with_capacity(names.len());
+    let mut seen_atoms = HashSet::with_capacity(names.len());
+    for name in names {
+        if name.is_empty() || !seen_names.insert(name.clone()) {
+            return Err(Error::InvalidInput(format!(
+                "variable names must be non-empty and unique: `{name}`"
+            )));
+        }
+        let atom = legacy::atom_from_name(&name)?;
+        // Reserved spellings such as mzv_3 and indexed input MZV[3]
+        // denote one native indeterminate. Keep the first diagnostic name;
+        // Parser::parse_atom resolves every spelling by that same identity.
+        // Full Atom equality preserves distinct namespaces and function heads.
+        if seen_atoms.insert(atom.clone()) {
+            augmented_vars.push(name);
+            indeterminates.push(atom);
+        }
+    }
     let ctx = PolyCtx::from_named_indeterminates(augmented_vars.clone(), indeterminates)?;
     let expr = Parser::new(&tokens, ctx.clone(), lazy_top_sum).parse()?;
     Ok(ParseResult {
@@ -483,47 +500,4 @@ pub fn parse_expression(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn pure_rational_subexpressions_are_folded() {
-        let parsed = parse_expression("1/(1+x)+x/(1+x)", &[], false).unwrap();
-        assert_eq!(parsed.expr.to_string(), "1");
-        assert_eq!(parsed.augmented_vars, ["x"]);
-    }
-
-    #[test]
-    fn log_rewrites_to_weight_one_hlog() {
-        let parsed = parse_expression("Log[x]", &[], false).unwrap();
-        assert_eq!(parsed.expr.to_string(), "Hlog[x,[0]]");
-    }
-
-    #[test]
-    fn power_binds_tighter_than_unary_minus() {
-        let parsed = parse_expression("-Hlog[x,{0}]^2", &[], false).unwrap();
-        assert_eq!(parsed.expr.to_string(), "Times[-1,Power[Hlog[x,[0]],2]]");
-    }
-
-    #[test]
-    fn powers_are_right_associative() {
-        let parsed = parse_expression("x^2^3", &[], false).unwrap();
-        assert_eq!(parsed.expr.to_string(), "x^8");
-    }
-
-    #[test]
-    fn lazy_top_sum_preserves_only_the_outer_sum() {
-        let parsed = parse_expression("1/(1+x)+x", &[], true).unwrap();
-        assert!(matches!(parsed.expr, Expr::Plus(_)));
-        assert_eq!(parsed.expr.to_string(), "Plus[1/(x + 1),x]");
-    }
-
-    #[test]
-    fn mathematica_integer_subscripts_remain_inert_variables() {
-        let parsed = parse_expression("m[1,2]+1", &[], false).unwrap();
-        assert_eq!(parsed.augmented_vars, ["m[1,2]"]);
-        let variable = Rat::from_poly(Poly::generator(parsed.ctx.clone(), 0).unwrap());
-        let expected = variable.try_add(&Rat::one(parsed.ctx.clone())).unwrap();
-        assert_eq!(parsed.expr, Expr::leaf(expected));
-    }
-}
+mod tests;

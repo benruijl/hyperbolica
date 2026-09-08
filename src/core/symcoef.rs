@@ -29,6 +29,8 @@ pub struct SymMonomial {
     pub log_powers: BTreeMap<i64, i32>,
     /// Powers of formal delta generators keyed by native context index.
     pub delta_powers: BTreeMap<usize, i32>,
+    /// Powers keyed by the process-wide [`super::global_period_table`].
+    /// Known MZV basis keys materialize as registered constants at output.
     pub period_powers: BTreeMap<u32, i32>,
 }
 
@@ -52,9 +54,10 @@ pub struct SymCoef {
 /// `Pi^(2k) = (6*mzv_2)^k`.
 ///
 /// The reduction table is part of the upstream API because it defines the
-/// active period basis.  The identity itself only needs the `mzv_2` variable;
-/// when that variable is absent the symbolic coefficient is returned
-/// unchanged and no information is discarded.
+/// active period basis. In a context containing `MZV(2)`, that indeterminate
+/// remains in the rational prefactor. With the standard table and a context
+/// containing no library constants, its power is stored as a period tuple.
+/// Other contexts without `MZV(2)` leave Pi powers unchanged.
 pub fn simplify_symcoef(coefficient: &SymCoef, table: &MzvReductionTable) -> Result<SymCoef> {
     reduction::simplify_symcoef(coefficient, table)
 }

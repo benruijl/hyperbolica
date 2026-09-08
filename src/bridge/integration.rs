@@ -10,9 +10,9 @@ use super::algebra::algebraic_entry_value;
 use super::mzv_data::mzv_reduction_table;
 use super::narrow::{mzv_indeterminates, payload_strings};
 use super::wire::{
-    array_field, explicit_variables, optional_bool, parse_wire_rat, parse_wordlist, parse_words,
-    regulator_sym_value, scan_identifiers, string_array_field, string_field, variable_index,
-    wire_context_variables, wordlist_value,
+    array_field, explicit_variables, optional_bool, parse_wire_factored_rat, parse_wire_rat,
+    parse_wordlist, parse_words, regulator_sym_value, scan_identifiers, string_array_field,
+    string_field, variable_index, wire_context_variables, wordlist_value,
 };
 use crate::algebra::algebraic_letters::{
     DEFAULT_ALGEBRAIC_LETTER_POOL_SIZE, algebraic_letters_show, begin_algebraic_letter_session,
@@ -27,7 +27,7 @@ use crate::integrator::{
     integrate_ii_with_options, integration_step_with_options_and_remaining_variables,
     rescale_interval_with_bound_parser,
 };
-use crate::reduce::{MzvReductionTable, build_mzv_var_list, build_narrow_var_list};
+use crate::reduce::{MzvReductionTable, build_mzv_var_list, build_narrow_var_list, tokens_in};
 use crate::symbols::is_library_constant;
 
 pub(super) fn evaluate(request: &Value, op: &str) -> Option<Result<Value>> {
@@ -193,7 +193,18 @@ fn evaluate_supported(request: &Value, op: &str) -> Result<Value> {
             }
             let (ctx, table, mut input) = if let Some(expression) = expression_input {
                 let table = mzv_reduction_table(request)?;
-                let variables = if table.is_embedded_standard() {
+                let tuple_context = use_period_tuple_context(
+                    &table,
+                    &base_variables,
+                    &context_expressions,
+                    introduce_algebraic_letters,
+                );
+                let variables = if tuple_context {
+                    // Period tuples keep all MZV generators out of the hot
+                    // integration ring. Boundary periods are minted in the
+                    // private scratch ring by the symbolic contour pass.
+                    base_variables.clone()
+                } else if table.is_embedded_standard() {
                     build_narrow_var_list(&table, &base_variables, &context_expressions.join("+"))
                 } else {
                     build_mzv_var_list(&table, base_variables.clone())
@@ -241,10 +252,7 @@ fn evaluate_supported(request: &Value, op: &str) -> Result<Value> {
                     introduce_algebraic_letters,
                 )?;
                 let input = if let Some(expression) = rational_input {
-                    vec![ShuffleEntry::new(
-                        parse_wire_rat(&ctx, expression)?,
-                        Vec::new(),
-                    )]
+                    vec![parse_factored_rational_input(&ctx, expression)?]
                 } else {
                     parse_shuffle_list(&ctx, request, "wordlist")?
                 };
@@ -357,6 +365,14 @@ fn evaluate_supported(request: &Value, op: &str) -> Result<Value> {
     }
 }
 
+fn parse_factored_rational_input(ctx: &Arc<PolyCtx>, expression: &str) -> Result<ShuffleEntry> {
+    // Retain powered denominator blocks through the first primitive step,
+    // just as the native Atom API does. In particular, do not expand F^n
+    // before the factored partial-fraction path can inspect its linear bases.
+    let coefficient = parse_wire_factored_rat(ctx, expression)?;
+    Ok(ShuffleEntry::from_factored(coefficient, Vec::new()))
+}
+
 fn parse_shuffle_list(ctx: &Arc<PolyCtx>, request: &Value, name: &str) -> Result<ShuffleList> {
     array_field(request, name)?
         .iter()
@@ -416,7 +432,12 @@ pub(super) fn integration_context(
         .iter()
         .map(|name| crate::symbols::legacy::atom_from_name(name))
         .collect::<Result<Vec<_>>>()?;
-    let variables = mzv_indeterminates(&table, user_atoms, expressions)?;
+    let variables =
+        if use_period_tuple_context(&table, &user_variables, expressions, algebraic_letters) {
+            user_atoms
+        } else {
+            mzv_indeterminates(&table, user_atoms, expressions)?
+        };
     let variables = if algebraic_letters {
         build_algebraic_letter_atom_list(variables, DEFAULT_ALGEBRAIC_LETTER_POOL_SIZE)
     } else {
@@ -425,52 +446,34 @@ pub(super) fn integration_context(
     Ok((PolyCtx::from_indeterminates(variables)?, table))
 }
 
-#[cfg(test)]
-mod tests {
-    use serde_json::json;
-    use symbolica::prelude::symbol;
-
-    use super::*;
-    use crate::reduce::{mzv_constant_atom, standard_mzv_reductions};
-    use crate::symbols::{algebraic_atoms, mzv_atom};
-
-    #[test]
-    fn standard_rule_lhs_is_reserved_without_widening_the_context() {
-        let x = symbol!("bridge_spectator_x").to_atom();
-        let y = symbol!("bridge_spectator_y").to_atom();
-        let lhs = mzv_constant_atom("mzv_4").unwrap();
-        let ctx = PolyCtx::from_indeterminates([x, y, lhs]).unwrap();
-        assert_eq!(ctx.len(), 3);
-
-        let spectators =
-            hyperflint_spectator_indices(&ctx, &[0], &standard_mzv_reductions(), false).unwrap();
-        assert_eq!(spectators, [1]);
-        assert_eq!(ctx.len(), 3);
-    }
-
-    #[test]
-    fn interval_bounds_participate_in_standard_mzv_narrowing() {
-        let request = json!({
-            "vars": ["x"],
-            "vars_int_from": ["mzv_4"],
-            "vars_int_to": ["1"],
-        });
-        let expressions = payload_strings(&request, &["vars_int_from", "vars_int_to"]);
-        let (ctx, _) = integration_context(&request, &["x".into()], &expressions, false).unwrap();
-        assert!(
-            ctx.index_of_indeterminate(mzv_constant_atom("mzv_4").unwrap().as_view())
-                .is_some()
-        );
-    }
-
-    #[test]
-    fn every_registered_mzv_and_algebraic_atom_is_reserved_structurally() {
-        let x = symbol!("bridge_structural_spectator_x").to_atom();
-        let mzv = mzv_atom(&[999]);
-        let algebraic = algebraic_atoms(71).minus;
-        let ctx = PolyCtx::from_indeterminates([x, mzv, algebraic]).unwrap();
-        let spectators =
-            hyperflint_spectator_indices(&ctx, &[0], &standard_mzv_reductions(), false).unwrap();
-        assert!(spectators.is_empty());
-    }
+fn use_period_tuple_context(
+    table: &MzvReductionTable,
+    user_variables: &[String],
+    expressions: &[&str],
+    algebraic_letters: bool,
+) -> bool {
+    // Explicit constants can occur in rational denominators or word letters;
+    // retain the complete period basis for those requests. Algebraic-letter
+    // integration also requires that representation. Only boundary-generated
+    // constants are moved to period powers.
+    !algebraic_letters
+        && table.is_embedded_standard()
+        && !user_variables.iter().any(|name| {
+            crate::symbols::legacy::atom_from_name(name)
+                .is_ok_and(|atom| is_library_constant(atom.as_view()))
+        })
+        && !expressions
+            .iter()
+            .flat_map(|expression| tokens_in(expression))
+            .any(|name| {
+                crate::symbols::legacy::special_atom_from_name(&name).is_some()
+                    // Indexed spellings such as MZV[3] become registered
+                    // constants when parsed, but the tokenizer sees the head
+                    // and its numeric arguments separately.
+                    || matches!(name.as_str(),
+                        "MZV" | "Wm" | "Wp" | "WmOverWp" | "sqrt_disc" | "delta" | "Period")
+            })
 }
+
+#[cfg(test)]
+mod tests;

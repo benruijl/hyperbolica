@@ -2,6 +2,11 @@
 
 Status: source audit of the selected Symbolica checkout used by this repository, updated 2026-09-02.
 
+Historical baseline record: the dependency now includes the additional native
+work documented in [`../vendor/SYMBOLICA.md`](../vendor/SYMBOLICA.md). Capability
+and source-line observations below refer to the original audited base unless
+explicitly updated; they are not a new audit of the patched tip.
+
 This document is a migration decision record, not a claim that an API name alone makes a replacement correct or faster. Every positive capability below was checked in the public Rust source, including the implementation bounds and relevant tests. Performance statements marked *expected* are hypotheses that must pass the benchmark gates near the end of this document.
 
 ## Scope and verdict vocabulary
