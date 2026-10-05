@@ -9,6 +9,8 @@ The standalone Hyperbolica Python wheel has been retired.
 
 - Rust development: pristine Symbolica main `75f8350094b90254ee71dc2a391fde0d14b0204a`.
 - Community kernel: existing `community` revision `942bd2c0cd2ef16414d69c176fc9eff7b21c0ab2`.
+- Community Hyperbolica dependency: immutable Git revision `89edca653ab21128d10cb338250e77fdd144b10e`.
+- Community registration, packaging and tests: local commit `e012c90` on `codex/hepkit-integration`.
 - Native toolchain: Rust 1.96.0. Python wheel: CPython 3.13, ABI3 floor 3.9.
 - Development builds retain GMP/MPFR and the faster allocator; the community
   wheel retains its system allocator and resolves exactly one Symbolica,
@@ -29,6 +31,28 @@ The host's expression pickle stores raw, process-local symbol IDs. Cross-process
 persistence uses the existing `Expression.save`/`Expression.load` API, verified
 with a different symbol-registration order. No expression serializer override
 is installed by Hyperbolica.
+
+## Pyodide checks
+
+The combined wheel was built with Rust 1.98.0, Pyodide 314.0.7,
+pyodide-build 0.39.0, Maturin 1.15.0 and the Emscripten 5.0.3 SDK.
+The existing community harness installed it with micropip and executed it in
+the Pyodide runtime under Node.js 24.19.0. The shared native/WASM exact-result
+fixtures passed with both `parallel=False` and `parallel=True`, as did the
+HEPkit Symanzik example. Browser-target execution remains serial, and
+`integration.ibp` is absent on this target.
+
+The broader smoke checks also passed (antiderivatives, tensors, diagram
+generation and tensor reduction). Two outdated smoke-test API calls were
+updated to the current HEPkit interfaces. The export audit accepts only the
+three expected function exports and known inventory-constructor globals.
+The wheel is 18,361,296 bytes; its WASM extension is 62,949,055 bytes.
+This validates the Pyodide runtime, not a separate graphical-browser session.
+
+The WASM wheel used the local source subsequently committed as `89edca6`;
+the final native wheel was rebuilt and tested using that immutable Git source.
+Both wheel layouts and the final dependency graph passed the single-kernel
+and allocator-policy checks. No package was published.
 
 ## Partial-fraction relocation comparison
 
