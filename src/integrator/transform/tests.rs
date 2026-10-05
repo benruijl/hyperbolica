@@ -1,3 +1,5 @@
+mod incremental_collection;
+
 use std::sync::Arc;
 
 use symbolica::prelude::{AtomCore, Symbol};

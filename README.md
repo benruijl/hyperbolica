@@ -4,7 +4,7 @@ Hyperbolica is a Rust port of
 [SubTropica/HyperFLINT](https://github.com/SubTropica/SubTropica/tree/main/HyperFLINT)
 for exact hyperlogarithmic integration and linear-reducibility analysis. Its
 production API accepts Symbolica `Atom` values directly, and its only computer
-algebra backend is the official Symbolica `dev` checkout in
+algebra backend is the official Symbolica `main` checkout in
 `vendor/symbolica`.
 
 The port is under active development. The Rust core, typed Atom API, JSON
@@ -39,18 +39,20 @@ artifact and is not selected by Cargo.
 The historical symbolized diagnostic profile, including resultant-backend and
 partial-fraction hotspots, is in
 [`docs/performance-profile.md`](docs/performance-profile.md).
+The October 5 update selects Symbolica 3.0.1 from `main`; current source and
+validation details are in [`vendor/SYMBOLICA_SNAPSHOT.md`](vendor/SYMBOLICA_SNAPSHOT.md).
+Historical September 8 regression validation and HyperFLINT comparisons are in [`docs/performance-dev-20260908.md`](docs/performance-dev-20260908.md).
 
 ## Build and test
 
-Rust 1.89 or newer is required.
+Rust 1.96 or newer is required.
 
 ```sh
-git clone --branch dev --single-branch \
+git clone --branch main --single-branch \
   https://github.com/symbolica-dev/symbolica.git vendor/symbolica
-git -C vendor/symbolica checkout fb845d34bda8ccf1fedef6544d3aa46dc24944e3
-git -C vendor/symbolica switch -c codex/hyperlica-dev-20260908
-git -C vendor/symbolica am ../symbolica-hyperlica-dev-20260908.patch
-git -C vendor/symbolica am ../symbolica-heap-scratch-20260908.patch
+git -C vendor/symbolica checkout 75f8350094b90254ee71dc2a391fde0d14b0204a
+git -C vendor/symbolica switch -c codex/hyperbolica-main-20261005
+git -C vendor/symbolica am ../symbolica-main-20261005.patch
 scripts/check-pure-symbolica.sh
 cargo build --release
 cargo test --locked --lib --tests --bins --examples

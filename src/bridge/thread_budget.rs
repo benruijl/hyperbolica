@@ -44,7 +44,7 @@ where
     let effective = if effective == 1 {
         1
     } else {
-        symbolica::LicenseManager::max_threads(effective)
+        symbolica::license::LicenseManager::max_threads(effective)
     };
 
     with_effective_thread_limit(effective, operation)

@@ -71,10 +71,10 @@ if ! rg -q \
 fi
 
 symbolica_checkout="$repo_root/vendor/symbolica"
-symbolica_base=fb845d34bda8ccf1fedef6544d3aa46dc24944e3
+symbolica_base=75f8350094b90254ee71dc2a391fde0d14b0204a
 # Pin source identity rather than commit metadata: applying the tracked patch
 # with git am changes the committer/date but must reproduce exactly this tree.
-symbolica_tree=d8925723c37ec35a80a40c6b432b565d747ac29f
+symbolica_tree=cd3162b4d08dd6cfa063872fb6ecd03551cfd522
 
 if [[ ! -d "$symbolica_checkout/.git" ]]; then
     echo "pure-Symbolica gate: vendor/symbolica is not a Git checkout" >&2
@@ -100,15 +100,9 @@ if ! git -C "$symbolica_checkout" diff --quiet --ignore-submodules -- \
     exit 1
 fi
 
-for integrated_commit in \
-    "$symbolica_base" \
-    1fddec7 \
-    1dc54ef; do
-    if ! git -C "$symbolica_checkout" merge-base --is-ancestor \
-        "$integrated_commit" HEAD; then
-        echo "pure-Symbolica gate: required upstream commit $integrated_commit is absent" >&2
-        exit 1
-    fi
-done
+if ! git -C "$symbolica_checkout" merge-base --is-ancestor "$symbolica_base" HEAD; then
+    echo "pure-Symbolica gate: required upstream base $symbolica_base is absent" >&2
+    exit 1
+fi
 
 echo "pure-Symbolica gate: dependency graphs, source imports, special symbols, and the pinned Symbolica checkout are clean"

@@ -1,5 +1,57 @@
 # Pinned Symbolica checkout
 
+## Current snapshot: main, 2026-10-05
+
+Cargo selects the ignored official Git checkout at `vendor/symbolica`.
+Reconstruct it from this exact upstream base and the single tracked patch:
+
+```sh
+git clone --branch main --single-branch \
+  https://github.com/symbolica-dev/symbolica.git vendor/symbolica
+git -C vendor/symbolica checkout 75f8350094b90254ee71dc2a391fde0d14b0204a
+git -C vendor/symbolica switch -c codex/hyperbolica-main-20261005
+git -C vendor/symbolica am ../symbolica-main-20261005.patch
+scripts/check-pure-symbolica.sh
+```
+
+- Upstream base: `75f8350094b90254ee71dc2a391fde0d14b0204a` (latest fetched `main`)
+- Upstream tree: `e6c84b0df8498081c2610cb8aa1d5b996b60832d`
+- Local compatibility commit: `afdecbaf1f024c2ac827226027b7e931b366f66f`
+- Selected tree: `cd3162b4d08dd6cfa063872fb6ecd03551cfd522`
+- Patch: [`symbolica-main-20261005.patch`](symbolica-main-20261005.patch)
+- Patch SHA-256: `68aea19e1cf71ce34aab69325ff5d8cbf03e98e44e9c4cdfadf1ecfba28d4109`
+- Packages: Symbolica 3.0.1, Numerica 3.0.1, Graphica 3.0.0
+- Required Rust toolchain: 1.96.0
+
+The patch reconnects the existing upstream native factored partial-fraction
+module and its constructor tests, and retains the scalar-only construction
+regression. It adds no new algebra implementation. Upstream already contains
+heap exponent-slot recycling; the scalar regression passes without the old
+constructor workaround. Do not apply the September patches to this base.
+
+Hyperbolica adapts the moved `license::LicenseManager`, exact polynomial
+`try_div`, and optional series coefficient APIs. See the
+[API audit](../docs/symbolica-api-audit.md) for semantics.
+
+Validation: 461 library tests and 16 integration tests pass in isolated serial
+processes with credentials unset. All 21 focused native partial-fraction and
+constructor tests pass in isolated processes. Locked all-target compilation,
+test compilation, all-feature Clippy, and both Python feature builds pass.
+All nine public examples, formatting, module-size, and pure-Symbolica gates
+pass. Independent temporary-index application of the patch to the upstream
+base reproduces the selected tree exactly with strict whitespace checking.
+The native test build enables `native_code_generation` for upstream evaluator
+tests; production features remain unchanged. This is compatibility validation;
+September benchmark timings below were not rerun against Symbolica 3.0.1.
+
+The source gate pins the complete tree, so `git am` committer metadata can vary.
+The license notice is unchanged (SHA-256 recorded in `DISTRIBUTION-LICENSE.md`).
+
+## Historical snapshot: dev, 2026-09-08
+
+Everything below records the previous source and its validation. Its checkout
+commands and benchmark identities do not describe the current dependency.
+
 Hyperbolica builds against a patched official Symbolica Git checkout at
 `vendor/symbolica`. The directory is intentionally ignored by the parent
 repository; Cargo selects it directly rather than the archived

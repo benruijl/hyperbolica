@@ -1,5 +1,26 @@
 # Symbolica public-API audit and migration map
 
+## Main migration audit, 2026-10-05
+
+Selected source: Symbolica 3.0.1, upstream
+`75f8350094b90254ee71dc2a391fde0d14b0204a`; reconstruction and validation are in
+[`SYMBOLICA_SNAPSHOT.md`](../vendor/SYMBOLICA_SNAPSHOT.md).
+
+| API / implementation | Migration decision |
+|---|---|
+| `license::LicenseManager` | Use the new module path; retain the licensed thread-budget checks. |
+| `poly/polynomial.rs`: `try_div` | Replace the old patched `try_div_exact` call with the upstream exact-quotient API. It returns `None` for a nonzero remainder or zero divisor, unifies variable maps, and requires matching rings. Existing wrapper guards remain. |
+| `series.rs`: `Series::coefficient` | Propagate `None` for an unknown coefficient at or above the truncation order. An absent coefficient within the known order remains `Some(0)`. |
+| `domains/factorized_rational_polynomial/apart.rs` | Restore its missing parent module declaration to expose the existing native partial-fraction and rational-materialization methods. No replacement CAS algorithm is introduced. |
+| Heap multiplication exponent slots | Recycling is present upstream; omit the old local heap patch. |
+| Scalar-only factored construction | Retain the regression and verify it passes upstream; omit the old production workaround. |
+
+All 461 library, 16 integration, and 21 focused native tests pass. These results
+do not establish performance for the new version. The older audit and source
+line references below remain historical unless explicitly superseded here.
+
+## Historical September audit
+
 Status: source audit of the selected Symbolica checkout used by this repository, updated 2026-09-02.
 
 Historical baseline record: the dependency now includes the additional native

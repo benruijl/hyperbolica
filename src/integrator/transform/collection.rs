@@ -1,6 +1,7 @@
 use std::cmp::Ordering;
 use std::fmt::Write;
 use std::hash::Hash;
+use std::sync::Arc;
 
 use super::{RegKey, RegTerm, RegTermSym, Regulator, RegulatorSym};
 use crate::core::{
@@ -243,39 +244,206 @@ pub(super) fn collect_regulator_sym_with_digest(
     regulator: &RegulatorSym,
     mut digest_key: impl FnMut(&RegKey) -> u64,
 ) -> Result<RegulatorSym> {
-    let Some(first) = regulator.first() else {
-        return Ok(Vec::new());
-    };
-    let ctx = first.coef.ctx().clone();
-    let mut indices = DigestBuckets::default();
-    let mut collected = Vec::<(RegKey, BalancedSum<SymCoef>)>::new();
-
+    let mut collected = RegulatorSymCollector::default();
     for term in regulator {
-        if !same_context(term.coef.ctx(), &ctx) {
+        collected.push_with_digest(term.clone(), &mut digest_key)?;
+    }
+    collected.finish()
+}
+
+/// Incrementally collect owned terms without retaining the uncollected input.
+/// Each key keeps the same encounter order and balanced coefficient sum as
+/// `collect_regulator_sym`, including cancellation across entry/batch boundaries.
+#[derive(Default)]
+pub(crate) struct RegulatorSymCollector {
+    ctx: Option<Arc<PolyCtx>>,
+    indices: DigestBuckets,
+    collected: Vec<(RegKey, BalancedSum<SymCoef>)>,
+}
+
+impl RegulatorSymCollector {
+    pub(crate) fn extend(&mut self, terms: RegulatorSym) -> Result<()> {
+        for term in terms {
+            self.push_with_digest(term, &mut regkey_bucket_digest)?;
+        }
+        Ok(())
+    }
+
+    fn push_with_digest(
+        &mut self,
+        term: RegTermSym,
+        digest_key: &mut impl FnMut(&RegKey) -> u64,
+    ) -> Result<()> {
+        let ctx = self.ctx.get_or_insert_with(|| term.coef.ctx().clone());
+        if !same_context(term.coef.ctx(), ctx) {
             return Err(Error::ContextMismatch);
         }
-        require_regkey_context(&term.key, &ctx)?;
-        let key = canonicalize_regkey(&term.key);
+        require_regkey_context(&term.key, ctx)?;
+        let mut key = term.key;
+        key.retain(|word| !word.is_empty());
+        key.sort_unstable_by(Word::structural_cmp);
         let digest = digest_key(&key);
-        if let Some(index) = indices.find(digest, |index| {
-            collected
+        self.push_canonical(
+            RegTermSym {
+                key,
+                coef: term.coef,
+            },
+            digest,
+        )
+    }
+
+    fn push_canonical(&mut self, term: RegTermSym, digest: u64) -> Result<()> {
+        let RegTermSym { key, coef } = term;
+        if let Some(index) = self.indices.find(digest, |index| {
+            self.collected
                 .get(index)
                 .is_some_and(|(candidate, _)| *candidate == key)
         }) {
-            collected[index].1.push(term.coef.clone())?;
+            self.collected[index].1.push(coef)?;
         } else {
-            indices.insert(digest, collected.len());
-            collected.push((key, BalancedSum::new(term.coef.clone())));
+            self.indices.insert(digest, self.collected.len());
+            self.collected.push((key, BalancedSum::new(coef)));
+        }
+        Ok(())
+    }
+
+    pub(crate) fn finish(self) -> Result<RegulatorSym> {
+        let mut result = Vec::with_capacity(self.collected.len());
+        for (key, coefficients) in self.collected {
+            let coef = coefficients.finish()?;
+            if !coef.is_zero() {
+                result.push(RegTermSym { coef, key });
+            }
+        }
+        Ok(result)
+    }
+}
+
+#[derive(Default)]
+struct CollectorShard {
+    collector: RegulatorSymCollector,
+    first_positions: Vec<usize>,
+}
+
+/// Independent keys may add concurrently; each key still receives exactly
+/// the serial encounter sequence and uses the same balanced sum. Only the
+/// current entry is partitioned, so no deferred contribution queue grows here.
+pub(crate) struct ParallelRegulatorSymCollector {
+    ctx: Option<Arc<PolyCtx>>,
+    shards: Vec<CollectorShard>,
+    next_position: usize,
+}
+
+impl ParallelRegulatorSymCollector {
+    pub(crate) fn new(workers: usize) -> Self {
+        Self {
+            ctx: None,
+            shards: (0..workers.saturating_mul(4).clamp(1, 64))
+                .map(|_| CollectorShard::default())
+                .collect(),
+            next_position: 0,
         }
     }
-    let mut result = Vec::with_capacity(collected.len());
-    for (key, coefficients) in collected {
-        let coef = coefficients.finish()?;
-        if !coef.is_zero() {
-            result.push(RegTermSym { coef, key });
+
+    pub(crate) fn extend(&mut self, terms: RegulatorSym) -> Result<()> {
+        self.extend_with_digest(terms, regkey_bucket_digest)
+    }
+
+    pub(super) fn extend_with_digest(
+        &mut self,
+        terms: RegulatorSym,
+        mut digest_key: impl FnMut(&RegKey) -> u64,
+    ) -> Result<()> {
+        use rayon::prelude::*;
+
+        let parallel = terms.len() >= 256;
+        let mut groups: Vec<Vec<(usize, u64, RegTermSym)>> =
+            (0..self.shards.len()).map(|_| Vec::new()).collect();
+        let mut failure = None;
+        for mut term in terms {
+            let position = self.next_position;
+            self.next_position += 1;
+            let ctx = self.ctx.get_or_insert_with(|| term.coef.ctx().clone());
+            let valid = if same_context(term.coef.ctx(), ctx) {
+                require_regkey_context(&term.key, ctx)
+            } else {
+                Err(Error::ContextMismatch)
+            };
+            if let Err(error) = valid {
+                failure = Some((position, error));
+                break;
+            }
+            term.key.retain(|word| !word.is_empty());
+            term.key.sort_unstable_by(Word::structural_cmp);
+            let digest = digest_key(&term.key);
+            let shard = (digest % self.shards.len() as u64) as usize;
+            groups[shard].push((position, digest, term));
+        }
+        let add = |(shard, group): (&mut CollectorShard, Vec<(usize, u64, RegTermSym)>)| {
+            for (position, digest, term) in group {
+                let previous_len = shard.collector.collected.len();
+                if let Err(error) = shard.collector.push_canonical(term, digest) {
+                    return Some((position, error));
+                }
+                if shard.collector.collected.len() != previous_len {
+                    shard.first_positions.push(position);
+                }
+            }
+            None
+        };
+        let errors: Vec<_> = if parallel {
+            self.shards.par_iter_mut().zip(groups).map(add).collect()
+        } else {
+            self.shards.iter_mut().zip(groups).map(add).collect()
+        };
+        // Validation and arithmetic failures retain their serial precedence,
+        // independently of which shard finishes first.
+        for error in errors.into_iter().flatten() {
+            if failure
+                .as_ref()
+                .is_none_or(|(position, _)| error.0 < *position)
+            {
+                failure = Some(error);
+            }
+        }
+        match failure {
+            Some((_, error)) => Err(error),
+            None => Ok(()),
         }
     }
-    Ok(result)
+
+    pub(crate) fn finish(self) -> Result<RegulatorSym> {
+        use rayon::prelude::*;
+        let pieces: Vec<Vec<_>> = self
+            .shards
+            .into_par_iter()
+            .map(|shard| {
+                shard
+                    .collector
+                    .collected
+                    .into_iter()
+                    .zip(shard.first_positions)
+                    .map(|((key, coefficients), position)| {
+                        (
+                            position,
+                            coefficients
+                                .finish()
+                                .map(|coef| (!coef.is_zero()).then_some(RegTermSym { key, coef })),
+                        )
+                    })
+                    .collect()
+            })
+            .collect();
+        let mut ordered: Vec<_> = pieces.into_iter().flatten().collect();
+        ordered.sort_unstable_by_key(|(position, _)| *position);
+        let mut result = Vec::with_capacity(ordered.len());
+        for (_, term) in ordered {
+            if let Some(term) = term? {
+                result.push(term);
+            }
+        }
+        Ok(result)
+    }
 }
 
 /// Multiply regulator monomials by joining and canonically sorting keys.

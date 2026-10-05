@@ -41,7 +41,43 @@ struct CompatibilityViews {
 /// when requested. Clones share both the native value and the lazy views.
 #[derive(Clone, Debug)]
 pub struct Rat {
+    // A clone touches one value-local reference count, not the context shared
+    // by every coefficient in a parallel integration.
+    inner: Arc<RatInner>,
+}
+
+#[derive(Debug)]
+struct RatInner {
     ctx: Arc<PolyCtx>,
-    native: Arc<NativeRat>,
-    views: Arc<OnceLock<CompatibilityViews>>,
+    native: NativeStorage,
+    views: OnceLock<Box<CompatibilityViews>>,
+}
+
+#[derive(Debug)]
+enum NativeStorage {
+    // Ordinary values need one allocation for the complete shared handle data.
+    Owned(NativeRat),
+    // Identity arithmetic can preserve a different caller's diagnostic context
+    // without copying polynomial buffers. This always points to an Owned root;
+    // repeated context changes cannot create chains of retained wrappers.
+    Shared(Arc<RatInner>),
+}
+
+impl AsRef<NativeRat> for NativeStorage {
+    #[inline]
+    fn as_ref(&self) -> &NativeRat {
+        match self {
+            Self::Owned(value) => value,
+            Self::Shared(root) => root.native.as_ref(),
+        }
+    }
+}
+
+impl std::ops::Deref for NativeStorage {
+    type Target = NativeRat;
+
+    #[inline]
+    fn deref(&self) -> &Self::Target {
+        self.as_ref()
+    }
 }

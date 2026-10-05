@@ -1,0 +1,14 @@
+case,group,backend,workers,diagnostic_flags,wall_s,cpu_s,peak_mib,exact
+tst2,measurements,rust,1,{},101.048822075,99.569014,84.43359375,True
+tst2,measurements,flint,1,{},136.415701907,134.795417,403.62890625,True
+tst2,measurements,flint,8,{},20.236048471,155.056747,474.953125,True
+tst2,measurements,rust,8,{},12.822335129,72.422783,182.88671875,True
+tst2,measurements,flint,8,"{""HF_STEP_TRACE"": ""1""}",16.40992897,125.906548,485.73046875,True
+tst3,measurements,flint,8,"{""HF_STEP_TRACE"": ""1""}",303.264047318,2346.316827,7958.45703125,True
+tst2,measurements,diagnostic,8,"{""HB_DIAG_WINDOW"": ""16""}",16.605294106,82.616108,180.85546875,True
+tst2,measurements,diagnostic,8,"{""HB_DIAG_WINDOW"": ""128""}",13.372397554,85.949136,190.88671875,True
+tst3,measurements,diagnostic,8,"{""HB_DIAG_WINDOW"": ""16""}",228.420273589,1245.671359,1017.6171875,True
+tst3,measurements,diagnostic,8,"{""HB_DIAG_WINDOW"": ""128""}",211.646852389,1502.224513,1015.65234375,True
+tst3,controls,rust,8,{},222.517286579,1257.083542,1003.859375,True
+tst3,controls,flint,8,{},314.736978112,2427.547764,7850.515625,True
+tst3,controls,diagnostic,8,"{""HB_DIAG_WINDOW"": ""16""}",261.681153814,1419.086788,1014.625,True

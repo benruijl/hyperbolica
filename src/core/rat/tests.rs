@@ -1,3 +1,5 @@
+mod native_operations;
+
 use std::cmp::Ordering;
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::sync::Arc;
@@ -155,16 +157,88 @@ fn native_value_is_shared_and_q_views_are_lazy_and_monic() {
     let rational = Rat::parse(ctx.clone(), "(x+1)/(2*y+2)").unwrap();
     let cloned = rational.clone();
 
-    assert!(Arc::ptr_eq(&rational.native, &cloned.native));
-    assert!(Arc::ptr_eq(&rational.views, &cloned.views));
-    assert!(rational.views.get().is_none());
+    assert!(std::ptr::eq(rational.native(), cloned.native()));
+    assert!(std::ptr::eq(&rational.inner.views, &cloned.inner.views));
+    assert!(rational.inner.views.get().is_none());
 
     assert_eq!(
         rational.numerator(),
         &Poly::parse(ctx.clone(), "x/2+1/2").unwrap()
     );
     assert_eq!(rational.denominator(), &Poly::parse(ctx, "y+1").unwrap());
-    assert!(cloned.views.get().is_some());
+    assert!(cloned.inner.views.get().is_some());
+    let warm_clone = rational.clone();
+    assert!(std::ptr::eq(cloned.numerator(), warm_clone.numerator()));
+    assert!(std::ptr::eq(cloned.denominator(), warm_clone.denominator()));
+}
+
+#[test]
+fn concurrent_clones_preserve_context_specific_lazy_views() {
+    let symbol = Symbol::parse("x", "rat_concurrent_views").unwrap();
+    let qualified = PolyCtx::from_symbols([symbol]).unwrap();
+    let stripped = PolyCtx::from_indeterminates([symbol.to_atom()]).unwrap();
+    assert_ne!(qualified.vars(), stripped.vars());
+    let original = Rat::from_poly(Poly::generator(qualified.clone(), 0).unwrap())
+        .try_div(&Rat::from_int(qualified.clone(), 2))
+        .unwrap();
+    let rebound = original.clone_in_context(&stripped);
+    let values = (0..8)
+        .map(|i| {
+            if i % 2 == 0 {
+                (original.clone(), qualified.clone())
+            } else {
+                (rebound.clone(), stripped.clone())
+            }
+        })
+        .collect::<Vec<_>>();
+    drop(original);
+    drop(rebound);
+    let barrier = std::sync::Barrier::new(values.len());
+    std::thread::scope(|scope| {
+        for (value, expected_ctx) in values {
+            let barrier = &barrier;
+            scope.spawn(move || {
+                barrier.wait();
+                for _ in 0..32 {
+                    let cloned = value.clone();
+                    assert!(Arc::ptr_eq(cloned.ctx(), &expected_ctx));
+                    assert!(Arc::ptr_eq(cloned.numerator().ctx(), &expected_ctx));
+                    assert!(Arc::ptr_eq(cloned.denominator().ctx(), &expected_ctx));
+                    assert_eq!(
+                        cloned.evaluate_rational(&[Rational::from(4)]).unwrap(),
+                        Rational::from(2)
+                    );
+                }
+            });
+        }
+    });
+}
+
+#[test]
+fn context_aliases_share_native_storage_without_retaining_intermediate_contexts() {
+    let symbol = Symbol::parse("x", "rat_context_aliases").unwrap();
+    let root_ctx = PolyCtx::from_symbols([symbol]).unwrap();
+    let middle_ctx = PolyCtx::from_indeterminates([symbol.to_atom()]).unwrap();
+    let last_ctx = PolyCtx::from_symbols([symbol]).unwrap();
+    let original = Rat::from_poly(Poly::generator(root_ctx, 0).unwrap());
+    let middle = original.clone_in_context(&middle_ctx);
+    let intermediate = Arc::downgrade(&middle_ctx);
+    // Warm the intermediate views too: later aliases must retain neither the
+    // intermediate wrapper nor the context held by its cached polynomials.
+    let _ = middle.numerator();
+    let last = middle.clone_in_context(&last_ctx);
+    assert!(std::ptr::eq(original.native(), middle.native()));
+    assert!(std::ptr::eq(original.native(), last.native()));
+    drop(middle);
+    drop(middle_ctx);
+    assert!(intermediate.upgrade().is_none());
+    drop(original);
+    assert!(Arc::ptr_eq(last.ctx(), &last_ctx));
+    assert!(Arc::ptr_eq(last.numerator().ctx(), &last_ctx));
+    assert_eq!(
+        last.evaluate_rational(&[Rational::from(7)]).unwrap(),
+        Rational::from(7)
+    );
 }
 
 #[test]
@@ -179,9 +253,9 @@ fn exact_constant_extraction_stays_on_the_native_symbolica_value() {
     assert_eq!(integer.integer_constant(), Some(Integer::from(-17)));
     assert_eq!(nonconstant.rational_constant(), None);
 
-    assert!(rational.views.get().is_none());
-    assert!(integer.views.get().is_none());
-    assert!(nonconstant.views.get().is_none());
+    assert!(rational.inner.views.get().is_none());
+    assert!(integer.inner.views.get().is_none());
+    assert!(nonconstant.inner.views.get().is_none());
 }
 
 #[test]
@@ -214,8 +288,8 @@ fn native_degree_dependency_and_order_queries_keep_q_views_cold() {
         Err(Error::UnknownVariable(_))
     ));
 
-    assert!(rational.views.get().is_none());
-    assert!(zero.views.get().is_none());
+    assert!(rational.inner.views.get().is_none());
+    assert!(zero.inner.views.get().is_none());
 }
 
 #[test]
@@ -226,8 +300,8 @@ fn constructor_delegates_content_and_polynomial_cancellation_to_symbolica() {
     let rational = Rat::new(numerator, denominator).unwrap();
 
     assert_eq!(rational, Rat::parse(ctx.clone(), "7/15*(x+y)").unwrap());
-    assert!(rational.native.denominator.is_constant());
-    assert!(!rational.native.denominator.lcoeff().is_negative());
+    assert!(rational.inner.native.denominator.is_constant());
+    assert!(!rational.inner.native.denominator.lcoeff().is_negative());
     assert_eq!(
         Rat::from_atom(ctx, rational.to_atom().as_view()).unwrap(),
         rational
@@ -288,7 +362,7 @@ fn large_shared_denominator_addition_cancels_once_and_stays_canonical() {
     .unwrap();
 
     assert_eq!(sum, expected);
-    assert!(!sum.native.denominator.lcoeff().is_negative());
+    assert!(!sum.inner.native.denominator.lcoeff().is_negative());
 }
 
 #[test]
@@ -341,8 +415,8 @@ fn negative_power_and_typed_native_substitution_are_exact() {
         rational.substitute_integer(0, &Integer::from(2)).unwrap(),
         Rat::parse(ctx.clone(), "(2+2*y)/(2-y)").unwrap()
     );
-    assert!(rational.views.get().is_none());
-    assert!(substituted.views.get().is_none());
+    assert!(rational.inner.views.get().is_none());
+    assert!(substituted.inner.views.get().is_none());
 }
 
 #[test]
@@ -358,9 +432,9 @@ fn rational_function_substitution_uses_native_horner_composition() {
     .unwrap();
 
     assert_eq!(substituted, expected);
-    assert!(rational.views.get().is_none());
-    assert!(replacement.views.get().is_none());
-    assert!(substituted.views.get().is_none());
+    assert!(rational.inner.views.get().is_none());
+    assert!(replacement.inner.views.get().is_none());
+    assert!(substituted.inner.views.get().is_none());
 }
 
 #[test]
@@ -396,8 +470,8 @@ fn native_context_transfer_keeps_compatibility_views_cold() {
         transferred,
         Rat::parse(destination_ctx, "(x+y)/(1-x*y)").unwrap()
     );
-    assert!(source.views.get().is_none());
-    assert!(transferred.views.get().is_none());
+    assert!(source.inner.views.get().is_none());
+    assert!(transferred.inner.views.get().is_none());
 }
 
 #[test]
@@ -424,7 +498,7 @@ fn rational_and_integer_evaluation_are_exact_and_check_poles() {
         rational.evaluate_integer(&[Integer::from(1)]),
         Err(Error::InvalidInput(_))
     ));
-    assert!(rational.views.get().is_none());
+    assert!(rational.inner.views.get().is_none());
 
     let zero = Rat::zero(ctx);
     assert_eq!(
@@ -437,7 +511,7 @@ fn rational_and_integer_evaluation_are_exact_and_check_poles() {
             .unwrap()
             .is_zero()
     );
-    assert!(zero.views.get().is_none());
+    assert!(zero.inner.views.get().is_none());
 }
 
 #[test]
@@ -456,7 +530,7 @@ fn native_substitution_detects_zero_denominators_without_materializing_views() {
         rational.substitute_integer(2, &Integer::from(1)),
         Err(Error::UnknownVariable(_))
     ));
-    assert!(rational.views.get().is_none());
+    assert!(rational.inner.views.get().is_none());
 }
 
 #[test]
@@ -484,89 +558,4 @@ fn sparse_substitution_commutes_with_full_evaluation() {
             assert_eq!(after_substitution, direct, "{expression} at ({x}, {y})");
         }
     }
-}
-
-#[test]
-fn derivative_and_laurent_residue() {
-    let ctx = context();
-    let rational = Rat::parse(ctx.clone(), "(1+x)/(x^2*y)").unwrap();
-    assert_eq!(rational.pole_degree(0).unwrap(), -2);
-    assert_eq!(
-        rational.residue(0).unwrap(),
-        Rat::parse(ctx.clone(), "1/y").unwrap()
-    );
-    assert_eq!(
-        rational.derivative(0).unwrap(),
-        Rat::parse(ctx, "(-x-2)/(x^3*y)").unwrap()
-    );
-}
-
-#[test]
-fn laurent_leading_coefficients_stay_native_for_sparse_inputs_and_validate_zero() {
-    let ctx = context();
-    for (expression, variable, expected, order) in [
-        ("x^40000*(y+1)/(x^3*(y^2-1))", 0, "1/(y-1)", 39997),
-        ("(y^4*x+y^4+y^9)/(y^2*(x+2)+y^3)", 1, "(x+1)/(x+2)", 2),
-        ("(2*x+4*y)/(6*y)", 0, "2/3", 0),
-    ] {
-        let value = Rat::parse(ctx.clone(), expression).unwrap();
-        let residue = value.residue(variable).unwrap();
-        assert_eq!(value.pole_degree(variable).unwrap(), order);
-        assert_eq!(residue, Rat::parse(ctx.clone(), expected).unwrap());
-        assert!(!value.compatibility_views_initialized());
-        assert!(!residue.compatibility_views_initialized());
-    }
-    let zero = Rat::zero(ctx);
-    assert!(matches!(zero.residue(2), Err(Error::UnknownVariable(_))));
-    assert!(matches!(
-        zero.pole_degree(2),
-        Err(Error::UnknownVariable(_))
-    ));
-}
-
-#[test]
-fn absent_variable_and_scalar_composition_keep_exact_semantics() {
-    let ctx = context();
-    let value = Rat::parse(ctx.clone(), "(y^5+1)/(y^3+2)").unwrap();
-    let replacement = Rat::parse(ctx.clone(), "1/(x+y)").unwrap();
-    assert_eq!(value.substitute_rat(0, &replacement).unwrap(), value);
-    assert_eq!(
-        value.substitute_rational(0, &Rational::new(2, 3)).unwrap(),
-        value
-    );
-    assert_eq!(
-        value.substitute_integer(0, &Integer::from(7)).unwrap(),
-        value
-    );
-    let scalar = Rat::from_rational(ctx.clone(), Rational::new(2, 3));
-    assert_eq!(
-        value.substitute_rat(1, &scalar).unwrap(),
-        value.substitute_rational(1, &Rational::new(2, 3)).unwrap()
-    );
-    assert!(matches!(
-        value.substitute_rat(2, &scalar),
-        Err(Error::UnknownVariable(_))
-    ));
-    assert!(!value.compatibility_views_initialized());
-}
-
-#[test]
-fn native_polynomial_part_integral_round_trips_without_q_views() {
-    let ctx = context();
-    let rational = Rat::parse(ctx.clone(), "(x^20+3*x^2+1)/(y+1)").unwrap();
-    let primitive = rational.integrate_polynomial_part(0).unwrap();
-
-    assert_eq!(primitive.derivative(0).unwrap(), rational);
-    assert_eq!(
-        primitive,
-        Rat::parse(ctx.clone(), "(x^21/21+x^3+x)/(y+1)").unwrap()
-    );
-    assert!(rational.views.get().is_none());
-    assert!(primitive.views.get().is_none());
-    assert!(matches!(
-        Rat::parse(ctx, "1/(x+1)")
-            .unwrap()
-            .integrate_polynomial_part(0),
-        Err(Error::InvalidInput(_))
-    ));
 }

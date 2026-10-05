@@ -1,6 +1,10 @@
 # Latest HyperFLINT/Flint and Hyperbolica/Symbolica benchmarks
 
-Updated 2026-09-08T19:05:32.332018+00:00.
+> Earlier benchmark jobs and report watchers were stopped by user request.
+> A fresh complete-suite run is tracked in [the new live report](full-suite-20260908.md).
+> Running/queued labels below belong to the preserved earlier snapshot.
+
+Updated 2026-09-08T19:10:59.985278+00:00.
 
 Seven smaller attachment cases use fresh adjacent eight-worker C++/Rust
 pairs on identical physical cores. Symbolica includes both the rolling queue
@@ -21,7 +25,7 @@ differences; their algebraic definitions match their respective archives.
 | findroots21_a | 8 | 0.124 | 0.014 | 8.942 | 30.203 / 14.445 | measured; scratch fix + rolling queue |
 | findroots21_b | 8 | 0.043 | 0.010 | 4.513 | 30.270 / 14.523 | measured; scratch fix + rolling queue |
 | tst4 | 8 | 4,314.398 | 7,367.829 | 0.586 | 141,355.035 / 18,674.355 | ok / ok (symbolically equal); earlier batch build |
-| qbox_one_mass | 8 | 14,612.022 | 2,212.266 | — | 87,147.746 / 12,818.555 | running / running; scratch fix + rolling queue |
+| qbox_one_mass | 8 | 14,939.676 | 2,539.921 | — | 87,147.746 / 12,976.121 | running / running; scratch fix + rolling queue |
 | qbox_collaborator | 8 | — | — | — | — / — | queued / queued; scratch fix + rolling queue |
 
 A time ratio above one favors Symbolica. Running-job times are elapsed so

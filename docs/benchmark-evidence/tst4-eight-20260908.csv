@@ -1,0 +1,3 @@
+backend,status,pid,workers,timeout_seconds,memory_mib,elapsed_seconds,peak_rss_mib,peak_final,cpus,exact_comparison
+hyperflint,ok,3518722,8,86400,262144,4314.39837413,141355.03515625,True,"40,41,46,47,57,58,60,63",symbolically_equal
+hyperbolica,ok,3518785,8,86400,262144,7367.829463559,18674.35546875,True,"67,69,70,82,83,84,87,91",symbolically_equal

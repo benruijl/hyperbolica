@@ -2,7 +2,7 @@
 name = "hyperbolica"
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.89"
+rust-version = "1.96"
 license-file = "DISTRIBUTION-LICENSE.md"
 description = "A Rust port of HyperFLINT backed by Symbolica"
 publish = false

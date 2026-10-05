@@ -1,0 +1,5 @@
+case,backend,status,pid,workers,timeout_seconds,memory_mib,elapsed_seconds,peak_rss_mib,peak_final,exact_comparison
+qbox_one_mass,hyperflint,running,3960567,8,86400,262144,14933.336595,87147.74609375,False,pending
+qbox_one_mass,hyperbolica,memory_limit_or_allocation_failure,3960571,8,86400,262144,2335.596683598,118172.85546875,True,pending
+qbox_collaborator,hyperflint,queued,,8,86400,262144,,,False,pending
+qbox_collaborator,hyperbolica,queued,,8,86400,262144,,,False,pending

@@ -1,10 +1,9 @@
 use std::collections::{BTreeMap, HashSet};
 use std::sync::Arc;
 
-use rayon::prelude::*;
-
 use super::contour::{close_positive_letters, regulator_bin_is_zero};
 use super::entry::{BinKey, EntryContribution, process_entry};
+use super::ordered_parallel::{Lookahead, try_fold_ordered_adaptive};
 use super::{
     Boundary, IntegrationError, IntegrationResult, IntegrationStepOptions, ShuffleEntrySym,
     ShuffleList, ShuffleListSym,
@@ -12,7 +11,9 @@ use super::{
 use crate::algebra::algebraic_letters::join_algebraic_letter_session;
 use crate::core::{DigestBuckets, PolyCtx, SymCoef, structural_bucket_digest};
 use crate::error::Error;
-use crate::integrator::transform::TransformSession;
+use crate::integrator::transform::{
+    ParallelRegulatorSymCollector, RegulatorSymCollector, TransformSession,
+};
 use crate::integrator::{
     RegulatorSym, TransformOptions, TransformResult, canonicalize_regulator_sym,
 };
@@ -86,26 +87,47 @@ impl StepTransformCache {
     }
 }
 
+#[derive(Default)]
+struct StepContributions {
+    finite: RegulatorSymCollector,
+    parallel_finite: Option<ParallelRegulatorSymCollector>,
+    // Preserve raw boundary terms and their contour-closure encounter order.
+    // Only finite terms are collected incrementally.
+    zero_bins: BTreeMap<BinKey, RegulatorSym>,
+    infinity_bins: BTreeMap<BinKey, RegulatorSym>,
+}
+
+impl StepContributions {
+    fn push(&mut self, contribution: EntryContribution) -> IntegrationResult<()> {
+        if let Some(collector) = &mut self.parallel_finite {
+            collector.extend(contribution.finite)?;
+        } else {
+            self.finite.extend(contribution.finite)?;
+        }
+        for (key, terms) in contribution.zero_bins {
+            self.zero_bins.entry(key).or_default().extend(terms);
+        }
+        for (key, terms) in contribution.infinity_bins {
+            self.infinity_bins.entry(key).or_default().extend(terms);
+        }
+        Ok(())
+    }
+}
+
 fn merge_contributions(
     ctx: &Arc<PolyCtx>,
-    contributions: Vec<EntryContribution>,
+    contributions: StepContributions,
     variable: usize,
     table: &MzvReductionTable,
     check_divergences: bool,
     fibration_variables: &[usize],
 ) -> IntegrationResult<RegulatorSym> {
-    let mut finite = RegulatorSym::new();
-    let mut zero_bins = BTreeMap::<BinKey, RegulatorSym>::new();
-    let mut infinity_bins = BTreeMap::<BinKey, RegulatorSym>::new();
-    for contribution in contributions {
-        finite.extend(contribution.finite);
-        for (key, terms) in contribution.zero_bins {
-            zero_bins.entry(key).or_default().extend(terms);
-        }
-        for (key, terms) in contribution.infinity_bins {
-            infinity_bins.entry(key).or_default().extend(terms);
-        }
-    }
+    let StepContributions {
+        finite,
+        parallel_finite,
+        zero_bins,
+        infinity_bins,
+    } = contributions;
 
     if check_divergences {
         for (boundary, bins) in [
@@ -125,6 +147,11 @@ fn merge_contributions(
             }
         }
     }
+    let finite = if let Some(collector) = parallel_finite {
+        collector.finish()?
+    } else {
+        finite.finish()?
+    };
     Ok(canonicalize_regulator_sym(&finite)?)
 }
 
@@ -327,42 +354,44 @@ pub(crate) fn integration_step_core_sym_with_options(
     // replaced by an owned batch allocator; the default rational path retains
     // full licensed Rayon parallelism, while restricted mode stays on the
     // calling thread.
-    let contributions = if options.parallel
-        && !options.introduce_algebraic_letters
-        && input.len() >= 4
-        && symbolica::LicenseManager::max_threads(rayon::current_num_threads()) > 1
-    {
-        (0..input.len())
-            .into_par_iter()
-            .map(|index| {
-                process_entry(
-                    ctx,
-                    &input[index],
-                    variable,
-                    options.check_divergences,
-                    options.introduce_algebraic_letters,
-                    forbidden_algebraic_variables,
-                    transformed[index].as_ref(),
-                )
-            })
-            .collect::<IntegrationResult<Vec<_>>>()?
-    } else {
-        input
-            .iter()
-            .zip(&transformed)
-            .map(|(entry, transformed)| {
-                process_entry(
-                    ctx,
-                    entry,
-                    variable,
-                    options.check_divergences,
-                    options.introduce_algebraic_letters,
-                    forbidden_algebraic_variables,
-                    transformed.as_ref(),
-                )
-            })
-            .collect::<IntegrationResult<Vec<_>>>()?
+    let mut contributions = StepContributions::default();
+    let licensed_threads =
+        if options.parallel && !options.introduce_algebraic_letters && input.len() >= 4 {
+            symbolica::license::LicenseManager::max_threads(rayon::current_num_threads())
+        } else {
+            1
+        };
+    let entries = input.iter().zip(transformed);
+    let process = |(entry, transformed): (&ShuffleEntrySym, Arc<TransformResult>)| {
+        process_entry(
+            ctx,
+            entry,
+            variable,
+            options.check_divergences,
+            options.introduce_algebraic_letters,
+            forbidden_algebraic_variables,
+            transformed.as_ref(),
+        )
     };
+    if licensed_threads > 1 {
+        contributions.parallel_finite = Some(ParallelRegulatorSymCollector::new(licensed_threads));
+        contributions = try_fold_ordered_adaptive(
+            entries,
+            Lookahead {
+                minimum: licensed_threads.saturating_mul(2).min(input.len()),
+                maximum: licensed_threads.saturating_mul(16).min(input.len()),
+                retained_bytes: 64 * 1024 * 1024,
+            },
+            contributions,
+            process,
+            StepContributions::push,
+            EntryContribution::retained_size_hint,
+        )?;
+    } else {
+        for entry in entries {
+            contributions.push(process(entry)?)?;
+        }
+    }
     merge_contributions(
         ctx,
         contributions,

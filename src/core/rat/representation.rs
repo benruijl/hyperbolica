@@ -5,7 +5,7 @@ use std::sync::{Arc, OnceLock};
 use symbolica::domains::rational_polynomial::FromNumeratorAndDenominator;
 use symbolica::prelude::*;
 
-use super::{CompatibilityViews, NativeRat, Rat};
+use super::{CompatibilityViews, NativeRat, NativeStorage, Rat, RatInner};
 use crate::core::{Poly, PolyCtx};
 use crate::error::{Error, Result};
 use crate::symbols::SYMBOL_NAMESPACE;
@@ -89,7 +89,7 @@ impl Rat {
 
     /// Convert the exact rational function back to a normalized Symbolica atom.
     pub fn to_atom(&self) -> Atom {
-        self.native.to_expression()
+        self.inner.native.to_expression()
     }
 
     pub fn numerator(&self) -> &Poly {
@@ -101,15 +101,15 @@ impl Rat {
     }
 
     pub fn ctx(&self) -> &Arc<PolyCtx> {
-        &self.ctx
+        &self.inner.ctx
     }
 
     pub fn is_zero(&self) -> bool {
-        self.native.is_zero()
+        self.inner.native.is_zero()
     }
 
     pub fn is_one(&self) -> bool {
-        self.native.numerator.is_one() && self.native.denominator.is_one()
+        self.inner.native.numerator.is_one() && self.inner.native.denominator.is_one()
     }
 
     /// Return the exact Symbolica scalar when this rational function is
@@ -119,10 +119,10 @@ impl Rat {
     /// it does not materialize the compatibility [`Poly`] views or round-trip
     /// through expression formatting.
     pub fn rational_constant(&self) -> Option<Rational> {
-        self.native.is_constant().then(|| {
+        self.inner.native.is_constant().then(|| {
             Rational::from((
-                self.native.numerator.get_constant(),
-                self.native.denominator.get_constant(),
+                self.inner.native.numerator.get_constant(),
+                self.inner.native.denominator.get_constant(),
             ))
         })
     }
@@ -135,16 +135,16 @@ impl Rat {
     }
 
     pub fn equal(&self, other: &Self) -> bool {
-        self.same_context(other) && self.native == other.native
+        self.same_context(other) && self.native() == other.native()
     }
 
     pub(crate) fn native(&self) -> &NativeRat {
-        &self.native
+        &self.inner.native
     }
 
     #[cfg(test)]
     pub(crate) fn compatibility_views_initialized(&self) -> bool {
-        self.views.get().is_some()
+        self.inner.views.get().is_some()
     }
 
     pub(crate) fn from_native(ctx: Arc<PolyCtx>, mut native: NativeRat) -> Result<Self> {
@@ -183,20 +183,24 @@ impl Rat {
             native = NativeRat::from_num_den(numerator, denominator, &Z, false);
         }
         Ok(Self {
-            ctx,
-            native: Arc::new(native),
-            views: Arc::new(OnceLock::new()),
+            inner: Arc::new(RatInner {
+                ctx,
+                native: NativeStorage::Owned(native),
+                views: OnceLock::new(),
+            }),
         })
     }
 
     fn compatibility_views(&self) -> &CompatibilityViews {
-        self.views.get_or_init(|| {
+        self.inner.views.get_or_init(|| {
             let mut numerator = self
+                .inner
                 .native
                 .numerator
                 .clone()
                 .map_coeff(|coefficient| Q.to_element_numerator(coefficient.clone()), Q);
             let mut denominator = self
+                .inner
                 .native
                 .denominator
                 .clone()
@@ -211,27 +215,32 @@ impl Rat {
                 denominator = denominator.div_coeff(&leading);
             }
 
-            CompatibilityViews {
-                numerator: Poly::from_inner(self.ctx.clone(), numerator),
-                denominator: Poly::from_inner(self.ctx.clone(), denominator),
-            }
+            Box::new(CompatibilityViews {
+                numerator: Poly::from_inner(self.inner.ctx.clone(), numerator),
+                denominator: Poly::from_inner(self.inner.ctx.clone(), denominator),
+            })
         })
     }
 
     pub(super) fn same_context(&self, other: &Self) -> bool {
-        self.ctx.is_compatible_with(&other.ctx)
+        self.inner.ctx.is_compatible_with(&other.inner.ctx)
     }
 
     /// Share an unchanged value while preserving the caller's diagnostic
     /// context. Arithmetic only calls this after checking compatibility.
     pub(super) fn clone_in_context(&self, ctx: &Arc<PolyCtx>) -> Self {
-        if Arc::ptr_eq(&self.ctx, ctx) {
+        if Arc::ptr_eq(&self.inner.ctx, ctx) {
             self.clone()
         } else {
             Self {
-                ctx: ctx.clone(),
-                native: self.native.clone(),
-                views: Arc::new(OnceLock::new()),
+                inner: Arc::new(RatInner {
+                    ctx: ctx.clone(),
+                    native: NativeStorage::Shared(match &self.inner.native {
+                        NativeStorage::Owned(_) => self.inner.clone(),
+                        NativeStorage::Shared(root) => root.clone(),
+                    }),
+                    views: OnceLock::new(),
+                }),
             }
         }
     }

@@ -1,0 +1,66 @@
+From afdecbaf1f024c2ac827226027b7e931b366f66f Mon Sep 17 00:00:00 2001
+From: Ben Ruijl <ben@ruijl.ch>
+Date: Mon, 5 Oct 2026 07:57:26 +0000
+Subject: [PATCH] Restore native factored partial-fraction exports for
+ Hyperbolica
+
+---
+ src/domains/factorized_rational_polynomial.rs |  5 ++++
+ .../constructor_tests.rs                      | 29 +++++++++++++++++++
+ 2 files changed, 34 insertions(+)
+
+diff --git a/src/domains/factorized_rational_polynomial.rs b/src/domains/factorized_rational_polynomial.rs
+index fb42d03..78fdf36 100644
+--- a/src/domains/factorized_rational_polynomial.rs
++++ b/src/domains/factorized_rational_polynomial.rs
+@@ -1,5 +1,10 @@
+ //! Rational polynomial field with factorized denominator.
+ 
++mod apart;
++
++#[cfg(test)]
++mod constructor_tests;
++
+ use std::{
+     borrow::Cow,
+     cmp::Ordering,
+diff --git a/src/domains/factorized_rational_polynomial/constructor_tests.rs b/src/domains/factorized_rational_polynomial/constructor_tests.rs
+index e3c22d7..5fbf02a 100644
+--- a/src/domains/factorized_rational_polynomial/constructor_tests.rs
++++ b/src/domains/factorized_rational_polynomial/constructor_tests.rs
+@@ -362,3 +362,32 @@ fn factored_exponent_multiplication_is_checked() {
+     let _ =
+         FactorizedRationalPolynomial::from_num_den(base.one(), vec![(base, usize::MAX)], &Z, true);
+ }
++
++#[test]
++fn scalar_only_rational_construction_never_factors_zero_variable_polynomials() {
++    for numerator in ["1/2", "-2/3", "0"] {
++        let numerator = parse!(numerator).to_polynomial::<_, u16>(&Q, None);
++        assert_eq!(numerator.nvars(), 0);
++        for factors in [vec![], vec![("3/5", 3)], vec![("-2/3", 2)]] {
++            let factors = factors
++                .into_iter()
++                .map(|(base, power)| (parse!(base).to_polynomial(&Q, None), power))
++                .collect::<Vec<_>>();
++            let denominator = factors.iter().fold(numerator.one(), |acc, (base, power)| {
++                acc * &base.pow(*power)
++            });
++            let expected =
++                RationalPolynomial::from_num_den(numerator.clone(), denominator, &Z, true);
++            for do_factor in [false, true] {
++                let actual = FactorizedRationalPolynomial::from_num_den(
++                    numerator.clone(),
++                    factors.clone(),
++                    &Z,
++                    do_factor,
++                );
++                assert_eq!(actual.numerator.nvars(), 0);
++                assert_eq!(materialize(actual), expected);
++            }
++        }
++    }
++}
+-- 
+2.55.0
+

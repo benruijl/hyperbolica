@@ -19,8 +19,8 @@ use pyo3::{
     wrap_pyfunction,
 };
 use symbolica::{
-    LicenseManager,
     api::python::{PythonExpression, create_symbolica_module},
+    license::LicenseManager,
     prelude::{Atom, AtomCore},
 };
 

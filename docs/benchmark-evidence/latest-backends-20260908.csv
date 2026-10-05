@@ -7,5 +7,5 @@ parity_face,8,measured,scratch fix + rolling queue,5.656392399,87.27734375,6.105
 findroots21_a,8,measured,scratch fix + rolling queue,0.124179519,30.203125,0.013887247,14.4453125,8.941982453397712,symbolically_equal
 findroots21_b,8,measured,scratch fix + rolling queue,0.042974065,30.26953125,0.009521798,14.5234375,4.513230064321886,symbolically_equal
 tst4,8,ok / ok (symbolically equal),earlier batch build,4314.39837413,141355.03515625,7367.829463559,18674.35546875,0.5855725075436189,symbolically_equal
-qbox_one_mass,8,running / running,scratch fix + rolling queue,14612.021731,87147.74609375,2212.266214,12818.5546875,,pending
+qbox_one_mass,8,running / running,scratch fix + rolling queue,14939.676407,87147.74609375,2539.920889,12976.12109375,,pending
 qbox_collaborator,8,queued / queued,scratch fix + rolling queue,,,,,,pending

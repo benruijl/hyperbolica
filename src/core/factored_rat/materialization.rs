@@ -87,7 +87,7 @@ impl FactoredRat {
             }
             if peel {
                 while exponent > 0 {
-                    let Some(quotient) = numerator.try_div_exact(&base) else {
+                    let Some(quotient) = numerator.try_div(&base) else {
                         break;
                     };
                     numerator = quotient;

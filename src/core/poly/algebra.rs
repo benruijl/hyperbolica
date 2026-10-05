@@ -126,7 +126,7 @@ impl Poly {
             return Err(Error::DivisionByZero);
         }
         self.inner
-            .try_div_exact(&divisor.inner)
+            .try_div(&divisor.inner)
             .map(|inner| Self::from_inner(self.ctx.clone(), inner))
             .ok_or(Error::InexactDivision)
     }
@@ -136,7 +136,7 @@ impl Poly {
         if self.is_zero() {
             return Ok(dividend.is_zero());
         }
-        Ok(dividend.inner.try_div_exact(&self.inner).is_some())
+        Ok(dividend.inner.try_div(&self.inner).is_some())
     }
 
     pub fn div_rem(&self, divisor: &Self) -> Result<(Self, Self)> {

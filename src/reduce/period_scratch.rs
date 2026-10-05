@@ -197,14 +197,8 @@ fn evaluate_period(scratch: &Scratch, key: &PeriodKey) -> Result<Vec<PeriodTerm>
                 .iter()
                 .enumerate()
                 .filter(|(_, exponent)| **exponent != 0)
-                .map(|(variable, &exponent)| {
-                    i32::try_from(exponent)
-                        .map(|exponent| (scratch.period_ids[variable], exponent))
-                        .map_err(|_| {
-                            Error::InvalidInput("period tuple exponent exceeds i32 range".into())
-                        })
-                })
-                .collect::<Result<BTreeMap<_, _>>>()?;
+                .map(|(variable, &exponent)| (scratch.period_ids[variable], i32::from(exponent)))
+                .collect::<BTreeMap<_, _>>();
             Ok(PeriodTerm {
                 scalar: Q.to_element(coefficient.clone(), denominator.clone(), true),
                 powers,

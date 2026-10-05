@@ -197,3 +197,70 @@ fn positive_letter_detection_uses_exact_integer_constants() {
     );
     assert_eq!(positive_integer(&Rat::parse(ctx, "x").unwrap()), None);
 }
+
+#[test]
+fn streamed_serial_and_parallel_steps_keep_cross_batch_boundary_cancellation() {
+    let ctx = PolyCtx::new(["x"]).unwrap();
+    // The logarithmic divergence cancels between the first and last entry,
+    // spanning several two-worker batches. The middle integrals sum to 15.
+    let mut input = vec![ShuffleEntry::new(
+        Rat::parse(ctx.clone(), "1/(x+1)").unwrap(),
+        Vec::new(),
+    )];
+    input.extend(
+        (0..15)
+            .map(|_| ShuffleEntry::new(Rat::parse(ctx.clone(), "1/(x+1)^2").unwrap(), Vec::new())),
+    );
+    input.push(ShuffleEntry::new(
+        Rat::parse(ctx.clone(), "-1/(x+1)").unwrap(),
+        Vec::new(),
+    ));
+    let pool = rayon::ThreadPoolBuilder::new()
+        .num_threads(2)
+        .build()
+        .unwrap();
+    for parallel in [false, true] {
+        let options = IntegrationStepOptions {
+            parallel,
+            check_divergences: true,
+            ..Default::default()
+        };
+        let result = pool
+            .install(|| {
+                integration_step_with_options_and_remaining_variables(
+                    &ctx,
+                    &input,
+                    0,
+                    &table(),
+                    &options,
+                    &[],
+                )
+            })
+            .unwrap();
+        assert_eq!(result.len(), 1);
+        assert!(result[0].key.is_empty());
+        assert_eq!(
+            result[0].coef.as_rat().unwrap(),
+            Rat::from_int(ctx.clone(), 15)
+        );
+        let error = pool
+            .install(|| {
+                integration_step_with_options_and_remaining_variables(
+                    &ctx,
+                    &input[..input.len() - 1].to_vec(),
+                    0,
+                    &table(),
+                    &options,
+                    &[],
+                )
+            })
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            IntegrationError::Divergent {
+                boundary: Boundary::Infinity,
+                ..
+            }
+        ));
+    }
+}

@@ -4,7 +4,7 @@ Hyperbolica-authored code is licensed under the MIT License in `LICENSE`.
 
 This working tree also contains, and built artifacts statically embed,
 Symbolica. Symbolica is not covered by Hyperbolica's MIT license. The selected
-checkout at upstream base `fb845d34bda8ccf1fedef6544d3aa46dc24944e3`
+checkout at upstream base `75f8350094b90254ee71dc2a391fde0d14b0204a`
 provides the **Symbolica Source-Available License 1.0** in
 [`vendor/symbolica/License.md`](vendor/symbolica/License.md). Its SHA-256 is
 `95576170a17bc8996fb8a94473745545048b6edc5d91e3867f091f7fc6b26981`.

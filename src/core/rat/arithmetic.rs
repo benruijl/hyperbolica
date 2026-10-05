@@ -15,11 +15,11 @@ impl Rat {
             return Ok(self.clone());
         }
         if self.is_zero() {
-            return Ok(other.clone_in_context(&self.ctx));
+            return Ok(other.clone_in_context(&self.inner.ctx));
         }
         Self::from_native(
-            self.ctx.clone(),
-            self.native.as_ref() + other.native.as_ref(),
+            self.inner.ctx.clone(),
+            self.inner.native.as_ref() + other.inner.native.as_ref(),
         )
     }
 
@@ -29,11 +29,11 @@ impl Rat {
             return Ok(self.clone());
         }
         if self.is_zero() {
-            return Ok(other.negated().clone_in_context(&self.ctx));
+            return Ok(other.negated().clone_in_context(&self.inner.ctx));
         }
         Self::from_native(
-            self.ctx.clone(),
-            self.native.as_ref() - other.native.as_ref(),
+            self.inner.ctx.clone(),
+            self.inner.native.as_ref() - other.inner.native.as_ref(),
         )
     }
 
@@ -43,11 +43,11 @@ impl Rat {
             return Ok(self.clone());
         }
         if other.is_zero() || self.is_one() {
-            return Ok(other.clone_in_context(&self.ctx));
+            return Ok(other.clone_in_context(&self.inner.ctx));
         }
         Self::from_native(
-            self.ctx.clone(),
-            self.native.as_ref() * other.native.as_ref(),
+            self.inner.ctx.clone(),
+            self.inner.native.as_ref() * other.inner.native.as_ref(),
         )
     }
 
@@ -60,8 +60,8 @@ impl Rat {
             return Ok(self.clone());
         }
         Self::from_native(
-            self.ctx.clone(),
-            self.native.as_ref() / other.native.as_ref(),
+            self.inner.ctx.clone(),
+            self.inner.native.as_ref() / other.inner.native.as_ref(),
         )
     }
 
@@ -69,8 +69,11 @@ impl Rat {
         if self.is_zero() {
             return self.clone();
         }
-        Self::from_native(self.ctx.clone(), self.native.as_ref().clone().neg())
-            .expect("negation preserves a rational function's context")
+        Self::from_native(
+            self.inner.ctx.clone(),
+            self.inner.native.as_ref().clone().neg(),
+        )
+        .expect("negation preserves a rational function's context")
     }
 
     pub fn pow(&self, exponent: i64) -> Result<Self> {
@@ -89,8 +92,8 @@ impl Rat {
         // Canonical numerator and denominator are coprime. Their powers
         // remain coprime, so generic rational squaring would only repeat
         // already-proven GCDs and exact divisions at every bit of the power.
-        let numerator = self.native.numerator.pow(magnitude as usize);
-        let denominator = self.native.denominator.pow(magnitude as usize);
+        let numerator = self.inner.native.numerator.pow(magnitude as usize);
+        let denominator = self.inner.native.denominator.pow(magnitude as usize);
         let native = if exponent >= 0 {
             NativeRat {
                 numerator,
@@ -101,13 +104,16 @@ impl Rat {
             // requires the canonical sign normalization, but no GCD.
             NativeRat::from_num_den(denominator, numerator, &Z, false)
         };
-        Self::from_native(self.ctx.clone(), native)
+        Self::from_native(self.inner.ctx.clone(), native)
     }
 
     pub fn derivative(&self, variable: usize) -> Result<Self> {
-        if variable >= self.ctx.len() {
+        if variable >= self.inner.ctx.len() {
             return Err(Error::UnknownVariable(variable.to_string()));
         }
-        Self::from_native(self.ctx.clone(), self.native.derivative(variable))
+        Self::from_native(
+            self.inner.ctx.clone(),
+            self.inner.native.derivative(variable),
+        )
     }
 }

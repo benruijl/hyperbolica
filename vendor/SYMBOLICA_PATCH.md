@@ -1,5 +1,20 @@
 # Hyperbolica-maintained Symbolica patches
 
+## Current selection: main, 2026-10-05
+
+The active dependency is Symbolica 3.0.1 from official `main` at
+`75f8350094b90254ee71dc2a391fde0d14b0204a`, plus only
+[`symbolica-main-20261005.patch`](symbolica-main-20261005.patch).
+This small compatibility patch restores the existing native partial-fraction
+module export and constructor regression coverage. Heap scratch recycling is
+already upstream; the old scalar constructor workaround is unnecessary.
+
+Use [the current snapshot instructions](SYMBOLICA_SNAPSHOT.md) to reconstruct
+and validate the selected tree. The September patches and evidence below are
+historical and must not be applied to the new base.
+
+## Historical September 2026 record
+
 ## Exponent scratch recycling, 2026-09-08
 
 The selected source now adds [`symbolica-heap-scratch-20260908.patch`](symbolica-heap-scratch-20260908.patch)

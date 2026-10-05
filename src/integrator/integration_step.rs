@@ -7,6 +7,7 @@ use crate::symbols::Word;
 mod contour;
 mod driver;
 mod entry;
+mod ordered_parallel;
 
 #[cfg(test)]
 mod tests;
@@ -133,8 +134,9 @@ pub type IntegrationResult<T> = std::result::Result<T, IntegrationError>;
 #[derive(Clone, Debug)]
 pub struct IntegrationStepOptions {
     pub check_divergences: bool,
-    /// Parallelize four or more independent shuffle entries. Indexed Rayon
-    /// collection followed by a serial merge keeps output deterministic.
+    /// Parallelize four or more independent shuffle entries. A bounded rolling
+    /// window overlaps processing with ordered incremental collection, keeping
+    /// output deterministic without retaining every result.
     pub parallel: bool,
     pub introduce_algebraic_letters: bool,
 }

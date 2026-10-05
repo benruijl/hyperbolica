@@ -75,7 +75,7 @@ impl Hash for Rat {
         // PolyVariable map. Diagnostic names are presentation-only. Prefix
         // the exact field used by `same_context` so Hash and Eq stay
         // consistent.
-        self.ctx.native_variables().hash(state);
+        self.inner.ctx.native_variables().hash(state);
         self.hash_canonical_payload(state);
     }
 }
@@ -87,10 +87,10 @@ impl Rat {
     /// context once. Composite keys that already did so can use this helper
     /// without rehashing the same variable map for every coefficient.
     pub(crate) fn hash_canonical_payload<H: Hasher>(&self, state: &mut H) {
-        self.native.numerator.coefficients.hash(state);
-        self.native.numerator.exponents.hash(state);
-        self.native.denominator.coefficients.hash(state);
-        self.native.denominator.exponents.hash(state);
+        self.inner.native.numerator.coefficients.hash(state);
+        self.inner.native.numerator.exponents.hash(state);
+        self.inner.native.denominator.coefficients.hash(state);
+        self.inner.native.denominator.exponents.hash(state);
     }
 
     /// Total structural order for internal canonicalization.
@@ -100,10 +100,11 @@ impl Rat {
     /// Symbolica's native canonical rational-polynomial representation. Equal
     /// values compare equal exactly when [`Rat::eq`] does.
     pub(crate) fn structural_cmp(&self, other: &Self) -> Ordering {
-        self.ctx
+        self.inner
+            .ctx
             .native_variables()
-            .cmp(other.ctx.native_variables())
-            .then_with(|| self.native.internal_cmp(&other.native))
+            .cmp(other.inner.ctx.native_variables())
+            .then_with(|| self.inner.native.internal_cmp(&other.inner.native))
     }
 }
 

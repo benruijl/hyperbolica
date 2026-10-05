@@ -116,7 +116,7 @@ fn series_positive_integer(series: &Series<AtomField>) -> Option<i64> {
     if !series.is_constant() {
         return None;
     }
-    super::shape::positive_integer(series.coefficient(0.into()).as_view())
+    super::shape::positive_integer(series.coefficient(0.into())?.as_view())
 }
 
 struct RationalizedSeries {

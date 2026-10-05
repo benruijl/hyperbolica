@@ -1,5 +1,9 @@
 # Quadruple-box allocation fix and refreshed backend comparison
 
+> Earlier benchmark jobs and report watchers were stopped by user request.
+> A fresh complete-suite run is tracked in [the new live report](full-suite-20260908.md).
+> Running/queued labels below belong to the preserved earlier snapshot.
+
 The old Symbolica-backed `qbox_one_mass` run failed on a single allocation of
 **232,157,872,128 bytes (216.2 GiB)**, after 2,335.6 seconds and 115.4 GiB peak
 RSS. Its address-space limit was 256 GiB.

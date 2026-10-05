@@ -23,6 +23,71 @@ pub(super) struct EntryContribution {
     pub(super) infinity_bins: BTreeMap<BinKey, RegulatorSym>,
 }
 
+impl EntryContribution {
+    /// Cheap admission estimate. Shared rational buffers are charged for each
+    /// reference; coefficient slots include headroom for integer heap storage.
+    /// This is not an exact heap measurement and excludes arithmetic scratch.
+    pub(super) fn retained_size_hint(&self) -> usize {
+        fn rat(value: &Rat) -> usize {
+            let native = value.native();
+            [&native.numerator, &native.denominator].into_iter().fold(
+                std::mem::size_of_val(native),
+                |bytes, polynomial| {
+                    bytes
+                        .saturating_add(polynomial.coefficients.capacity().saturating_mul(64))
+                        .saturating_add(polynomial.exponents.capacity().saturating_mul(2))
+                },
+            )
+        }
+        fn terms(terms: &RegulatorSym) -> usize {
+            terms.iter().fold(
+                terms
+                    .capacity()
+                    .saturating_mul(std::mem::size_of::<RegTermSym>()),
+                |mut bytes, term| {
+                    bytes = bytes.saturating_add(
+                        term.coef
+                            .terms()
+                            .len()
+                            .saturating_mul(std::mem::size_of::<SymMonomial>()),
+                    );
+                    for monomial in term.coef.terms() {
+                        bytes = bytes.saturating_add(rat(&monomial.prefactor));
+                        bytes = bytes.saturating_add(
+                            (monomial.log_powers.len()
+                                + monomial.delta_powers.len()
+                                + monomial.period_powers.len())
+                            .saturating_mul(64),
+                        );
+                    }
+                    bytes = bytes.saturating_add(
+                        term.key
+                            .capacity()
+                            .saturating_mul(std::mem::size_of::<Word>()),
+                    );
+                    for word in &term.key {
+                        bytes = bytes.saturating_add(
+                            word.letters
+                                .capacity()
+                                .saturating_mul(std::mem::size_of::<Rat>()),
+                        );
+                        for letter in &word.letters {
+                            bytes = bytes.saturating_add(rat(letter));
+                        }
+                    }
+                    bytes
+                },
+            )
+        }
+        self.zero_bins
+            .values()
+            .chain(self.infinity_bins.values())
+            .fold(terms(&self.finite), |bytes, value| {
+                bytes.saturating_add(terms(value))
+            })
+    }
+}
+
 fn scale_wordlist(wordlist: &Wordlist, scalar: &Rat) -> Result<Wordlist, Error> {
     wordlist
         .terms
