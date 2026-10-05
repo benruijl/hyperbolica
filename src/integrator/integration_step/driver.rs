@@ -357,7 +357,7 @@ pub(crate) fn integration_step_core_sym_with_options(
     let mut contributions = StepContributions::default();
     let licensed_threads =
         if options.parallel && !options.introduce_algebraic_letters && input.len() >= 4 {
-            symbolica::license::LicenseManager::max_threads(rayon::current_num_threads())
+            licensed_worker_count()
         } else {
             1
         };
@@ -431,4 +431,14 @@ fn validate_remaining_variables(
         }
     }
     Ok(())
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn licensed_worker_count() -> usize {
+    symbolica::license::LicenseManager::max_threads(rayon::current_num_threads())
+}
+
+#[cfg(target_arch = "wasm32")]
+fn licensed_worker_count() -> usize {
+    1
 }

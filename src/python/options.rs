@@ -18,9 +18,10 @@ use crate::{
 /// Omitting both MZV arguments selects the standard table embedded in the
 /// extension. Passing either argument explicitly selects a complete override;
 /// in particular, `mzv_reductions=[]` disables standard reductions.
+#[cfg_attr(feature = "python_stubgen", pyo3_stub_gen::derive::gen_stub_pyclass)]
 #[pyclass(
     from_py_object,
-    module = "hyperbolica",
+    module = "symbolica.community.hepkit.integration",
     name = "IntegrationOptions",
     eq
 )]
@@ -39,6 +40,7 @@ impl PythonIntegrationOptions {
     }
 }
 
+#[cfg_attr(feature = "python_stubgen", pyo3_stub_gen::derive::gen_stub_pymethods)]
 #[pymethods]
 impl PythonIntegrationOptions {
     #[new]

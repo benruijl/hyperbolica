@@ -28,7 +28,8 @@ check_dependency_graph() {
 
 check_dependency_graph default
 check_dependency_graph python --features python
-check_dependency_graph all-features --all-features
+check_dependency_graph native-python --features python_stubgen
+check_dependency_graph wasm-python --no-default-features --features wasm,python
 
 if rg -n \
     '(extern[[:space:]]+crate[[:space:]]+.*\bflint\b|use[[:space:]]+.*\bflint\b|flint3?_sys|Command::new\([^)]*(msolve|singular|sage|macaulay2|maxima|giac))' \
@@ -64,17 +65,20 @@ if rg -n \
 fi
 
 if ! rg -q \
-    'symbolica[[:space:]]*=[[:space:]]*\{[^}]*path[[:space:]]*=[[:space:]]*"vendor/symbolica"[^}]*default-features[[:space:]]*=[[:space:]]*false' \
+    'symbolica[[:space:]]*=[[:space:]]*\{[^}]*version[[:space:]]*=[[:space:]]*"3.0.1"[^}]*default-features[[:space:]]*=[[:space:]]*false' \
     "$repo_root/Cargo.toml"; then
     echo "pure-Symbolica gate: the pinned, feature-controlled vendor dependency is missing" >&2
     exit 1
 fi
 
 symbolica_checkout="$repo_root/vendor/symbolica"
+if [[ $(cd "$repo_root" && "$cargo_bin" tree -p symbolica --depth 0) != "symbolica v3.0.1 ($symbolica_checkout)" ]]; then
+    echo "pure-Symbolica gate: development dependency does not resolve to the audited checkout" >&2
+    exit 1
+fi
 symbolica_base=75f8350094b90254ee71dc2a391fde0d14b0204a
-# Pin source identity rather than commit metadata: applying the tracked patch
-# with git am changes the committer/date but must reproduce exactly this tree.
-symbolica_tree=cd3162b4d08dd6cfa063872fb6ecd03551cfd522
+# Pin the complete pristine upstream tree used for development validation.
+symbolica_tree=e6c84b0df8498081c2610cb8aa1d5b996b60832d
 
 if [[ ! -d "$symbolica_checkout/.git" ]]; then
     echo "pure-Symbolica gate: vendor/symbolica is not a Git checkout" >&2
@@ -83,7 +87,7 @@ fi
 if [[ $(git -C "$symbolica_checkout" remote get-url origin) \
         != https://github.com/symbolica-dev/symbolica.git \
     || $(git -C "$symbolica_checkout" rev-parse 'HEAD^{tree}') != "$symbolica_tree" ]]; then
-    echo "pure-Symbolica gate: vendor/symbolica is not the audited patched source tree" >&2
+    echo "pure-Symbolica gate: vendor/symbolica is not the audited upstream source tree" >&2
     exit 1
 fi
 mapfile -t symbolica_untracked < <(

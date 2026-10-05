@@ -1,5 +1,25 @@
 # Pinned Symbolica checkout
 
+## Current selection: unpatched main for HEPkit integration
+
+The development checkout is pristine upstream
+`75f8350094b90254ee71dc2a391fde0d14b0204a`, tree
+`e6c84b0df8498081c2610cb8aa1d5b996b60832d`. No mail patch is applied.
+Clone the official `main` branch into `vendor/symbolica`, check out this commit,
+and run `scripts/check-pure-symbolica.sh`.
+
+Hyperbolica's specialized factored-coefficient partial fractions now live in
+`src/algebra/partial_fractions/factored_coefficients`, using public Symbolica
+arithmetic and the general decomposition fallback. This removes the need to
+expose upstream's inactive module. Its original attribution and license remain.
+Community builds override the versioned dependency with the host's shared
+Symbolica source; the root development checkout is not a transitive dependency.
+
+## Historical patched snapshots
+
+The records below describe earlier revisions and benchmarks; their patch
+instructions do not apply to the current build.
+
 ## Current snapshot: main, 2026-10-05
 
 Cargo selects the ignored official Git checkout at `vendor/symbolica`.

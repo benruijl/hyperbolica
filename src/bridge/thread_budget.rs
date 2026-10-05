@@ -26,6 +26,9 @@ where
     T: Send,
     F: FnOnce(bool) -> Result<T> + Send,
 {
+    if cfg!(target_arch = "wasm32") {
+        return operation(true);
+    }
     let Some(requested) = std::env::var_os(ENV_NAME)
         .as_deref()
         .and_then(parse_positive_atoi)
@@ -55,7 +58,7 @@ where
     T: Send,
     F: FnOnce(bool) -> Result<T> + Send,
 {
-    if effective <= 1 {
+    if cfg!(target_arch = "wasm32") || effective <= 1 {
         return operation(true);
     }
 

@@ -1,185 +1,111 @@
-# Python API
+# HEPkit definite integration
 
-Hyperbolica's standalone wheel embeds the vendored Symbolica Python API and
-the Hyperbolica algorithms in one native extension. Mathematical input and
-output use that extension's native `Expression` class throughout; the binding
-does not format and reparse expressions.
-
-## One expression identity
-
-Import Symbolica constructors and Hyperbolica operations from the same module:
+The Python API is part of the Symbolica community wheel:
 
 ```python
-import hyperbolica as hb
+from symbolica import E, S, Expression, Symbol
+from symbolica.community.hepkit import integration
 
-x = hb.S("x")
-integrand = 1 / (x + 1) ** 2
-assert type(integrand) is hb.Expression
-answer = hb.integrate(integrand, [x])
-assert type(answer) is hb.Expression
+x, a = S("x", "a")
+f = 1/(x+1)**2
+options = integration.IntegrationOptions(check_divergences=True, parallel=False)
+answer = integration.integrate(f, [x], options)
+assert type(answer) is Expression
+assert answer == E("1")
+tail = integration.integrate_over(f, [x], [(a, Symbol.INFINITY)], options)
+assert (tail - 1/(a+1)).cancel() == E("0")
 ```
 
-Do not construct input with a separately installed `symbolica` wheel. PyO3
-class identity belongs to the compiled extension, so an `Expression` from a
-different wheel is intentionally rejected instead of being serialized. The
-standalone `hyperbolica` package exposes Symbolica's broader runtime API as
-well as the stable subset described by its bundled typing stub.
+## Contract
 
-`copy.copy`, `copy.deepcopy`, and pickle round trips preserve this exact
-embedded `Expression` class. The standalone registration installs an
-exact-type `copyreg` reducer that uses Symbolica's portable Atom export/import
-format and captures its package-local reconstructor; it does not import or
-alias a separate `symbolica` package. The installed test harness verifies
-same-process copies, an import-on-unpickle fresh process, and a fresh process
-whose symbol-registration order was deliberately perturbed.
+`integrate(expression, variables, options=None)` integrates over `[0,+Infinity)`
+in variable order. `integrate_over(expression, variables, intervals, options=None)`
+uses one directed `(from,to)` pair per variable. Reversing an interval changes
+its sign; finite endpoint parameters are retained as exact indeterminates.
+Complex infinity and the reversed whole-real interval remain unsupported.
 
-## Direct and prepared integration
+`integrate_detailed` and `integrate_detailed_over` return an immutable
+`IntegrationResult`, including the expression, integration variables,
+indeterminates, formal algebraic letters and collected term counts.
+`prepare(expression, variables, options=None)` lowers a default-domain input
+once. `PreparedIntegral.integrate()` and `.integrate_detailed()` reuse it.
+Prepared interval inputs are not exposed in this Python version.
 
-`integrate(expression, variables, options=None)` returns one collected native
-expression. `integrate_detailed(...)` returns an immutable
-`IntegrationResult` with the expression, variables, exact indeterminates,
-formal algebraic-letter metadata, and term counts.
+Preparation captures an independent copy of mutable `IntegrationOptions`.
+Prepared inputs, results and algebraic-letter metadata are immutable and
+support shallow/deep copying through shared immutable Rust storage. Expressions
+use Symbolica's existing copy/pickle implementation; integration installs no
+alternative expression type or serializer. In the selected Symbolica kernel,
+pickle stores process-local symbol IDs: use `expression.save(filename)` and
+`Expression.load(filename)` for persistence across interpreters or differing
+symbol-registration orders. Fresh-process save/load is tested explicitly.
 
-Use `prepare(...)` when integrating the same lowered input more than once:
+Options retain `check_divergences=False`, `parallel=True`,
+`introduce_algebraic_letters=False`, `close_final_positive_letters=True`, and
+the embedded standard MZV table. Supplying either `mzv_reductions` or `mzv_basis`
+selects an explicit replacement; empty input intentionally disables reductions.
+`check_divergences=True` requests detection of uncancelled endpoint divergences.
 
-```python
-options = hb.IntegrationOptions(parallel=False)
-prepared = hb.prepare(integrand, [x], options)
+Native parallelism respects Symbolica's license limits. Browser execution is
+serial regardless of the parallel option, without initializing a Rayon pool.
+The MZV table is embedded and requires no runtime filesystem setup.
 
-# Preparation owns a copy. Later mutation does not change its defaults.
-options.parallel = True
-assert prepared.options.parallel is False
+## Errors and identities
 
-answer = prepared.integrate()
-detailed = prepared.integrate_detailed(
-    hb.IntegrationOptions(check_divergences=True)
-)
-```
+All errors derive from `IntegrationError` in
+`symbolica.community.hepkit.integration`:
 
-`PreparedIntegral`, `IntegrationResult`, and `AlgebraicLetter` are immutable.
-Their `copy.copy` and `copy.deepcopy` operations return equivalent independent
-Python handles backed by shared immutable Rust storage. `IntegrationOptions`
-is mutable and compares by value. Its default MZV table is embedded in the
-extension and stored behind cheap shared Rust storage; no data directory or
-separate CAS package is needed at runtime.
+| Exception | Structured fields |
+|---|---|
+| `InputError` | none |
+| `DuplicateVariableError` | `variable` |
+| `AlgebraError` | none |
+| `ContextError` | `variable` |
+| `DivergentIntegralError` | `boundary`, `variable`, `log_power`, `power` |
+| `UnsupportedFeatureError` | none |
 
-Omitting both `mzv_reductions` and `mzv_basis` selects that standard table.
-Passing either argument explicitly selects a complete override, so an empty
-table is intentional and remains possible:
+The package exports version metadata (`__version__`, `__symbolica_version__`,
+`__api_version__`) and a deterministic `__all__`. Hyperbolica usage contributes
+to the host's `symbolica.get_citations()`; importing alone does not.
 
-```python
-standard = hb.IntegrationOptions()
-without_mzv_reductions = hb.IntegrationOptions(mzv_reductions=[])
-```
+## Existing HEPkit functionality
 
-The standard table is eagerly expanded into its small basis when a generated
-period constant is needed. Preparation reserves only those basis atoms rather
-than adding every generated reduction left-hand side to every polynomial
-context.
+On native installations, `integration.ibp` is the existing HEPkit IBP module:
+its family, rule and solution classes are identical objects at both paths.
+IBP retains its native-only availability. This release does not infer parameter
+integrals, normalization, analytic continuation, or epsilon expansion, and does
+not automatically evaluate master integrals after reduction.
 
-## Directed intervals
+HEPkit remains responsible for kinematics, integral families, Symanzik
+polynomials and reduction. The community example `examples/hep_integration.py`
+uses its existing Symanzik API for a convergent D=2 bubble, explicitly choosing
+unit masses, p²=0, powers (1,1), projective gauge x2=1, and stripping the
+loop-measure prefactor. The parameter integral is exactly one.
 
-`integrate_over(expression, variables, intervals, options=None)` and
-`integrate_detailed_over(...)` accept exactly one `(from, to)` pair per
-integration variable. Endpoints are native `Expression` objects. Use
-`Symbol.INFINITY` and `-Symbol.INFINITY` for directed real infinity; complex
-infinity is rejected before integration.
+`Expression.integrate(x)` keeps its existing antiderivative semantics from
+Symbolica-integrate. That crate and its dispatch are unchanged.
 
-```python
-x, a = hb.S("x", "a")
-options = hb.IntegrationOptions(check_divergences=True, parallel=False)
+## Building and migrating
 
-finite = hb.integrate_over(hb.N(1), [x], [(hb.N(2), hb.N(5))], options)
-assert finite == hb.N(3)
+Replace `import hyperbolica as hb` with
+`from symbolica.community.hepkit import integration as hb`; import `S`, `E`,
+`Expression`, and `Symbol` from `symbolica`. Replace `HyperbolicaError` with
+`IntegrationError`. No standalone Hyperbolica wheel or compatibility alias is
+provided.
 
-tail = hb.integrate_detailed_over(
-    1 / (x + 1) ** 2,
-    [x],
-    [(a, hb.Symbol.INFINITY)],
-    options,
-)
-assert tail.expression == 1 / (a + 1)
-```
+Hyperbolica exposes `python::CommunityModule` through Cargo's `python` feature.
+The host disables Hyperbolica's default features and selects `native` or `wasm`.
+Only the top-level host enables PyO3 extension/ABI features. Root Cargo patches
+select the development Symbolica source; consumers select their shared source.
+Native standalone Rust defaults retain GMP/MPFR and the optional faster allocator;
+the community wheel keeps its existing system allocator.
 
-Intervals are directed, so reversing endpoints reverses the sign. Finite
-bound parameters are preserved as exact spectator indeterminates even when
-they do not occur in the integrand. Prepared values made by `prepare(...)`
-cover the default `[0,+Infinity)` domain; interval-aware reuse is currently
-available through the Rust `prepare_atom_over` API. The reverse all-infinite
-domain `(+Infinity,-Infinity)` remains unsupported by the upstream interval
-rescaler; use the supported `(-Infinity,+Infinity)` direction and negate the
-result when needed.
+The `python_stubgen` feature supplies metadata to the community stub generator.
+Only exception declarations and version metadata require a handwritten typing
+supplement; expression types come from Symbolica's canonical declarations.
 
-## Errors
-
-Every Hyperbolica exception derives from `HyperbolicaError`:
-
-| Exception | Meaning | Structured attributes |
-| --- | --- | --- |
-| `InputError` | Invalid expression, schedule, or options | — |
-| `DuplicateVariableError` | Repeated integration variable | `variable` |
-| `AlgebraError` | Exact algebra failure | — |
-| `ContextError` | Symbol outside an exact context | `variable` |
-| `DivergentIntegralError` | Non-cancelling endpoint divergence | `boundary`, `variable`, `log_power`, `power` |
-| `UnsupportedFeatureError` | Reserved for unsupported public features | — |
-
-The human-readable explanation remains in `str(error)` and `error.args[0]`;
-callers should use the subclass and attributes for program logic.
-
-## Introspection and versioning
-
-The installed package exports a deterministic `__all__` plus:
-
-- `__version__`: Hyperbolica package version;
-- `__symbolica_version__`: version of its embedded Symbolica kernel;
-- `__api_version__`: integer Python API compatibility level;
-- `__license__`: mixed-distribution notice (MIT for Hyperbolica code, separate
-  terms for bundled Symbolica);
-- `__symbolica_license__`: explicit Symbolica redistribution warning.
-
-Public functions and methods provide Python text signatures and docstrings, so
-`help()` and `inspect.signature()` work without consulting the Rust sources.
-
-## Typing and packaging checks
-
-The repository-root `hyperbolica.pyi` is Maturin's supported pure-Rust layout.
-Maturin installs it as `hyperbolica/__init__.pyi` and adds `py.typed`; it does
-not require a second Python package directory. The stub declares the stable
-Hyperbolica surface and the small embedded-Symbolica surface needed to build
-native integration inputs. It deliberately does not alias a separate
-`symbolica.Expression` type.
-
-Run the static and wheel-layout checks with:
-
-```sh
-scripts/check-python-static.sh
-scripts/check-python-package.sh
-```
-
-Both scripts accept explicit `PYTHON`, and the first also accepts `PYRIGHT`
-while the second accepts `MATURIN`.
-
-The `python-extension` feature fixes PyO3's stable-ABI floor at CPython 3.10.
-The package gate builds in release mode and rejects a wheel unless both its
-filename and WHEEL metadata carry `cp310-abi3`, even when the selected build
-interpreter is newer.
-
-After `maturin develop --release` or installing a wheel, run:
-
-```sh
-scripts/test-python-installed.sh
-```
-
-The ordinary installed-extension suite validates identity, signatures,
-copies, cross-process pickle reconstruction, exports, and error paths without
-performing integration. Licensed integration cases are skipped unless
-explicitly enabled:
-
-```sh
-HYPERBOLICA_RUN_LICENSED_TESTS=1 scripts/test-python-installed.sh
-```
-
-Licensed tests hold a POSIX advisory lock for the whole suite. Set
-`HYPERBOLICA_LICENSE_LOCK` to a shared path when multiple local or CI jobs use
-the same Symbolica license endpoint. Run the suite serially on platforms that
-do not provide `fcntl`.
+Build and install the community wheel using its normal Maturin/Pyodide workflow.
+Run `scripts/test-python-installed.sh` and `scripts/check-python-static.sh`
+against that environment (`PYTHON` and `SYMBOLICA_COMMUNITY_DIR` are configurable).
+The community suite uses the same exact fixtures in native pytest and its
+Pyodide installed-wheel harness.

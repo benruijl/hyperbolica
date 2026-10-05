@@ -9,6 +9,7 @@ use super::algebraic_letters::join_algebraic_letter_session;
 use super::linear_factors::{LinearFactorOptions, linear_factors_with_options};
 
 mod factored;
+mod factored_coefficients;
 mod linear;
 
 use linear::try_linear_partial_fractions;

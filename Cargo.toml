@@ -13,12 +13,12 @@ path = "src/lib.rs"
 crate-type = ["rlib", "cdylib"]
 
 [features]
-default = []
+default = ["native", "faster-alloc"]
+native = ["symbolica/integer-gmp", "symbolica/float-mpfr"]
+faster-alloc = ["symbolica/faster_alloc"]
+wasm = ["symbolica/wasm"]
 python = ["dep:pyo3", "symbolica/python_export"]
-# Use this feature for maturin/wheel builds. Keeping `extension-module` out of
-# `python` lets Rust test binaries and Symbolica community aggregators link an
-# embedded interpreter normally.
-python-extension = ["python", "pyo3/extension-module", "pyo3/abi3-py310"]
+python_stubgen = ["python", "dep:pyo3-stub-gen", "symbolica/python_stubgen"]
 
 [[bin]]
 name = "hyperflint"
@@ -29,10 +29,12 @@ rayon = "1.11"
 pyo3 = { version = "0.28", optional = true }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = { version = "1.0", features = ["preserve_order"] }
-symbolica = { path = "vendor/symbolica", default-features = false, features = ["faster_alloc", "integer-gmp", "float-mpfr"] }
+symbolica = { version = "3.0.1", default-features = false }
+pyo3-stub-gen = { version = "0.17", optional = true, default-features = false }
 thiserror = "2.0"
 
 [patch.crates-io]
+symbolica = { path = "vendor/symbolica" }
 numerica = { path = "vendor/symbolica/lib/numerica" }
 graphica = { path = "vendor/symbolica/lib/graphica" }
 

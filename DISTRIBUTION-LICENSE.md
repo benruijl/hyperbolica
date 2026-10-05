@@ -14,7 +14,10 @@ Runtime rights are not included or transferred by Hyperbolica unless a
 separate written agreement expressly provides otherwise. Each recipient's
 installation and execution require the applicable Symbolica runtime rights.
 
-The active dependency includes local Symbolica modifications. This update
+The files under `src/algebra/partial_fractions/factored_coefficients` were
+relocated from the selected Symbolica source and retain its separate license;
+they are not relicensed by Hyperbolica's MIT notice. The development dependency
+itself is now unmodified. This update
 does not establish permission to distribute a modified build or source tree.
 Review the complete selected license, applicable runtime terms, and any
 separate written agreement before publication or redistribution; record the

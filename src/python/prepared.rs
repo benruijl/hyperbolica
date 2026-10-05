@@ -10,13 +10,14 @@ use super::{exceptions, options::PythonIntegrationOptions, result::PythonIntegra
 /// A lowered Atom input that can be integrated repeatedly without repeating
 /// Symbolica-to-ring and Hlog conversion.
 ///
-/// Create instances with `hyperbolica.prepare`. The object is
+/// Create instances with `integration.prepare`. The object is
 /// immutable; `copy.copy` and `copy.deepcopy` return independent Python
 /// handles that share its immutable backing storage.
+#[cfg_attr(feature = "python_stubgen", pyo3_stub_gen::derive::gen_stub_pyclass)]
 #[pyclass(
     frozen,
     skip_from_py_object,
-    module = "hyperbolica",
+    module = "symbolica.community.hepkit.integration",
     name = "PreparedIntegral"
 )]
 #[derive(Clone, Debug)]
@@ -38,6 +39,7 @@ impl PythonPreparedIntegral {
         py: Python<'_>,
         options: Option<&PythonIntegrationOptions>,
     ) -> PyResult<PythonIntegrationResult> {
+        super::record_usage();
         let prepared = Arc::clone(&self.inner);
         let options = options.map_or_else(
             || self.default_options.clone(),
@@ -49,6 +51,7 @@ impl PythonPreparedIntegral {
     }
 }
 
+#[cfg_attr(feature = "python_stubgen", pyo3_stub_gen::derive::gen_stub_pymethods)]
 #[pymethods]
 impl PythonPreparedIntegral {
     /// Integration variables in their requested order.

@@ -9,6 +9,8 @@ use symbolica::prelude::{Factorize, FactorizedRationalPolynomial, IntegerRing, Z
 use crate::core::{NativeRat, PolyCtx, Rat};
 use crate::error::{Error, Result};
 
+use super::factored_coefficients::{apart_factored_denominators, to_rational_polynomial};
+
 use super::{PartialFractionPole, PartialFractionization, canonicalize_poles, merge_pole};
 
 type NativeFactored = FactorizedRationalPolynomial<IntegerRing, u16>;
@@ -47,7 +49,7 @@ pub(super) fn native_linear_partial_fractions(
     if function.is_zero() {
         return Ok(output);
     }
-    for (coefficient, base, exponent) in function.apart_factored_denominators(variable) {
+    for (coefficient, base, exponent) in apart_factored_denominators(function, variable) {
         if coefficient.is_zero() {
             continue;
         }
@@ -59,7 +61,7 @@ pub(super) fn native_linear_partial_fractions(
         // Proper native linear terms are over monic x-pole blocks. Only the
         // final coefficient is materialized; no leading-coefficient power is
         // expanded and then divided out again at this boundary.
-        let base = Rat::from_native(ctx.clone(), base.to_rational_polynomial())?;
+        let base = Rat::from_native(ctx.clone(), to_rational_polynomial(&base))?;
         if base.native().numerator.degree(variable) != 1
             || base.native().denominator.degree(variable) != 0
         {
@@ -80,7 +82,7 @@ pub(super) fn native_linear_partial_fractions(
             ctx.clone(),
             NativeRat::from_num_den(-univariate.coefficients()[0].clone(), leading, &Z, true),
         )?;
-        let coefficient = Rat::from_native(ctx.clone(), coefficient.to_rational_polynomial())?;
+        let coefficient = Rat::from_native(ctx.clone(), to_rational_polynomial(&coefficient))?;
         if coefficient.native().numerator.degree(variable) > 0
             || coefficient.native().denominator.degree(variable) > 0
         {

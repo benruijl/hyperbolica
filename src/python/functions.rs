@@ -25,6 +25,7 @@ fn run_integration(
     variables: &[PythonExpression],
     options: Option<&PythonIntegrationOptions>,
 ) -> PyResult<PythonIntegrationResult> {
+    super::record_usage();
     let input = expression.expr.clone();
     let variables = integration_symbols(variables)?;
     let options = options_or_default(options);
@@ -56,6 +57,7 @@ fn run_integration_over(
     intervals: Vec<(PythonExpression, PythonExpression)>,
     options: Option<&PythonIntegrationOptions>,
 ) -> PyResult<PythonIntegrationResult> {
+    super::record_usage();
     let input = expression.expr.clone();
     let variables = integration_symbols(variables)?;
     let intervals = native_intervals(py, intervals)?;
@@ -70,7 +72,7 @@ fn run_integration_over(
 /// Parameters
 /// ----------
 /// expression:
-///     A native `hyperbolica.Expression` from the shipped Symbolica kernel.
+///     A native `symbolica.Expression` from the shipped Symbolica kernel.
 ///     It is never converted to text.
 /// variables:
 ///     Plain Symbolica symbols in integration order.
@@ -79,8 +81,12 @@ fn run_integration_over(
 ///
 /// Returns
 /// -------
-/// hyperbolica.Expression
+/// symbolica.Expression
 ///     The normalized exact result.
+#[cfg_attr(
+    feature = "python_stubgen",
+    pyo3_stub_gen::derive::gen_stub_pyfunction(module = "symbolica.community.hepkit.integration")
+)]
 #[pyfunction(
     signature = (expression, variables, options = None),
     text_signature = "(expression, variables, options=None)"
@@ -99,19 +105,23 @@ fn integrate(
 /// Parameters
 /// ----------
 /// expression:
-///     A native `hyperbolica.Expression` from the shipped Symbolica kernel.
+///     A native `symbolica.Expression` from the shipped Symbolica kernel.
 /// variables:
 ///     Plain Symbolica symbols in integration order.
 /// intervals:
 ///     One `(from, to)` pair of native expressions per variable. Use
-///     `hyperbolica.Symbol.INFINITY` (or its negation) for directed infinity.
+///     `symbolica.Symbol.INFINITY` (or its negation) for directed infinity.
 /// options:
 ///     Optional `IntegrationOptions`.
 ///
 /// Returns
 /// -------
-/// hyperbolica.Expression
+/// symbolica.Expression
 ///     The normalized exact result.
+#[cfg_attr(
+    feature = "python_stubgen",
+    pyo3_stub_gen::derive::gen_stub_pyfunction(module = "symbolica.community.hepkit.integration")
+)]
 #[pyfunction(
     signature = (expression, variables, intervals, options = None),
     text_signature = "(expression, variables, intervals, options=None)"
@@ -131,7 +141,7 @@ fn integrate_over(
 /// Parameters
 /// ----------
 /// expression:
-///     A native `hyperbolica.Expression` from the shipped Symbolica kernel.
+///     A native `symbolica.Expression` from the shipped Symbolica kernel.
 /// variables:
 ///     Plain shipped Symbolica symbols in integration order.
 /// options:
@@ -143,6 +153,10 @@ fn integrate_over(
 ///     The returned
 /// `IntegrationResult` retains variables, indeterminates, algebraic-letter
 /// metadata, and the collected term count in addition to its expression.
+#[cfg_attr(
+    feature = "python_stubgen",
+    pyo3_stub_gen::derive::gen_stub_pyfunction(module = "symbolica.community.hepkit.integration")
+)]
 #[pyfunction(
     signature = (expression, variables, options = None),
     text_signature = "(expression, variables, options=None)"
@@ -160,6 +174,10 @@ fn integrate_detailed(
 ///
 /// `intervals` contains one `(from, to)` pair per integration variable and
 /// accepts native real directed infinities through `Symbol.INFINITY`.
+#[cfg_attr(
+    feature = "python_stubgen",
+    pyo3_stub_gen::derive::gen_stub_pyfunction(module = "symbolica.community.hepkit.integration")
+)]
 #[pyfunction(
     signature = (expression, variables, intervals, options = None),
     text_signature = "(expression, variables, intervals, options=None)"
@@ -183,7 +201,7 @@ fn integrate_detailed_over(
 /// Parameters
 /// ----------
 /// expression:
-///     A native `hyperbolica.Expression` from the shipped Symbolica kernel.
+///     A native `symbolica.Expression` from the shipped Symbolica kernel.
 /// variables:
 ///     Plain shipped Symbolica symbols in integration order.
 /// options:
@@ -193,6 +211,10 @@ fn integrate_detailed_over(
 /// -------
 /// PreparedIntegral
 ///     Reusable immutable lowered input.
+#[cfg_attr(
+    feature = "python_stubgen",
+    pyo3_stub_gen::derive::gen_stub_pyfunction(module = "symbolica.community.hepkit.integration")
+)]
 #[pyfunction(
     signature = (expression, variables, options = None),
     text_signature = "(expression, variables, options=None)"
@@ -203,6 +225,7 @@ fn prepare(
     variables: Vec<PythonExpression>,
     options: Option<&PythonIntegrationOptions>,
 ) -> PyResult<PythonPreparedIntegral> {
+    super::record_usage();
     let input = expression.expr.clone();
     let variables = integration_symbols(&variables)?;
     let options = options_or_default(options);
@@ -218,5 +241,17 @@ pub(crate) fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(integrate_detailed, module)?)?;
     module.add_function(wrap_pyfunction!(integrate_detailed_over, module)?)?;
     module.add_function(wrap_pyfunction!(prepare, module)?)?;
+    for name in [
+        "integrate",
+        "integrate_over",
+        "integrate_detailed",
+        "integrate_detailed_over",
+        "prepare",
+    ] {
+        use pyo3::types::PyAnyMethods;
+        module
+            .getattr(name)?
+            .setattr("__module__", "symbolica.community.hepkit.integration")?;
+    }
     Ok(())
 }

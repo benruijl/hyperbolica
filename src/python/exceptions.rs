@@ -7,43 +7,43 @@ use pyo3::{
 use crate::{api::AtomIntegrationError, error::Error};
 
 create_exception!(
-    hyperbolica,
-    HyperbolicaError,
+    symbolica.community.hepkit.integration,
+    IntegrationError,
     PyException,
     "Base class for all errors raised by Hyperbolica."
 );
 create_exception!(
-    hyperbolica,
+    symbolica.community.hepkit.integration,
     InputError,
-    HyperbolicaError,
+    IntegrationError,
     "The supplied expression, variables, or options are invalid."
 );
 create_exception!(
-    hyperbolica,
+    symbolica.community.hepkit.integration,
     DuplicateVariableError,
     InputError,
     "An integration variable occurs more than once."
 );
 create_exception!(
-    hyperbolica,
+    symbolica.community.hepkit.integration,
     AlgebraError,
-    HyperbolicaError,
+    IntegrationError,
     "An exact algebra operation failed."
 );
 create_exception!(
-    hyperbolica,
+    symbolica.community.hepkit.integration,
     DivergentIntegralError,
-    HyperbolicaError,
+    IntegrationError,
     "The integral has a non-cancelling endpoint divergence."
 );
 create_exception!(
-    hyperbolica,
+    symbolica.community.hepkit.integration,
     UnsupportedFeatureError,
-    HyperbolicaError,
+    IntegrationError,
     "The requested integration feature is not available for this input."
 );
 create_exception!(
-    hyperbolica,
+    symbolica.community.hepkit.integration,
     ContextError,
     AlgebraError,
     "The result refers to a symbol outside its exact polynomial context."
@@ -142,7 +142,7 @@ pub(crate) fn invalid_variable(index: usize, expression: &str) -> PyErr {
 
 pub(crate) fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
     let py = module.py();
-    module.add("HyperbolicaError", py.get_type::<HyperbolicaError>())?;
+    module.add("IntegrationError", py.get_type::<IntegrationError>())?;
     module.add("InputError", py.get_type::<InputError>())?;
     module.add(
         "DuplicateVariableError",

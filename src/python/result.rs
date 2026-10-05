@@ -9,10 +9,11 @@ use super::exceptions;
 
 /// Immutable metadata for one formal quadratic-root pair allocated by an
 /// integration.
+#[cfg_attr(feature = "python_stubgen", pyo3_stub_gen::derive::gen_stub_pyclass)]
 #[pyclass(
     frozen,
     skip_from_py_object,
-    module = "hyperbolica",
+    module = "symbolica.community.hepkit.integration",
     name = "AlgebraicLetter"
 )]
 #[derive(Clone, Debug)]
@@ -28,6 +29,7 @@ impl From<&AlgebraicLetterEntry> for PythonAlgebraicLetter {
     }
 }
 
+#[cfg_attr(feature = "python_stubgen", pyo3_stub_gen::derive::gen_stub_pymethods)]
 #[pymethods]
 impl PythonAlgebraicLetter {
     /// Stable one-based index of this formal root pair.
@@ -106,10 +108,11 @@ impl PythonAlgebraicLetter {
 /// Use `expression` to materialize the collected terms as a native Symbolica
 /// expression.  The direct `integrate` function performs this step for you.
 /// Instances are immutable and support `copy.copy` and `copy.deepcopy`.
+#[cfg_attr(feature = "python_stubgen", pyo3_stub_gen::derive::gen_stub_pyclass)]
 #[pyclass(
     frozen,
     skip_from_py_object,
-    module = "hyperbolica",
+    module = "symbolica.community.hepkit.integration",
     name = "IntegrationResult"
 )]
 #[derive(Clone, Debug)]
@@ -132,6 +135,7 @@ impl PythonIntegrationResult {
     }
 }
 
+#[cfg_attr(feature = "python_stubgen", pyo3_stub_gen::derive::gen_stub_pymethods)]
 #[pymethods]
 impl PythonIntegrationResult {
     /// Materialize all collected terms as one normalized Symbolica expression.

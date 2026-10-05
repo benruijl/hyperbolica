@@ -1,5 +1,20 @@
 # Symbolica public-API audit and migration map
 
+## HEPkit integration update
+
+The specialized factored Taylor partial-fraction routines have moved into a
+private Hyperbolica module. The shared community kernel does not export this
+specialization. The adapter uses public Symbolica polynomials, factored rational
+functions and exact operations; nonlinear/improper inputs retain Symbolica's
+general `RationalPolynomial::apart_factored_denominators` fallback. Reconstruction
+and powered-denominator storage regressions moved with the implementation.
+No custom general polynomial, factorization or GCD backend is introduced.
+
+Root development now uses pristine main `75f8350`. Consumers resolve the
+versioned Symbolica dependency through their host's root Cargo patch, with
+backend and allocator features controlled by that host. Earlier migration
+entries below remain historical where they mention the export patch.
+
 ## Main migration audit, 2026-10-05
 
 Selected source: Symbolica 3.0.1, upstream

@@ -51,13 +51,11 @@ Rust 1.96 or newer is required.
 git clone --branch main --single-branch \
   https://github.com/symbolica-dev/symbolica.git vendor/symbolica
 git -C vendor/symbolica checkout 75f8350094b90254ee71dc2a391fde0d14b0204a
-git -C vendor/symbolica switch -c codex/hyperbolica-main-20261005
-git -C vendor/symbolica am ../symbolica-main-20261005.patch
 scripts/check-pure-symbolica.sh
 cargo build --release
 cargo test --locked --lib --tests --bins --examples
 cargo test --locked --benches
-cargo clippy --locked --all-targets --all-features -- -D warnings
+cargo clippy --locked --all-targets --features python_stubgen -- -D warnings
 scripts/check-examples.sh
 ```
 
@@ -119,55 +117,32 @@ remain exact spectator variables. See
 
 ## Python API
 
-The standalone extension embeds the vendored Symbolica Python API and
-Hyperbolica in one shared kernel. Construct expressions with the `S`, `E`, and
-`Expression` objects shipped at the `hyperbolica` top level; those are the
-exact PyO3 types accepted by `prepare` and `integrate`, with no formatting or
-reparsing across the boundary.
-
-```sh
-python -m pip install maturin
-maturin develop --release
-scripts/test-python-installed.sh
-```
+Python integration is shipped in the Symbolica community wheel, under HEPkit:
 
 ```python
-import hyperbolica as hb
+from symbolica import S
+from symbolica.community.hepkit import integration
 
-x = hb.S("x")
-integrand = 1 / (x + 1) ** 2
-options = hb.IntegrationOptions(parallel=False)
-prepared = hb.prepare(integrand, [x], options)
-result = prepared.integrate(options)
+x = S("x")
+options = integration.IntegrationOptions(parallel=False)
+prepared = integration.prepare(1 / (x + 1)**2, [x], options)
+assert prepared.integrate() == 1
 ```
 
-For a non-default domain, supply one directed endpoint pair per variable:
+`integrate` computes a definite integral over `[0, +Infinity)` in the supplied
+variable order; `integrate_over` accepts explicit directed intervals.
+`Expression.integrate(x)` remains Symbolica's separate antiderivative API.
+Use `integration.ibp` for the existing native HEPkit IBP tools; reduction and
+master evaluation are not automatically combined.
 
-```python
-a = hb.S("a")
-result = hb.integrate_over(
-    1 / (x + 1) ** 2,
-    [x],
-    [(a, hb.Symbol.INFINITY)],
-    hb.IntegrationOptions(check_divergences=True, parallel=False),
-)
-```
+All expressions use the host's `symbolica.Expression` and one shared kernel.
+The same API works in Pyodide, with serial execution even when `parallel=True`.
+The standalone `hyperbolica` Python wheel is retired; Rust consumers can still
+use this crate independently. Symbolica-integrate is unchanged.
 
-The root `pyproject.toml` selects the `python-extension` feature for maturin
-wheel builds. The lower-level `python` feature supports Rust-side binding
-tests without PyO3's extension-module linker mode. The supported packaged API
-is currently the standalone wheel. Its standard MZV reductions are embedded,
-so installed integration does not need a source-tree data directory or a
-separate CAS package. A future Symbolica community package needs
-separate wrappers whose declared module paths follow
-`symbolica.community.hyperbolica`; the top-level standalone classes are not
-silently reused for that incompatible layout. Do not pass objects from a
-separately compiled `symbolica` wheel into the standalone `hyperbolica`
-extension, because PyO3 class identity is specific to the compiled module.
-
-The wheel is PEP 561 typed. See [`docs/python-api.md`](docs/python-api.md) for
-the complete object model, exception data, packaging checks, and the explicitly
-opt-in licensed test suite.
+See [the Python API](docs/python-api.md) for packaging, migration, errors,
+typing, and validation. Hyperbolica owns the reusable PyO3 bindings; the
+community wheel registers them and supplies their generated typing stubs.
 
 ## Compatibility CLI
 

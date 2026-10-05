@@ -15,7 +15,11 @@ For every operation that could reasonably be a CAS primitive:
    `docs/symbolica-api-audit.md`.
 
 Only domain-specific hyperlogarithm behavior or a measured adapter mismatch is
-a reason to keep custom algebra. Do not duplicate a general polynomial,
+a reason to keep custom algebra. The factored Taylor partial-fraction adapter is maintained locally because the
+shared community kernel does not export that specialization. It still delegates
+all polynomial arithmetic and general decomposition to Symbolica.
+
+Do not duplicate a general polynomial,
 rational-function, factorization, resultant, series, root, or Gröbner-basis
 algorithm without an explicit audit entry and benchmark evidence.
 
@@ -50,7 +54,7 @@ cargo check --all-targets
 cargo clippy --all-targets -- -D warnings
 cargo test --all-targets --no-run
 cargo check --features python
-cargo check --features python-extension
+cargo check --features python_stubgen
 scripts/check-pure-symbolica.sh
 scripts/check-module-size.sh
 ```

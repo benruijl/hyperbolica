@@ -1,24 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
-
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
-cd "$repo_root"
-
-if [[ -n "${PYTHON:-}" ]]; then
-    python_bin=$PYTHON
-elif command -v python3 >/dev/null 2>&1; then
-    python_bin=python3
-else
-    echo "test-python-installed: set PYTHON or install python3" >&2
-    exit 1
-fi
-
-"$python_bin" tests/python_smoke.py
-
-pickle_path=$(mktemp)
-trap 'rm -f -- "$pickle_path"' EXIT
-"$python_bin" tests/python_pickle_roundtrip.py write "$pickle_path"
-"$python_bin" tests/python_pickle_roundtrip.py read "$pickle_path"
-"$python_bin" tests/python_pickle_roundtrip.py read-perturbed "$pickle_path"
-
-"$python_bin" tests/python_licensed.py
+community=${SYMBOLICA_COMMUNITY_DIR:-"$repo_root/../symbolica-community/main"}
+python_bin=${PYTHON:-python3}
+cd "$community"
+# Each test owns its kernel process, including subprocess citation checks.
+# This works in community-license mode without competing for its runtime port.
+mapfile -t tests < <("$python_bin" -m pytest tests/test_integration.py --collect-only -q | sed -n '/::/p')
+[[ ${#tests[@]} -gt 0 ]]
+for test in "${tests[@]}"; do
+    "$python_bin" -m pytest "$test" -q
+done
