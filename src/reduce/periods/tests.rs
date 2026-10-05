@@ -216,7 +216,7 @@ fn symbolic_fibration_agrees_between_slim_and_wide_period_contexts() {
             .map(|(key, coefficient)| {
                 key.iter().fold(
                     crate::api::symcoef_to_atom(coefficient).unwrap(),
-                    |value, word| value * crate::api::period_word_to_atom(word),
+                    |value, word| value * crate::api::period_word_to_atom(word).unwrap(),
                 )
             })
             .sum::<Atom>()

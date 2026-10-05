@@ -31,6 +31,18 @@ indeterminates, formal algebraic letters and collected term counts.
 once. `PreparedIntegral.integrate()` and `.integrate_detailed()` reuse it.
 Prepared interval inputs are not exposed in this Python version.
 
+Constant periods are evaluated using the configured MZV table. Remaining
+regularized periods at infinity are converted to unit-interval words before
+being returned as finite-endpoint `Hlog` expressions; changing just the
+endpoint would change their mathematical value.
+
+`integration.mzv_symbol()` returns the registered multiple-zeta-value function
+head as a native Symbolica expression. For example, `MZV = integration.mzv_symbol()`
+and `MZV(3)` construct the same exact constant used in integration results,
+without depending on its internal namespace. This formal head does not evaluate
+numerically. For a depth-one reference, use Symbolica's built-in Riemann zeta:
+`(6 * E("3").zeta()).evaluate({}, decimal_digit_precision=40).real`.
+
 Preparation captures an independent copy of mutable `IntegrationOptions`.
 Prepared inputs, results and algebraic-letter metadata are immutable and
 support shallow/deep copying through shared immutable Rust storage. Expressions

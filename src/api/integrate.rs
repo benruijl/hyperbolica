@@ -169,6 +169,19 @@ fn integrate_prepared_shuffle_list(
         &options.core_options(),
         prepared.spectator_indices(),
     )?;
+    // The engine may leave evaluable infinity periods in its regulator keys.
+    // Reuse the period layer with the caller's MZV table before materializing
+    // the public expression; nonconstant periods retain their exact words.
+    let regulator = crate::reduce::fibration_basis_sym(
+        prepared.context(),
+        &regulator,
+        &[],
+        &options.mzv_reductions,
+    )?
+    .terms
+    .into_iter()
+    .map(|(key, coef)| crate::integrator::RegTermSym { key, coef })
+    .collect();
     let algebraic_letters = if options.introduce_algebraic_letters {
         crate::algebra::algebraic_letters_show()?
     } else {
@@ -283,6 +296,32 @@ mod tests {
         let output = integrate_atom(&input, &[x], &options).unwrap();
         assert_eq!(output.to_atom().unwrap(), Atom::one());
         assert_eq!(output.integration_variables(), &[x]);
+    }
+
+    #[test]
+    fn massless_two_loop_kite_has_the_correct_weight_three_period() {
+        let (x1, x2, x3, x4) = symbol!(
+            "kite_regression::x1",
+            "kite_regression::x2",
+            "kite_regression::x3",
+            "kite_regression::x4"
+        );
+        // D=4, p^2=-1, five unit propagator powers, projective gauge x5=1.
+        let u = (x1 + x2) * (x3 + x4) + x1 + x2 + x3 + x4;
+        let f = (x1 * x2) * (x3 + x4 + 1) + (x3 * x4) * (x1 + x2 + 1) + x1 * x4 + x2 * x3;
+        let input = Atom::one() / (u * f);
+        let options = AtomIntegrationOptions {
+            parallel: false,
+            check_divergences: true,
+            ..AtomIntegrationOptions::default()
+        };
+        for order in [[x1, x2, x3, x4], [x4, x3, x2, x1]] {
+            let result = integrate_atom(&input, &order, &options)
+                .unwrap()
+                .to_atom()
+                .unwrap();
+            assert_eq!(result, Atom::num(6) * crate::symbols::mzv_atom(&[3]));
+        }
     }
 
     #[test]

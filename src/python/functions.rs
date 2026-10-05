@@ -19,6 +19,21 @@ fn options_or_default(options: Option<&PythonIntegrationOptions>) -> AtomIntegra
     options.map_or_else(AtomIntegrationOptions::default, |value| value.to_rust())
 }
 
+/// Return the registered multiple-zeta-value function symbol.
+///
+/// Call the returned Symbolica expression with indices, e.g. `mzv_symbol()(3)`.
+/// This is the same head used in exact integration results. It is a formal
+/// symbol; for a depth-one numerical reference use Symbolica's built-in
+/// `E("3").zeta().evaluate({}, decimal_digit_precision=40)`.
+#[cfg_attr(
+    feature = "python_stubgen",
+    pyo3_stub_gen::derive::gen_stub_pyfunction(module = "symbolica.community.hepkit.integration")
+)]
+#[pyfunction]
+fn mzv_symbol() -> PythonExpression {
+    PythonExpression::from(crate::symbols::heads().mzv.to_atom())
+}
+
 fn run_integration(
     py: Python<'_>,
     expression: &PythonExpression,
@@ -236,12 +251,14 @@ fn prepare(
 }
 
 pub(crate) fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
+    module.add_function(wrap_pyfunction!(mzv_symbol, module)?)?;
     module.add_function(wrap_pyfunction!(integrate, module)?)?;
     module.add_function(wrap_pyfunction!(integrate_over, module)?)?;
     module.add_function(wrap_pyfunction!(integrate_detailed, module)?)?;
     module.add_function(wrap_pyfunction!(integrate_detailed_over, module)?)?;
     module.add_function(wrap_pyfunction!(prepare, module)?)?;
     for name in [
+        "mzv_symbol",
         "integrate",
         "integrate_over",
         "integrate_detailed",

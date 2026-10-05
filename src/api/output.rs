@@ -3,9 +3,9 @@ use std::sync::Arc;
 use symbolica::prelude::{Atom, AtomCore, Symbol};
 
 use crate::algebra::AlgebraicLetterEntry;
-use crate::core::{PolyCtx, SymCoef, SymMonomial, global_period_table};
+use crate::core::{PolyCtx, Rat, SymCoef, SymMonomial, global_period_table};
 use crate::integrator::RegulatorSym;
-use crate::symbols::{Word, heads};
+use crate::symbols::{Word, Wordlist, WordlistTerm, heads};
 
 use super::AtomIntegrationResult;
 
@@ -13,17 +13,17 @@ use super::AtomIntegrationResult;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AtomIntegrationTerm {
     pub coefficient: SymCoef,
-    /// A commutative product of period factors.  Each word is represented as
-    /// `Hlog(1, a1, ..., an)` by [`Self::to_atom`].
+    /// A commutative product of regularized `[0, infinity)` period factors.
+    /// [`Self::to_atom`] converts their words to the unit interval.
     pub periods: Vec<Word>,
 }
 
 impl AtomIntegrationTerm {
     pub fn to_atom(&self) -> AtomIntegrationResult<Atom> {
         let coefficient = symcoef_to_atom(&self.coefficient)?;
-        Ok(self.periods.iter().fold(coefficient, |product, word| {
-            product * period_word_to_atom(word)
-        }))
+        self.periods.iter().try_fold(coefficient, |product, word| {
+            Ok(product * period_word_to_atom(word)?)
+        })
     }
 }
 
@@ -96,14 +96,29 @@ impl AtomIntegrationOutput {
     }
 }
 
-/// Convert a residual period word to the canonical public Atom form.
-pub fn period_word_to_atom(word: &Word) -> Atom {
+/// Convert a regularized infinity period to finite-endpoint hyperlogarithms.
+/// Simply attaching endpoint one changes the value of the iterated integral.
+pub fn period_word_to_atom(word: &Word) -> AtomIntegrationResult<Atom> {
     if word.is_empty() {
-        return Atom::one();
+        return Ok(Atom::one());
     }
-    heads().hlog.call_args(
-        std::iter::once(Atom::one()).chain(word.letters.iter().map(|letter| letter.to_atom())),
-    )
+    let ctx = word[0].ctx().clone();
+    let seed = Wordlist::new(vec![WordlistTerm::new(Rat::one(ctx.clone()), word.clone())]);
+    let converted = crate::algebra::convert::convert_zero_one(&seed)?;
+    let regularized = crate::integrator::reg0(&converted)?;
+    let regularized =
+        crate::integrator::reg_head(&regularized, &Rat::one(ctx.clone()), &Rat::zero(ctx))?;
+    Ok(regularized
+        .terms
+        .iter()
+        .map(|term| {
+            term.coef.to_atom()
+                * heads().hlog.call_args(
+                    std::iter::once(Atom::one())
+                        .chain(term.word.letters.iter().map(|letter| letter.to_atom())),
+                )
+        })
+        .sum())
 }
 
 fn power(base: Atom, exponent: i32) -> Atom {
@@ -167,14 +182,17 @@ mod tests {
     use super::*;
 
     #[test]
-    fn period_words_use_the_registered_hlog_head_and_unit_endpoint() {
+    fn infinity_periods_are_converted_before_using_a_unit_endpoint() {
         let ctx = PolyCtx::from_symbols([symbol!("api_output_word_x")]).unwrap();
-        let word = Word::new(vec![Rat::from_int(ctx, -1)]);
-        let atom = period_word_to_atom(&word);
-        let function = atom.as_fun_view().unwrap();
-        assert_eq!(function.get_symbol(), heads().hlog);
-        assert_eq!(function.get_nargs(), 2);
-        assert!(function.get(0).is_one());
+        // Reg_{R -> infinity} log(1+R)=0, not log(2).
+        let word = Word::new(vec![Rat::from_int(ctx.clone(), -1)]);
+        assert_eq!(period_word_to_atom(&word).unwrap(), Atom::zero());
+        // Reg_{R -> infinity} log(1+R/2)=-log(2).
+        let word = Word::new(vec![Rat::from_int(ctx, -2)]);
+        assert_eq!(
+            period_word_to_atom(&word).unwrap(),
+            -heads().hlog.call_args([Atom::one(), Atom::num(-1)])
+        );
     }
 
     #[test]
@@ -233,7 +251,7 @@ mod tests {
             ],
         );
         let atom = output.to_atom().unwrap();
-        assert!(atom.contains_symbol(heads().hlog));
+        assert_eq!(atom, Atom::num(2));
         assert_eq!(output.terms().len(), 2);
     }
 
