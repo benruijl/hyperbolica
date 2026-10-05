@@ -132,7 +132,7 @@ assert prepared.integrate() == 1
 `integrate` computes a definite integral over `[0, +Infinity)` in the supplied
 variable order; `integrate_over` accepts explicit directed intervals.
 `Expression.integrate(x)` remains Symbolica's separate antiderivative API.
-Use `integration.ibp` for the existing native HEPkit IBP tools; reduction and
+Use `hepkit.ibp` for the existing native HEPkit IBP tools; reduction and
 master evaluation are not automatically combined.
 
 All expressions use the host's `symbolica.Expression` and one shared kernel.

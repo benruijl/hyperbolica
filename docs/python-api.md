@@ -70,9 +70,10 @@ to the host's `symbolica.get_citations()`; importing alone does not.
 
 ## Existing HEPkit functionality
 
-On native installations, `integration.ibp` is the existing HEPkit IBP module:
-its family, rule and solution classes are identical objects at both paths.
-IBP retains its native-only availability. This release does not infer parameter
+Use `from symbolica.community.hepkit import ibp` for HEPkit's existing family,
+rule and solution classes. IBP retains its native-only availability; the
+integration package evaluates integrals and does not re-export IBP.
+This release does not infer parameter
 integrals, normalization, analytic continuation, or epsilon expansion, and does
 not automatically evaluate master integrals after reduction.
 
