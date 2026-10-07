@@ -78,7 +78,11 @@ All errors derive from `IntegrationError` in
 
 The package exports version metadata (`__version__`, `__symbolica_version__`,
 `__api_version__`) and a deterministic `__all__`. Hyperbolica usage contributes
-to the host's `symbolica.get_citations()`; importing alone does not.
+citations for Hyperbolica, HyperInt and SubTropica to the host's
+`symbolica.get_citations()`; importing alone does not. These credit the Rust
+implementation, Panzer's hyperlogarithmic integration algorithms, and the
+upstream HyperFLINT implementation and data, respectively. Each entry includes
+a short project description, reasons for its inclusion, and BibTeX metadata.
 
 ## Existing HEPkit functionality
 

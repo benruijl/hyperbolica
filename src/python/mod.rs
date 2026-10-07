@@ -70,8 +70,45 @@ impl SymbolicaCommunityModule for CommunityModule {
             id: "https://github.com/benruijl/hyperbolica".into(),
             reference: "Ben Ruijl. Hyperbolica (2026).".into(),
             bibtex: r#"@software{hyperbolica, author = {Ruijl, Ben}, title = {Hyperbolica}, year = {2026}, url = {https://github.com/benruijl/hyperbolica}}"#.into(),
-            reasons: vec!["Exact definite integration using hyperlogarithms.".into()],
-            description: String::new(), relevance: None,
+            reasons: vec!["Used through HEPkit to perform exact definite integration with hyperlogarithms.".into()],
+            description: "Rust library for exact hyperlogarithmic integration, backed by Symbolica's symbolic algebra.".into(),
+            relevance: None,
+        }, Citation {
+            id: "https://arxiv.org/abs/1403.3385".into(),
+            reference: "Erik Panzer. Algorithms for the symbolic integration of hyperlogarithms with applications to Feynman integrals. Computer Physics Communications 188 (2015), 148–166.".into(),
+            bibtex: r#"@article{Panzer:2014caa,
+  author = {Panzer, Erik},
+  title = {Algorithms for the symbolic integration of hyperlogarithms with applications to Feynman integrals},
+  journal = {Computer Physics Communications},
+  volume = {188},
+  pages = {148--166},
+  year = {2015},
+  doi = {10.1016/j.cpc.2014.10.019},
+  eprint = {1403.3385},
+  archivePrefix = {arXiv},
+  primaryClass = {hep-th}
+}"#.into(),
+            reasons: vec!["Hyperbolica's integration method builds on the algorithms developed for HyperInt: integration of rational functions times hyperlogarithms and regularized endpoint evaluation.".into()],
+            description: "Maple package for symbolic integration of hyperlogarithms, with applications to linearly reducible Feynman integrals.".into(),
+            relevance: None,
+        }, Citation {
+            id: "https://arxiv.org/abs/2604.20954".into(),
+            reference: "Mathieu Giroux, Sebastian Mizera and Giulio Salvatori. SubTropica (2026), arXiv:2604.20954 [hep-th].".into(),
+            bibtex: r#"@article{Giroux:2026tgd,
+  author = {Giroux, Mathieu and Mizera, Sebastian and Salvatori, Giulio},
+  title = {{SubTropica}},
+  eprint = {2604.20954},
+  archivePrefix = {arXiv},
+  primaryClass = {hep-th},
+  month = {4},
+  year = {2026}
+}"#.into(),
+            reasons: vec![
+                "Hyperbolica is a Rust port of SubTropica's HyperFLINT hyperlogarithmic integration backend.".into(),
+                "SubTropica also supplies the upstream multiple-zeta-value reduction data and regression cases used by Hyperbolica.".into(),
+            ],
+            description: "Mathematica package for evaluating Euler and Feynman integrals using tropical subtraction and hyperlogarithmic integration.".into(),
+            relevance: None,
         }]
     }
 }
@@ -79,3 +116,42 @@ impl SymbolicaCommunityModule for CommunityModule {
 /// Exceptions are not collected by PyO3's class inventory.
 #[cfg(feature = "python_stubgen")]
 pub const STUB_EXTRAS: &str = include_str!("integration_extras.pyi");
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn citations_credit_upstream_projects_only_after_usage() {
+        assert!(CommunityModule::get_citations().is_empty());
+        record_usage();
+        let citations = CommunityModule::get_citations();
+        let ids: Vec<_> = citations
+            .iter()
+            .map(|citation| citation.id.as_str())
+            .collect();
+        assert_eq!(
+            ids,
+            [
+                "https://github.com/benruijl/hyperbolica",
+                "https://arxiv.org/abs/1403.3385",
+                "https://arxiv.org/abs/2604.20954",
+            ]
+        );
+        for citation in &citations {
+            assert!(!citation.reference.is_empty());
+            assert!(!citation.description.is_empty());
+            assert!(!citation.reasons.is_empty());
+            assert!(citation.reasons.iter().all(|reason| !reason.is_empty()));
+            assert!(citation.bibtex.starts_with('@'));
+        }
+        // Repeated use must not add duplicate citations or reasons.
+        record_usage();
+        let repeated = CommunityModule::get_citations();
+        assert_eq!(repeated.len(), citations.len());
+        for (first, next) in citations.iter().zip(repeated.iter()) {
+            assert_eq!(first.id, next.id);
+            assert_eq!(first.reasons, next.reasons);
+        }
+    }
+}
