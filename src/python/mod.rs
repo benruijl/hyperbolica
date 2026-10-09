@@ -68,6 +68,7 @@ impl SymbolicaCommunityModule for CommunityModule {
         }
         vec![Citation {
             id: "https://github.com/benruijl/hyperbolica".into(),
+            url: "https://github.com/benruijl/hyperbolica".into(),
             reference: "Ben Ruijl. Hyperbolica (2026).".into(),
             bibtex: r#"@software{hyperbolica, author = {Ruijl, Ben}, title = {Hyperbolica}, year = {2026}, url = {https://github.com/benruijl/hyperbolica}}"#.into(),
             reasons: vec!["Used through HEPkit to perform exact definite integration with hyperlogarithms.".into()],
@@ -75,6 +76,7 @@ impl SymbolicaCommunityModule for CommunityModule {
             relevance: None,
         }, Citation {
             id: "https://arxiv.org/abs/1403.3385".into(),
+            url: "https://arxiv.org/abs/1403.3385".into(),
             reference: "Erik Panzer. Algorithms for the symbolic integration of hyperlogarithms with applications to Feynman integrals. Computer Physics Communications 188 (2015), 148–166.".into(),
             bibtex: r#"@article{Panzer:2014caa,
   author = {Panzer, Erik},
@@ -93,6 +95,7 @@ impl SymbolicaCommunityModule for CommunityModule {
             relevance: None,
         }, Citation {
             id: "https://arxiv.org/abs/2604.20954".into(),
+            url: "https://arxiv.org/abs/2604.20954".into(),
             reference: "Mathieu Giroux, Sebastian Mizera and Giulio Salvatori. SubTropica (2026), arXiv:2604.20954 [hep-th].".into(),
             bibtex: r#"@article{Giroux:2026tgd,
   author = {Giroux, Mathieu and Mizera, Sebastian and Salvatori, Giulio},
